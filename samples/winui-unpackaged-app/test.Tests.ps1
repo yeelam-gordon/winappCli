@@ -32,12 +32,17 @@ Describe 'winui-unpackaged-app sample' {
             $pathWinapp = Get-Command winapp -ErrorAction SilentlyContinue
             $cliProject = Join-Path $PSScriptRoot '..\..\src\winapp-CLI\WinApp.Cli\WinApp.Cli.csproj'
             if ($pathWinapp) {
-                return @{ File = $pathWinapp.Source; Args = $Arguments }
+                # `winapp` on PATH is typically the npm package's batch shim (winapp.cmd).
+                # Start-Process -NoNewWindow launches via CreateProcess, which cannot execute
+                # a .cmd directly (Win32 error 193: "%1 is not a valid Win32 application").
+                # Route through cmd.exe (a real Win32 host) so the shim runs; `cmd /d /c`
+                # propagates winapp's exit code back to $proc.ExitCode.
+                return @{ File = 'cmd.exe'; Args = @('/d', '/c', 'winapp') + $Arguments }
             }
             if (Test-Path $cliProject) {
                 return @{ File = 'dotnet'; Args = @('run', '--project', (Resolve-Path $cliProject).Path, '--') + $Arguments }
             }
-            return @{ File = 'winapp'; Args = $Arguments }
+            return @{ File = 'cmd.exe'; Args = @('/d', '/c', 'winapp') + $Arguments }
         }
     }
 
