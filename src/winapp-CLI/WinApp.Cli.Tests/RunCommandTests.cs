@@ -15,6 +15,9 @@ public class RunCommandTests : BaseCommandTests
     private FakeAppLauncherService _fakeAppLauncherService = null!;
     private FakeDebugOutputService _fakeDebugOutputService = null!;
 
+    private static readonly string[] SupportedArchitectures = ["x64", "arm64", "x86"];
+    private static readonly string[] ForcedUnpackagedProperties = ["WindowsPackageType=None", "Foo=Bar"];
+
     private const string TestManifestContent = """
         <?xml version="1.0" encoding="utf-8"?>
         <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -1128,6 +1131,137 @@ public class RunCommandTests : BaseCommandTests
 
         Assert.AreEqual(string.Empty, psi.Arguments,
             "Empty appArgs must NOT set Arguments");
+    }
+
+    #endregion
+
+    #region Project-mode option parsing
+
+    [TestMethod]
+    public void ParseOptions_Configuration_DefaultsToDebug()
+    {
+        var command = GetRequiredService<RunCommand>();
+
+        var parseResult = command.Parse([_tempDirectory.FullName]);
+
+        Assert.IsEmpty(parseResult.Errors);
+        Assert.AreEqual("Debug", parseResult.GetValue(RunCommand.ConfigurationOption));
+    }
+
+    [TestMethod]
+    public void ParseOptions_ConfigurationShortAlias_IsParsed()
+    {
+        var command = GetRequiredService<RunCommand>();
+
+        var parseResult = command.Parse([_tempDirectory.FullName, "-c", "Release"]);
+
+        Assert.IsEmpty(parseResult.Errors);
+        Assert.AreEqual("Release", parseResult.GetValue(RunCommand.ConfigurationOption));
+    }
+
+    [TestMethod]
+    public void ParseOptions_ArchAndRuntime_AreParsed()
+    {
+        var command = GetRequiredService<RunCommand>();
+
+        var parseResult = command.Parse([_tempDirectory.FullName, "--arch", "arm64", "-r", "win-x64"]);
+
+        Assert.IsEmpty(parseResult.Errors);
+        Assert.AreEqual("arm64", parseResult.GetValue(RunCommand.ArchOption));
+        Assert.AreEqual("win-x64", parseResult.GetValue(RunCommand.RuntimeOption));
+    }
+
+    [TestMethod]
+    public void ParseOptions_FrameworkShortAlias_IsParsed()
+    {
+        var command = GetRequiredService<RunCommand>();
+
+        var parseResult = command.Parse([_tempDirectory.FullName, "-f", "net10.0-windows10.0.26100.0"]);
+
+        Assert.IsEmpty(parseResult.Errors);
+        Assert.AreEqual("net10.0-windows10.0.26100.0", parseResult.GetValue(RunCommand.FrameworkOption));
+    }
+
+    [TestMethod]
+    public void ParseOptions_NoBuildAndNoRestore_AreParsed()
+    {
+        var command = GetRequiredService<RunCommand>();
+
+        var parseResult = command.Parse([_tempDirectory.FullName, "--no-build", "--no-restore"]);
+
+        Assert.IsEmpty(parseResult.Errors);
+        Assert.IsTrue(parseResult.GetValue(RunCommand.NoBuildOption));
+        Assert.IsTrue(parseResult.GetValue(RunCommand.NoRestoreOption));
+    }
+
+    [TestMethod]
+    public void ParseOptions_RepeatableProperty_CollectsDotnetStyleTokens()
+    {
+        var command = GetRequiredService<RunCommand>();
+
+        // System.CommandLine splits -p:Name=Value on the first ':' so dotnet-style tokens work.
+        var parseResult = command.Parse(
+            [_tempDirectory.FullName, "-p", "WindowsPackageType=None", "-p", "Foo=Bar"]);
+
+        Assert.IsEmpty(parseResult.Errors);
+        var properties = parseResult.GetValue(RunCommand.PropertyOption);
+        Assert.IsNotNull(properties);
+        CollectionAssert.AreEquivalent(ForcedUnpackagedProperties, properties);
+    }
+
+    #endregion
+
+    #region TryResolveArchitecture
+
+    [TestMethod]
+    public void TryResolveArchitecture_NoOptions_UsesProcessDefault()
+    {
+        var ok = RunCommand.Handler.TryResolveArchitecture(null, null, out var arch, out var error);
+
+        Assert.IsTrue(ok);
+        Assert.IsNull(error);
+        CollectionAssert.Contains(SupportedArchitectures, arch);
+    }
+
+    [TestMethod]
+    public void TryResolveArchitecture_ArchOption_IsNormalized()
+    {
+        var ok = RunCommand.Handler.TryResolveArchitecture("ARM64", null, out var arch, out var error);
+
+        Assert.IsTrue(ok);
+        Assert.IsNull(error);
+        Assert.AreEqual("arm64", arch);
+    }
+
+    [TestMethod]
+    public void TryResolveArchitecture_RuntimeArchBeatsArch()
+    {
+        // --runtime is more specific (a RID) so its architecture wins over --arch.
+        var ok = RunCommand.Handler.TryResolveArchitecture("x64", "win-arm64", out var arch, out var error);
+
+        Assert.IsTrue(ok);
+        Assert.IsNull(error);
+        Assert.AreEqual("arm64", arch);
+    }
+
+    [TestMethod]
+    public void TryResolveArchitecture_InvalidArch_ReturnsError()
+    {
+        var ok = RunCommand.Handler.TryResolveArchitecture("sparc", null, out _, out var error);
+
+        Assert.IsFalse(ok);
+        Assert.IsNotNull(error);
+        StringAssert.Contains(error, "sparc");
+    }
+
+    [TestMethod]
+    public void TryResolveArchitecture_InvalidRuntime_ReturnsError()
+    {
+        var ok = RunCommand.Handler.TryResolveArchitecture(null, "win-loongarch64", out _, out var error);
+
+        Assert.IsFalse(ok);
+        Assert.IsNotNull(error);
+        StringAssert.Contains(error, "win-loongarch64");
     }
 
     #endregion

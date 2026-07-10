@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using WinApp.Cli.Helpers;
+using WinApp.Cli.Models;
 using WinApp.Cli.Services;
 
 namespace WinApp.Cli.Commands;
@@ -18,7 +19,7 @@ internal partial class RunCommand : Command, IShortDescription
 {
     public string ShortDescription => "Create debug identity and launch the packaged application.";
 
-    public static Argument<DirectoryInfo> InputFolderArgument { get; }
+    public static Argument<FileSystemInfo> InputFolderArgument { get; }
     public static Option<FileInfo> ManifestOption { get; }
     public static Option<DirectoryInfo?> OutputAppXDirectoryOption { get; }
     public static Option<string> ArgsOption { get; }
@@ -31,6 +32,15 @@ internal partial class RunCommand : Command, IShortDescription
     public static Option<bool> SymbolsOption { get; }
     public static Option<string?> ExecutableOption { get; }
 
+    // Project-mode build options (spec §9). Additive and inert in folder mode.
+    public static Option<string> ConfigurationOption { get; }
+    public static Option<string?> ArchOption { get; }
+    public static Option<string?> RuntimeOption { get; }
+    public static Option<string?> FrameworkOption { get; }
+    public static Option<bool> NoBuildOption { get; }
+    public static Option<bool> NoRestoreOption { get; }
+    public static Option<string[]> PropertyOption { get; }
+
     /// <summary>
     /// Captures zero or more arguments after the <c>--</c> separator and forwards them to the
     /// launched application. System.CommandLine routes all post-<c>--</c> tokens here as
@@ -40,9 +50,9 @@ internal partial class RunCommand : Command, IShortDescription
 
     static RunCommand()
     {
-        InputFolderArgument = new Argument<DirectoryInfo>("input-folder")
+        InputFolderArgument = new Argument<FileSystemInfo>("input-folder")
         {
-            Description = "Input folder containing the app to run",
+            Description = "Path to the app to run: a build-output folder, a .csproj project, or a directory containing one.",
             Arity = ArgumentArity.ExactlyOne
         };
         InputFolderArgument.AcceptExistingOnly();
@@ -114,6 +124,48 @@ internal partial class RunCommand : Command, IShortDescription
             Description = "Path to the executable relative to the input folder. Use to disambiguate when the manifest contains a $targetnametoken$ placeholder and multiple .exe files are present in the input folder."
         };
         ExecutableOption.Aliases.Add("--exe");
+
+        ConfigurationOption = new Option<string>("--configuration")
+        {
+            Description = "Project mode: build configuration (e.g., Debug, Release). Ignored in folder mode. Default: Debug.",
+            DefaultValueFactory = _ => "Debug",
+        };
+        ConfigurationOption.Aliases.Add("-c");
+
+        ArchOption = new Option<string?>("--arch")
+        {
+            Description = "Project mode: target architecture (x64, arm64, or x86). Ignored in folder mode. Default: the current process architecture."
+        };
+
+        RuntimeOption = new Option<string?>("--runtime")
+        {
+            Description = "Project mode: target .NET runtime identifier (RID), e.g. win-x64. Its architecture overrides --arch. Ignored in folder mode."
+        };
+        RuntimeOption.Aliases.Add("-r");
+
+        FrameworkOption = new Option<string?>("--framework")
+        {
+            Description = "Project mode: target framework moniker for multi-targeted projects (e.g. net10.0-windows10.0.26100.0). Ignored in folder mode."
+        };
+        FrameworkOption.Aliases.Add("-f");
+
+        NoBuildOption = new Option<bool>("--no-build")
+        {
+            Description = "Project mode: skip building and run the existing build output (still evaluates output properties). Ignored in folder mode."
+        };
+
+        NoRestoreOption = new Option<bool>("--no-restore")
+        {
+            Description = "Project mode: skip restoring the project before building. Ignored in folder mode."
+        };
+
+        PropertyOption = new Option<string[]>("--property")
+        {
+            Description = "Project mode: MSBuild property as Name=Value, forwarded to both build and evaluation. Repeatable (e.g. -p WindowsPackageType=None). Ignored in folder mode.",
+            Arity = ArgumentArity.ZeroOrMore,
+            AllowMultipleArgumentsPerToken = false,
+        };
+        PropertyOption.Aliases.Add("-p");
     }
 
     public RunCommand() : base("run", "Creates packaged layout, registers the Application, and launches the packaged application.")
@@ -131,10 +183,17 @@ internal partial class RunCommand : Command, IShortDescription
         Options.Add(CleanOption);
         Options.Add(SymbolsOption);
         Options.Add(ExecutableOption);
+        Options.Add(ConfigurationOption);
+        Options.Add(ArchOption);
+        Options.Add(RuntimeOption);
+        Options.Add(FrameworkOption);
+        Options.Add(NoBuildOption);
+        Options.Add(NoRestoreOption);
+        Options.Add(PropertyOption);
         Options.Add(WinAppRootCommand.JsonOption);
     }
 
-    public class Handler(
+    public partial class Handler(
         IMsixService msixService,
         IAppLauncherService appLauncherService,
         IPackageRegistrationService packageRegistrationService,
@@ -142,11 +201,12 @@ internal partial class RunCommand : Command, IShortDescription
         ICurrentDirectoryProvider currentDirectoryProvider,
         IAnsiConsole ansiConsole,
         IStatusService statusService,
+        IProjectRunService projectRunService,
         ILogger<RunCommand> logger) : AsynchronousCommandLineAction
     {
         public override async Task<int> InvokeAsync(ParseResult parseResult, CancellationToken cancellationToken = default)
         {
-            var inputFolder = parseResult.GetRequiredValue(InputFolderArgument);
+            var inputFsi = parseResult.GetRequiredValue(InputFolderArgument);
             var manifest = parseResult.GetValue(ManifestOption);
             var outputAppXDirectory = parseResult.GetValue(OutputAppXDirectoryOption);
             var appArgs = parseResult.GetValue(ArgsOption);
@@ -252,11 +312,11 @@ internal partial class RunCommand : Command, IShortDescription
                 return 1;
             }
 
-            // Validate the input folder path early so the command fails fast with a clear
+            // Validate the input path early so the command fails fast with a clear
             // long-path message before any file system operations are attempted.
             try
             {
-                LongPathHelper.ValidatePathLength(inputFolder.FullName);
+                LongPathHelper.ValidatePathLength(inputFsi.FullName);
             }
             catch (InvalidOperationException ex)
             {
@@ -264,6 +324,63 @@ internal partial class RunCommand : Command, IShortDescription
                 return 1;
             }
 
+            // Route folder mode (existing, unchanged behavior) vs project mode (build a .csproj).
+            // Project mode is keyed on the input pointing at / containing a top-level buildable .csproj.
+            RunInputResolution inputResolution;
+            try
+            {
+                inputResolution = projectRunService.ResolveInput(inputFsi);
+            }
+            catch (ProjectRunException ex)
+            {
+                logger.LogError("{UISymbol} {Message}", UiSymbols.Error, ex.Message);
+                if (isJson)
+                {
+                    PrintJson(aumid: null, processId: null, errorMessage: ex.Message);
+                }
+                return 1;
+            }
+
+            if (inputResolution.Mode == WinAppRunMode.Project)
+            {
+                return await RunProjectModeAsync(parseResult, inputResolution.Csproj!, appArgs, isJson, cancellationToken);
+            }
+
+            // Folder mode: the FileSystemInfo converter yields a DirectoryInfo for an existing
+            // directory. Delegate to the shared pipeline with no project-mode runtime hints, so
+            // behavior is identical to before project mode existed.
+            var inputFolder = inputResolution.ProjectDirectory;
+            return await ExecuteRunPipelineAsync(
+                inputFolder, manifest, outputAppXDirectory, appArgs,
+                noLaunch, withAlias, debugOutput, unregisterOnExit, detach, clean, useSymbols, executable, isJson,
+                runtimeArch: null, projectFile: null, cancellationToken);
+        }
+
+        /// <summary>
+        /// The shared "run a loose layout" pipeline: resolve the manifest, create + register the
+        /// debug identity, launch (AUMID or execution alias), and wait/detach as requested. Folder
+        /// mode calls this directly; packaged project mode calls it with the build's TargetDir as
+        /// <paramref name="inputFolder"/> plus the resolved <paramref name="runtimeArch"/> and
+        /// <paramref name="projectFile"/> so the correct-arch Windows App Runtime is installed.
+        /// </summary>
+        internal async Task<int> ExecuteRunPipelineAsync(
+            DirectoryInfo inputFolder,
+            FileInfo? manifest,
+            DirectoryInfo? outputAppXDirectory,
+            string? appArgs,
+            bool noLaunch,
+            bool withAlias,
+            bool debugOutput,
+            bool unregisterOnExit,
+            bool detach,
+            bool clean,
+            bool useSymbols,
+            string? executable,
+            bool isJson,
+            string? runtimeArch,
+            FileInfo? projectFile,
+            CancellationToken cancellationToken)
+        {
             uint processId = 0;
             string? packageFamilyName = null;
             string? packageFullName = null;
@@ -325,6 +442,8 @@ internal partial class RunCommand : Command, IShortDescription
                         taskContext,
                         clean,
                         executable,
+                        runtimeArch,
+                        projectFile,
                         cancellationToken);
 
                     packageFamilyName = appLauncherService.ComputePackageFamilyName(

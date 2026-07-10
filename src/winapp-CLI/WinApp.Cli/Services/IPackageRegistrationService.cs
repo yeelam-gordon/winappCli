@@ -66,8 +66,14 @@ internal interface IPackageRegistrationService
     /// or null if not found.
     /// </summary>
     /// <param name="packageName">The package identity name.</param>
+    /// <param name="architecture">
+    /// Optional architecture filter (<c>x64</c> / <c>arm64</c> / <c>x86</c>). When provided, only a
+    /// package whose identity architecture matches is considered installed — important for the
+    /// runtime install, where an x64 host may still need x86/arm64 Framework/DDLM packages.
+    /// When <c>null</c>, the first name match (any architecture) is returned.
+    /// </param>
     /// <returns>The installed version, or null if not found.</returns>
-    string? GetInstalledVersion(string packageName);
+    string? GetInstalledVersion(string packageName, string? architecture = null);
 
     /// <summary>
     /// Finds all installed packages matching the given name that were registered in

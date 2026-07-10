@@ -78,7 +78,7 @@ internal class FakePackageRegistrationService : IPackageRegistrationService
         return Task.CompletedTask;
     }
 
-    public string? GetInstalledVersion(string packageName)
+    public string? GetInstalledVersion(string packageName, string? architecture = null)
     {
         GetInstalledVersionCalls.Add(packageName);
         return FakeInstalledVersion;

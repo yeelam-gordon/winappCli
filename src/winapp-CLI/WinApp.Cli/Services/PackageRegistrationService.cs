@@ -212,7 +212,7 @@ internal sealed class PackageRegistrationService(ILogger<PackageRegistrationServ
     }
 
     /// <inheritdoc />
-    public string? GetInstalledVersion(string packageName)
+    public string? GetInstalledVersion(string packageName, string? architecture = null)
     {
         var pm = new PackageManager();
         // Use the single-parameter overload and filter manually.
@@ -220,16 +220,49 @@ internal sealed class PackageRegistrationService(ILogger<PackageRegistrationServ
         // because string.Empty marshals as null HSTRING in WinRT interop.
         var allUserPackages = pm.FindPackagesForUser(string.Empty);
 
+        var wantedArch = MapArchitecture(architecture);
+
         foreach (var pkg in allUserPackages)
         {
-            if (string.Equals(pkg.Id.Name, packageName, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(pkg.Id.Name, packageName, StringComparison.OrdinalIgnoreCase))
             {
-                var v = pkg.Id.Version;
-                return $"{v.Major}.{v.Minor}.{v.Build}.{v.Revision}";
+                continue;
             }
+
+            // Arch filter: when an architecture was requested, only a matching-arch package counts
+            // as "installed" so the caller doesn't skip installing the Framework/DDLM for a
+            // different target arch (e.g. building x86 on an x64 host).
+            if (wantedArch is not null && pkg.Id.Architecture != wantedArch.Value)
+            {
+                continue;
+            }
+
+            var v = pkg.Id.Version;
+            return $"{v.Major}.{v.Minor}.{v.Build}.{v.Revision}";
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Maps a winapp architecture string (<c>x64</c> / <c>arm64</c> / <c>x86</c>) to the WinRT
+    /// <see cref="Windows.System.ProcessorArchitecture"/> used by installed package identities.
+    /// Returns <c>null</c> for an unrecognized/empty value (no arch filtering).
+    /// </summary>
+    private static Windows.System.ProcessorArchitecture? MapArchitecture(string? architecture)
+    {
+        if (string.IsNullOrWhiteSpace(architecture))
+        {
+            return null;
+        }
+
+        return architecture.Trim().ToLowerInvariant() switch
+        {
+            "x64" => Windows.System.ProcessorArchitecture.X64,
+            "arm64" => Windows.System.ProcessorArchitecture.Arm64,
+            "x86" => Windows.System.ProcessorArchitecture.X86,
+            _ => null,
+        };
     }
 
     /// <inheritdoc />

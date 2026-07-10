@@ -1266,9 +1266,11 @@ internal class WorkspaceSetupService(
     /// </summary>
     /// <param name="msixDir">Directory containing the MSIX packages</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    public async Task<(int InstalledCount, int ErrorCount)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken)
+    public async Task<(int InstalledCount, int ErrorCount)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null)
     {
-        var architecture = GetSystemArchitecture();
+        // Default to the CLI's process arch (folder mode / legacy callers). Project mode passes the
+        // app's resolved --arch so the correct Framework/DDLM is installed for a cross-arch build.
+        architecture = RunArchHelper.NormalizeArchitecture(architecture) ?? GetSystemArchitecture();
 
         // Get package entries from MSIX inventory
         var packageEntries = await ParseMsixInventoryAsync(taskContext, msixDir, cancellationToken);
@@ -1316,8 +1318,10 @@ internal class WorkspaceSetupService(
 
         foreach (var (filePath, packageName, newVersion, fileName) in packagesToCheck)
         {
-            // Check if already installed with same or newer version
-            var installedVersion = packageRegistrationService.GetInstalledVersion(packageName);
+            // Check if already installed with same or newer version (for the target architecture,
+            // so a cross-arch runtime isn't wrongly skipped because a same-name package of the
+            // host arch is present).
+            var installedVersion = packageRegistrationService.GetInstalledVersion(packageName, architecture);
             if (installedVersion != null)
             {
                 if (Version.TryParse(installedVersion, out var existing) &&

@@ -99,7 +99,7 @@ internal partial class MsixService
         return new MsixIdentityResult(debugIdentity.PackageName, debugIdentity.Publisher, debugIdentity.ApplicationId);
     }
 
-    public async Task<MsixIdentityResult> AddLooseLayoutIdentityAsync(FileInfo appxManifestPath, DirectoryInfo inputDirectory, DirectoryInfo outputAppXDirectory, TaskContext taskContext, bool clean = false, string? executable = null, CancellationToken cancellationToken = default)
+    public async Task<MsixIdentityResult> AddLooseLayoutIdentityAsync(FileInfo appxManifestPath, DirectoryInfo inputDirectory, DirectoryInfo outputAppXDirectory, TaskContext taskContext, bool clean = false, string? executable = null, string? runtimeArch = null, FileInfo? projectFile = null, CancellationToken cancellationToken = default)
     {
         // Validate inputs
         if (!appxManifestPath.Exists)
@@ -151,8 +151,8 @@ internal partial class MsixService
             var identity = ParseAppxManifestAsync(manifestContent);
 
             // Install the Windows App Runtime framework packages if not already present
-            var msbuildPackageList = await FetchDotNetPackageListAsync(cancellationToken);
-            await EnsureWindowsAppRuntimeInstalledAsync(msbuildPackageList, taskContext, cancellationToken);
+            var msbuildPackageList = await ResolveDotNetPackageListAsync(projectFile, cancellationToken);
+            await EnsureWindowsAppRuntimeInstalledAsync(msbuildPackageList, runtimeArch, taskContext, cancellationToken);
 
             // Resolve the manifest that would be registered (issue #537 / TrySkipRegistration).
             // ManifestHelper.FindManifest already probes both canonical filenames; if it
@@ -218,7 +218,7 @@ internal partial class MsixService
         }
 
         // Fetch dotnet package list once for all downstream operations
-        var dotNetPackageList = await FetchDotNetPackageListAsync(cancellationToken);
+        var dotNetPackageList = await ResolveDotNetPackageListAsync(projectFile, cancellationToken);
 
         // If there is a pri file named after the executable, rename it to resources.pri
         var priFilePath = Path.Combine(outputAppXDirectory.FullName, Path.GetFileNameWithoutExtension(executableMatch.Name) + ".pri");
@@ -286,7 +286,7 @@ internal partial class MsixService
             var identity = ParseAppxManifestAsync(manifestContent);
 
             // Install the Windows App Runtime framework packages if not already present
-            await EnsureWindowsAppRuntimeInstalledAsync(dotNetPackageList, taskContext, cancellationToken);
+            await EnsureWindowsAppRuntimeInstalledAsync(dotNetPackageList, runtimeArch, taskContext, cancellationToken);
 
             // See MSBuild branch above for the rationale (issue #537).
             var skipResult = TrySkipRegistration(
@@ -413,11 +413,33 @@ internal partial class MsixService
     }
 
     /// <summary>
+    /// Public entry point for the project-mode <b>unpackaged</b> path: resolves the project's package
+    /// list (or falls back to a cwd glob) and installs the Windows App Runtime framework packages for
+    /// the given architecture. Callers gate on <c>WindowsAppSDKSelfContained</c> before calling.
+    /// </summary>
+    public async Task EnsureWindowsAppRuntimeInstalledAsync(FileInfo? projectFile, string? architecture, TaskContext taskContext, CancellationToken cancellationToken = default)
+    {
+        var packageList = await ResolveDotNetPackageListAsync(projectFile, cancellationToken);
+        await EnsureWindowsAppRuntimeInstalledAsync(packageList, architecture, taskContext, cancellationToken);
+    }
+
+    /// <summary>
+    /// Resolves the .NET package list from an explicit project file when available (project mode),
+    /// otherwise falls back to the current-directory glob used by folder mode.
+    /// </summary>
+    private async Task<DotNetPackageListJson?> ResolveDotNetPackageListAsync(FileInfo? projectFile, CancellationToken cancellationToken)
+    {
+        return projectFile is not null
+            ? await dotNetService.GetPackageListAsync(projectFile, cancellationToken: cancellationToken)
+            : await FetchDotNetPackageListAsync(cancellationToken);
+    }
+
+    /// <summary>
     /// Ensures that the Windows App Runtime framework MSIX packages are installed on the machine.
     /// Locates the runtime MSIX directory from the NuGet package cache and installs any
     /// missing or outdated packages (Framework, DDLM, Singleton, Main) via Add-AppxPackage.
     /// </summary>
-    private async Task EnsureWindowsAppRuntimeInstalledAsync(DotNetPackageListJson? dotNetPackageList, TaskContext taskContext, CancellationToken cancellationToken)
+    private async Task EnsureWindowsAppRuntimeInstalledAsync(DotNetPackageListJson? dotNetPackageList, string? architecture, TaskContext taskContext, CancellationToken cancellationToken)
     {
         var msixDir = await GetRuntimeMsixDirAsync(dotNetPackageList, taskContext, cancellationToken);
         if (msixDir == null)
@@ -426,7 +448,7 @@ internal partial class MsixService
             return;
         }
 
-        var (installedCount, errorCount) = await workspaceSetupService.InstallWindowsAppRuntimeAsync(msixDir, taskContext, cancellationToken);
+        var (installedCount, errorCount) = await workspaceSetupService.InstallWindowsAppRuntimeAsync(msixDir, taskContext, cancellationToken, architecture);
 
         if (errorCount > 0)
         {

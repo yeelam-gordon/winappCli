@@ -18,6 +18,18 @@ internal interface IAppLauncherService
     uint LaunchByAumid(string aumid, string? arguments = null);
 
     /// <summary>
+    /// Launches an executable directly as a child process. Used for unpackaged (project-mode)
+    /// WinUI apps, where there is no MSIX identity and the app is started via its apphost
+    /// <c>.exe</c> (the evaluated MSBuild <c>RunCommand</c>). The child inherits this process's
+    /// stdin/stdout/stderr so console/UI output appears inline.
+    /// </summary>
+    /// <param name="exePath">Absolute path to the runnable apphost <c>.exe</c>.</param>
+    /// <param name="arguments">Optional command-line arguments to forward to the application.</param>
+    /// <param name="workingDirectory">Working directory for the process (typically the output dir), or <c>null</c> to inherit.</param>
+    /// <returns>The process ID of the launched application.</returns>
+    uint LaunchExecutable(string exePath, string? arguments = null, string? workingDirectory = null);
+
+    /// <summary>
     /// Terminates all processes belonging to a packaged application using
     /// <c>IPackageDebugSettings.TerminateAllProcesses</c>. Falls back to killing a
     /// single process by PID when the package-level termination fails.
