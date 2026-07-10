@@ -99,9 +99,15 @@ Describe 'winui-unpackaged-app sample' {
             # Launch via Start-Process (NOT a captured pipe): the unpackaged app inherits
             # the console stdout handle, so capturing it in a pipeline would block until the
             # app exits. --detach makes winapp return as soon as the app is launched.
+            #
+            # Do NOT use Start-Process -Wait: -Wait blocks until the launched process AND ALL
+            # ITS DESCENDANTS exit. The unpackaged app is a descendant of winapp and runs
+            # indefinitely, so -Wait would hang. Instead wait only on winapp's own process via
+            # .WaitForExit(), which does not wait for descendants.
             $invocation = Resolve-WinappInvocation -Arguments @('run', '.', '--detach')
             $proc = Start-Process -FilePath $invocation.File -ArgumentList $invocation.Args `
-                -WorkingDirectory $script:tempDir -NoNewWindow -Wait -PassThru
+                -WorkingDirectory $script:tempDir -NoNewWindow -PassThru
+            $proc.WaitForExit()
             $proc.ExitCode | Should -Be 0 -Because 'winapp run --detach should build and launch, then return 0'
 
             $app = Get-Process -Name $script:appProcessName -ErrorAction SilentlyContinue | Select-Object -First 1
