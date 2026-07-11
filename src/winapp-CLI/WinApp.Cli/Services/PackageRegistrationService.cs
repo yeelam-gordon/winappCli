@@ -278,9 +278,11 @@ internal sealed class PackageRegistrationService(ILogger<PackageRegistrationServ
     /// <summary>
     /// Maps a winapp architecture string (<c>x64</c> / <c>arm64</c> / <c>x86</c>) to the WinRT
     /// <see cref="Windows.System.ProcessorArchitecture"/> used by installed package identities.
-    /// Returns <c>null</c> for an unrecognized/empty value (no arch filtering).
+    /// A <c>null</c> result means "no arch filtering" — which is how folder-mode <c>run</c>
+    /// (architecture == null) preserves its pre-project-mode behavior of matching any installed
+    /// package, including Neutral-arch ones (spec L2). Exposed as <c>internal</c> for unit tests.
     /// </summary>
-    private static Windows.System.ProcessorArchitecture? MapArchitecture(string? architecture)
+    internal static Windows.System.ProcessorArchitecture? MapArchitecture(string? architecture)
     {
         if (string.IsNullOrWhiteSpace(architecture))
         {
