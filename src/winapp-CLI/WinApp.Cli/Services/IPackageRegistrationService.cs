@@ -76,6 +76,19 @@ internal interface IPackageRegistrationService
     string? GetInstalledVersion(string packageName, string? architecture = null);
 
     /// <summary>
+    /// Returns <c>true</c> when at least one package registered for the current user has an identity
+    /// Name that starts with <paramref name="namePrefix"/> (ordinal, case-insensitive), optionally
+    /// filtered by architecture and excluding names that contain <paramref name="excludeNameSubstring"/>.
+    /// Used to detect a registered Windows App Runtime (Framework / DDLM) for a target architecture
+    /// without knowing the exact versioned package name.
+    /// </summary>
+    /// <param name="namePrefix">The package-name prefix to match (e.g. <c>Microsoft.WindowsAppRuntime.</c>).</param>
+    /// <param name="architecture">Optional architecture filter (<c>x64</c> / <c>arm64</c> / <c>x86</c>); <c>null</c> matches any.</param>
+    /// <param name="excludeNameSubstring">Optional substring; matching names that contain it are ignored (e.g. <c>.CBS.</c>).</param>
+    /// <returns><c>true</c> if a matching package is installed.</returns>
+    bool IsPackageInstalled(string namePrefix, string? architecture = null, string? excludeNameSubstring = null);
+
+    /// <summary>
     /// Finds all installed packages matching the given name that were registered in
     /// development mode (sideloaded). Returns package metadata including the full name
     /// and install location for safety checks.

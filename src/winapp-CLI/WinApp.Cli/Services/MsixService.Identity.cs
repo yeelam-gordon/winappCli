@@ -421,6 +421,20 @@ internal partial class MsixService
     {
         var packageList = await ResolveDotNetPackageListAsync(projectFile, cancellationToken);
         await EnsureWindowsAppRuntimeInstalledAsync(packageList, architecture, taskContext, cancellationToken);
+
+        // Presence gate (spec §8.4 / H1): after the install attempt, verify the framework-dependent
+        // runtime (Framework + matching-arch DDLM) is actually registered for the target arch. A
+        // missing runtime dir was previously treated as success, so a cross-arch run could skip the
+        // install and the app would crash at bootstrap. Fail loudly instead so the caller aborts the
+        // launch with an actionable error.
+        if (!workspaceSetupService.IsWindowsAppRuntimeRegistered(architecture))
+        {
+            var arch = architecture ?? WorkspaceSetupService.GetSystemArchitecture();
+            throw new InvalidOperationException(
+                $"The Windows App Runtime (Framework + DDLM) for architecture '{arch}' is not registered and could not be installed, " +
+                "so the app would fail to start. Restore the project so the matching Windows App SDK runtime is available for that " +
+                "architecture, install it manually, or build a self-contained app (WindowsAppSDKSelfContained=true).");
+        }
     }
 
     /// <summary>

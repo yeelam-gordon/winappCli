@@ -29,4 +29,13 @@ internal interface IWorkspaceSetupService
     /// the matching Framework/DDLM.
     /// </param>
     public Task<(int InstalledCount, int ErrorCount)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null);
+
+    /// <summary>
+    /// Returns <c>true</c> when a framework-dependent Windows App Runtime (a versioned Framework package
+    /// plus its matching-arch DDLM) is registered for the current user for <paramref name="architecture"/>.
+    /// Mirrors the presence check an unpackaged WinUI app's bootstrapper performs so callers can gate the
+    /// launch rather than starting an app that would fail to resolve its runtime.
+    /// </summary>
+    /// <param name="architecture">Target architecture (<c>x64</c> / <c>arm64</c> / <c>x86</c>); <c>null</c> uses the current process architecture.</param>
+    public bool IsWindowsAppRuntimeRegistered(string? architecture);
 }

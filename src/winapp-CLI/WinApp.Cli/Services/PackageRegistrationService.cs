@@ -244,6 +244,37 @@ internal sealed class PackageRegistrationService(ILogger<PackageRegistrationServ
         return null;
     }
 
+    /// <inheritdoc />
+    public bool IsPackageInstalled(string namePrefix, string? architecture = null, string? excludeNameSubstring = null)
+    {
+        var pm = new PackageManager();
+        var allUserPackages = pm.FindPackagesForUser(string.Empty);
+        var wantedArch = MapArchitecture(architecture);
+
+        foreach (var pkg in allUserPackages)
+        {
+            if (!pkg.Id.Name.StartsWith(namePrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (excludeNameSubstring is not null &&
+                pkg.Id.Name.Contains(excludeNameSubstring, StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            if (wantedArch is not null && pkg.Id.Architecture != wantedArch.Value)
+            {
+                continue;
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Maps a winapp architecture string (<c>x64</c> / <c>arm64</c> / <c>x86</c>) to the WinRT
     /// <see cref="Windows.System.ProcessorArchitecture"/> used by installed package identities.

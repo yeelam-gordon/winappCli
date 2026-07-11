@@ -4,7 +4,6 @@
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using System.CommandLine;
-using System.Diagnostics;
 using WinApp.Cli.Helpers;
 using WinApp.Cli.Models;
 using WinApp.Cli.Services;
@@ -74,8 +73,9 @@ internal partial class RunCommand
             }
 
             // Build (unless --no-build) and resolve the output properties. Build output streams to
-            // the console, so this runs OUTSIDE the status spinner.
-            var buildOptions = new ProjectRunOptions(configuration, architecture, framework, noBuild, noRestore, properties);
+            // the console, so this runs OUTSIDE the status spinner. In --json mode ProjectRunService
+            // suppresses the banner and routes build diagnostics to stderr to keep stdout pure JSON.
+            var buildOptions = new ProjectRunOptions(configuration, architecture, framework, noBuild, noRestore, properties, isJson);
             ProjectBuildOutcome outcome;
             try
             {
@@ -256,10 +256,10 @@ internal partial class RunCommand
                 }
             }
 
-            uint processId;
+            ILaunchedProcess launched;
             try
             {
-                processId = appLauncherService.LaunchExecutable(exePath, appArgs, workingDirectory);
+                launched = appLauncherService.LaunchExecutable(exePath, appArgs, workingDirectory);
             }
             catch (Exception ex)
             {
@@ -271,66 +271,65 @@ internal partial class RunCommand
                 return 1;
             }
 
-            // --detach: return immediately, surfacing the PID for automation.
-            if (detach)
+            // Own the handle for the lifetime of the wait so the exit code survives the process
+            // exiting and the PID can't be reused out from under us. Disposing does not kill the OS
+            // process, so the --detach path below can return while the app keeps running.
+            using (launched)
             {
+                var processId = launched.ProcessId;
+
+                // --detach: return immediately, surfacing the PID for automation.
+                if (detach)
+                {
+                    if (isJson)
+                    {
+                        PrintJson(aumid: null, processId, errorMessage: null);
+                    }
+                    else
+                    {
+                        ansiConsole.WriteLine(processId.ToString());
+                    }
+                    return 0;
+                }
+
                 if (isJson)
                 {
                     PrintJson(aumid: null, processId, errorMessage: null);
                 }
-                else
+
+                // --debug-output: attach the debug event loop instead of a plain wait.
+                if (debugOutput)
                 {
-                    ansiConsole.WriteLine(processId.ToString());
+                    var debugExit = await debugOutputService.RunDebugLoopAsync(processId, cancellationToken, useSymbols,
+                        symbolSearchPaths: [resolution.TargetDir]);
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        launched.Kill();
+                    }
+                    return debugExit;
                 }
-                return 0;
-            }
 
-            if (isJson)
-            {
-                PrintJson(aumid: null, processId, errorMessage: null);
+                return await WaitForLaunchedProcessAsync(launched, cancellationToken);
             }
-
-            // --debug-output: attach the debug event loop instead of a plain wait.
-            if (debugOutput)
-            {
-                var debugExit = await debugOutputService.RunDebugLoopAsync(processId, cancellationToken, useSymbols,
-                    symbolSearchPaths: [resolution.TargetDir]);
-                if (cancellationToken.IsCancellationRequested)
-                {
-                    appLauncherService.TerminatePackageProcesses(packageFullName: null, processId);
-                }
-                return debugExit;
-            }
-
-            return await WaitForLaunchedProcessAsync(processId, cancellationToken);
         }
 
         /// <summary>
         /// Waits for a directly-launched (unpackaged) process to exit and returns its exit code,
-        /// mirroring the folder-mode wait semantics (already-exited and Ctrl+C are handled).
+        /// mirroring the folder-mode wait semantics (already-exited returns the real code and Ctrl+C
+        /// kills the child). The owned handle keeps the exit code valid even if the process exited
+        /// before the wait began, so we never misreport a crash as success.
         /// </summary>
-        private async Task<int> WaitForLaunchedProcessAsync(uint processId, CancellationToken cancellationToken)
+        private static async Task<int> WaitForLaunchedProcessAsync(ILaunchedProcess launched, CancellationToken cancellationToken)
         {
-            if (processId > int.MaxValue)
-            {
-                return 0;
-            }
-
             try
             {
-                using var process = Process.GetProcessById(unchecked((int)processId));
-                await process.WaitForExitAsync(cancellationToken);
-                return process.ExitCode;
-            }
-            catch (ArgumentException)
-            {
-                // Process already exited before we could attach — treat as success.
-                return 0;
+                await launched.WaitForExitAsync(cancellationToken);
+                return launched.ExitCode;
             }
             catch (OperationCanceledException)
             {
                 // Ctrl+C — kill the launched process before exiting.
-                appLauncherService.TerminatePackageProcesses(packageFullName: null, processId);
+                launched.Kill();
                 return -1;
             }
         }

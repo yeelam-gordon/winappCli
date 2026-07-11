@@ -1186,12 +1186,17 @@ internal class WorkspaceSetupService(
     /// </summary>
     /// <param name="msixDir">Directory containing the MSIX packages</param>
     /// <param name="cancellationToken">Cancellation token</param>
+    /// <param name="architecture">
+    /// Target architecture whose <c>win10-{arch}</c> inventory is read. When <c>null</c>, defaults to the
+    /// CLI's process architecture (folder mode / legacy callers) — preserving the original behavior.
+    /// Project mode passes the app's resolved arch so a cross-arch inventory is read correctly.
+    /// </param>
     /// <returns>List of package entries, or null if not found</returns>
-    public static async Task<List<MsixPackageEntry>?> ParseMsixInventoryAsync(TaskContext taskContext, DirectoryInfo msixDir, CancellationToken cancellationToken)
+    public static async Task<List<MsixPackageEntry>?> ParseMsixInventoryAsync(TaskContext taskContext, DirectoryInfo msixDir, CancellationToken cancellationToken, string? architecture = null)
     {
-        var architecture = GetSystemArchitecture();
+        architecture = RunArchHelper.NormalizeArchitecture(architecture) ?? GetSystemArchitecture();
 
-        taskContext.AddDebugMessage($"{UiSymbols.Note} Detected system architecture: {architecture}");
+        taskContext.AddDebugMessage($"{UiSymbols.Note} Using architecture for MSIX inventory: {architecture}");
 
         // Look for MSIX packages for the current architecture
         var msixArchDir = Path.Combine(msixDir.FullName, $"win10-{architecture}");
@@ -1268,18 +1273,25 @@ internal class WorkspaceSetupService(
     /// <param name="cancellationToken">Cancellation token</param>
     public async Task<(int InstalledCount, int ErrorCount)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null)
     {
-        // Default to the CLI's process arch (folder mode / legacy callers). Project mode passes the
-        // app's resolved --arch so the correct Framework/DDLM is installed for a cross-arch build.
-        architecture = RunArchHelper.NormalizeArchitecture(architecture) ?? GetSystemArchitecture();
+        // Directory/inventory arch: needs a concrete value to locate win10-{arch}. Default to the CLI's
+        // process arch (folder mode / legacy callers — byte-identical to the previous behavior). Project
+        // mode passes the app's resolved --arch so the correct-arch inventory/packages are used.
+        var dirArch = RunArchHelper.NormalizeArchitecture(architecture) ?? GetSystemArchitecture();
+
+        // Install-skip filter arch: preserved as-is (nullable). In folder mode this stays null so the
+        // "already installed?" check is arch-agnostic exactly as before (spec L2 — folder mode is
+        // byte-for-byte identical). Only project mode (explicit arch) filters by target arch so a
+        // cross-arch runtime isn't wrongly skipped because a same-name host-arch package is present.
+        var filterArch = RunArchHelper.NormalizeArchitecture(architecture);
 
         // Get package entries from MSIX inventory
-        var packageEntries = await ParseMsixInventoryAsync(taskContext, msixDir, cancellationToken);
+        var packageEntries = await ParseMsixInventoryAsync(taskContext, msixDir, cancellationToken, dirArch);
         if (packageEntries == null || packageEntries.Count == 0)
         {
             return (0, 0);
         }
 
-        var msixArchDir = Path.Combine(msixDir.FullName, $"win10-{architecture}");
+        var msixArchDir = Path.Combine(msixDir.FullName, $"win10-{dirArch}");
 
         // Build list of packages to evaluate
         var packagesToCheck = new List<(string FilePath, string PackageName, string NewVersion, string FileName)>();
@@ -1318,10 +1330,10 @@ internal class WorkspaceSetupService(
 
         foreach (var (filePath, packageName, newVersion, fileName) in packagesToCheck)
         {
-            // Check if already installed with same or newer version (for the target architecture,
-            // so a cross-arch runtime isn't wrongly skipped because a same-name package of the
-            // host arch is present).
-            var installedVersion = packageRegistrationService.GetInstalledVersion(packageName, architecture);
+            // Check if already installed with same or newer version. The arch filter is applied only
+            // in project mode (filterArch non-null); in folder mode it's null → arch-agnostic match,
+            // byte-identical to the previous behavior (spec L2).
+            var installedVersion = packageRegistrationService.GetInstalledVersion(packageName, filterArch);
             if (installedVersion != null)
             {
                 if (Version.TryParse(installedVersion, out var existing) &&
@@ -1359,6 +1371,37 @@ internal class WorkspaceSetupService(
         }
 
         return (installedCount, errorCount);
+    }
+
+    /// <summary>
+    /// Package-name prefixes that identify a framework-dependent Windows App Runtime registration.
+    /// The bootstrapper an unpackaged WinUI app runs at startup resolves a versioned Framework package
+    /// plus its matching-arch DDLM; both must be present for the app to boot.
+    /// </summary>
+    private const string WinAppRuntimeFrameworkPrefix = "Microsoft.WindowsAppRuntime.";
+    private const string WinAppRuntimeDdlmPrefix = "Microsoft.WinAppRuntime.DDLM.";
+
+    // The Component Store (CBS) package shares the Framework prefix but is a system singleton, not the
+    // app-facing Framework — exclude it so its presence never masks a missing target-arch Framework.
+    private const string WinAppRuntimeCbsInfix = ".CBS.";
+
+    /// <summary>
+    /// Returns <c>true</c> when a framework-dependent Windows App Runtime is registered for the current
+    /// user for <paramref name="architecture"/>: i.e. both a versioned Framework package
+    /// (<c>Microsoft.WindowsAppRuntime.{version}</c>, excluding the CBS system component) and its
+    /// matching-arch DDLM (<c>Microsoft.WinAppRuntime.DDLM.*</c>) are present. Mirrors the runtime
+    /// presence check an unpackaged WinUI app's bootstrapper performs, so callers can gate the launch
+    /// instead of starting an app that would crash resolving its runtime.
+    /// </summary>
+    public bool IsWindowsAppRuntimeRegistered(string? architecture)
+    {
+        var arch = RunArchHelper.NormalizeArchitecture(architecture) ?? GetSystemArchitecture();
+
+        var hasFramework = packageRegistrationService.IsPackageInstalled(
+            WinAppRuntimeFrameworkPrefix, arch, excludeNameSubstring: WinAppRuntimeCbsInfix);
+        var hasDdlm = packageRegistrationService.IsPackageInstalled(WinAppRuntimeDdlmPrefix, arch);
+
+        return hasFramework && hasDdlm;
     }
 
     /// <summary>

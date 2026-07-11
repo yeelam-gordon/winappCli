@@ -27,7 +27,7 @@ internal class AppLauncherService(ILogger<AppLauncherService> logger) : IAppLaun
     }
 
     /// <inheritdoc />
-    public uint LaunchExecutable(string exePath, string? arguments = null, string? workingDirectory = null)
+    public ILaunchedProcess LaunchExecutable(string exePath, string? arguments = null, string? workingDirectory = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -47,13 +47,14 @@ internal class AppLauncherService(ILogger<AppLauncherService> logger) : IAppLaun
             psi.WorkingDirectory = workingDirectory;
         }
 
-        // Do not dispose the Process here: the caller re-attaches via Process.GetProcessById(pid)
-        // to wait for exit / propagate the exit code, mirroring the LaunchByAumid contract.
+        // Return the owned Process wrapped in ILaunchedProcess. The caller keeps the handle to wait
+        // and read the exit code — re-attaching by PID later would race PID reuse and lose the exit
+        // code once the process exits.
         var process = Process.Start(psi)
             ?? throw new InvalidOperationException($"Failed to start process '{exePath}'.");
 
         logger.LogDebug("Launched executable {ExePath} (PID {PID}).", exePath, process.Id);
-        return unchecked((uint)process.Id);
+        return new LaunchedProcess(process);
     }
 
     /// <inheritdoc />

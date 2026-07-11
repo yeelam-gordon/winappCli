@@ -85,6 +85,28 @@ internal class FakePackageRegistrationService : IPackageRegistrationService
     }
 
     /// <summary>
+    /// Records (namePrefix, architecture, excludeNameSubstring) calls. Returns
+    /// <see cref="FakeIsPackageInstalled"/> (default false).
+    /// </summary>
+    public List<(string NamePrefix, string? Architecture, string? ExcludeNameSubstring)> IsPackageInstalledCalls { get; } = [];
+
+    /// <summary>When set, <see cref="IsPackageInstalled"/> returns this value. Defaults to false.</summary>
+    public bool FakeIsPackageInstalled { get; set; }
+
+    /// <summary>
+    /// When set, <see cref="IsPackageInstalled"/> uses this predicate (keyed on the name prefix) to
+    /// decide the result, so a test can model e.g. "Framework present but DDLM missing". Falls back
+    /// to <see cref="FakeIsPackageInstalled"/> when null.
+    /// </summary>
+    public Func<string, bool>? IsPackageInstalledPredicate { get; set; }
+
+    public bool IsPackageInstalled(string namePrefix, string? architecture = null, string? excludeNameSubstring = null)
+    {
+        IsPackageInstalledCalls.Add((namePrefix, architecture, excludeNameSubstring));
+        return IsPackageInstalledPredicate?.Invoke(namePrefix) ?? FakeIsPackageInstalled;
+    }
+
+    /// <summary>
     /// When set to a non-null exception, <see cref="FindDevPackages"/> throws it
     /// instead of returning <see cref="FakeDevPackages"/>. Use to exercise the
     /// non-fatal catch path (and OperationCanceled propagation) in
