@@ -26,6 +26,24 @@ Describe 'winui-app sample' {
     AfterAll {
         Set-Location $script:sampleDir
 
+        # Phase 1 registers a loose-layout dev package (winapp run . --no-launch). Unregister it
+        # before the backing files are deleted so we don't leave a dangling registration on the
+        # machine / CI runner (spec H3). Best-effort: read the identity Name from the manifest and
+        # remove any matching registered package.
+        try {
+            $manifestPath = Join-Path $script:sampleDir 'Package.appxmanifest'
+            if (Test-Path $manifestPath) {
+                [xml]$manifestXml = Get-Content -Path $manifestPath -Raw
+                $identityName = $manifestXml.Package.Identity.Name
+                if ($identityName) {
+                    Get-AppxPackage -Name $identityName -ErrorAction SilentlyContinue |
+                        ForEach-Object { Remove-AppxPackage -Package $_.PackageFullName -ErrorAction SilentlyContinue }
+                }
+            }
+        } catch {
+            Write-Warning "winui-app cleanup: failed to unregister dev package: $_"
+        }
+
         if (-not $SkipCleanup) {
             if ($script:tempDir) { Remove-TempTestDirectory -Path $script:tempDir }
             Remove-Item -Path (Join-Path $script:sampleDir 'bin') -Recurse -Force -ErrorAction SilentlyContinue
