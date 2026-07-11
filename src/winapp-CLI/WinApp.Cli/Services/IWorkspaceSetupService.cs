@@ -29,10 +29,11 @@ internal interface IWorkspaceSetupService
     /// the matching Framework/DDLM.
     /// </param>
     /// <returns>
-    /// Install/error counts plus the versioned Framework/DDLM package identities discovered in the
-    /// inventory, so the caller can gate on the SPECIFIC runtime the app needs (spec R2-M1).
+    /// Install/error counts plus the versioned Framework/DDLM package identities (name + version)
+    /// discovered in the inventory, so the caller can gate on the SPECIFIC runtime the app needs at the
+    /// required version (spec R2-M1).
     /// </returns>
-    public Task<(int InstalledCount, int ErrorCount, IReadOnlyList<string> RuntimePackageNames)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null);
+    public Task<(int InstalledCount, int ErrorCount, IReadOnlyList<(string Name, string Version)> RuntimePackages)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null);
 
     /// <summary>
     /// Returns <c>true</c> when a framework-dependent Windows App Runtime (a versioned Framework package
@@ -41,11 +42,12 @@ internal interface IWorkspaceSetupService
     /// launch rather than starting an app that would fail to resolve its runtime.
     /// </summary>
     /// <param name="architecture">Target architecture (<c>x64</c> / <c>arm64</c> / <c>x86</c>); <c>null</c> uses the current process architecture.</param>
-    /// <param name="expectedRuntimePackageNames">
-    /// Optional versioned Framework/DDLM identities (from <see cref="InstallWindowsAppRuntimeAsync"/>) the
-    /// app was built against. When supplied, each must be registered for the arch — closing the false-pass
-    /// where a different WinAppSDK version is registered but the required version silently failed to install
+    /// <param name="expectedRuntimePackages">
+    /// Optional versioned Framework/DDLM identities (name + version, from <see cref="InstallWindowsAppRuntimeAsync"/>)
+    /// the app was built against. When supplied, each must be registered for the arch at a version
+    /// &gt;= the required one — closing the false-pass where a different WinAppSDK version, or a stale older
+    /// patch of the same Framework family, is registered but the required version silently failed to install
     /// (spec R2-M1). When null/empty (folder mode / legacy callers) only the generic presence check runs.
     /// </param>
-    public bool IsWindowsAppRuntimeRegistered(string? architecture, IReadOnlyList<string>? expectedRuntimePackageNames = null);
+    public bool IsWindowsAppRuntimeRegistered(string? architecture, IReadOnlyList<(string Name, string Version)>? expectedRuntimePackages = null);
 }

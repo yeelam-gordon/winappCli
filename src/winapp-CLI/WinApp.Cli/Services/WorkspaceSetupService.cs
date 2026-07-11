@@ -1271,7 +1271,7 @@ internal class WorkspaceSetupService(
     /// </summary>
     /// <param name="msixDir">Directory containing the MSIX packages</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    public async Task<(int InstalledCount, int ErrorCount, IReadOnlyList<string> RuntimePackageNames)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null)
+    public async Task<(int InstalledCount, int ErrorCount, IReadOnlyList<(string Name, string Version)> RuntimePackages)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null)
     {
         // Directory/inventory arch: needs a concrete value to locate win10-{arch}. Default to the CLI's
         // process arch (folder mode / legacy callers — byte-identical to the previous behavior). Project
@@ -1288,7 +1288,7 @@ internal class WorkspaceSetupService(
         var packageEntries = await ParseMsixInventoryAsync(taskContext, msixDir, cancellationToken, dirArch);
         if (packageEntries == null || packageEntries.Count == 0)
         {
-            return (0, 0, Array.Empty<string>());
+            return (0, 0, Array.Empty<(string, string)>());
         }
 
         var msixArchDir = Path.Combine(msixDir.FullName, $"win10-{dirArch}");
@@ -1320,7 +1320,7 @@ internal class WorkspaceSetupService(
 
         if (packagesToCheck.Count == 0)
         {
-            return (0, 0, Array.Empty<string>());
+            return (0, 0, Array.Empty<(string, string)>());
         }
 
         taskContext.AddDebugMessage($"{UiSymbols.Info} Checking and installing {packagesToCheck.Count} MSIX packages");
@@ -1372,14 +1372,15 @@ internal class WorkspaceSetupService(
 
         // Surface the versioned Framework + DDLM identities from this inventory so the caller can gate
         // on the SPECIFIC runtime the app was built against (spec R2-M1), rather than accepting any
-        // registered WinAppSDK version for the arch.
-        var runtimePackageNames = packagesToCheck
-            .Select(p => p.PackageName)
-            .Where(IsRuntimeGatePackageName)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
+        // registered WinAppSDK version for the arch. The version is carried alongside the name so the
+        // gate can reject a stale OLDER patch of the same Framework family (spec R2-M1 residual).
+        var runtimePackages = packagesToCheck
+            .Where(p => IsRuntimeGatePackageName(p.PackageName))
+            .Select(p => (Name: p.PackageName, Version: p.NewVersion))
+            .DistinctBy(p => p.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
 
-        return (installedCount, errorCount, runtimePackageNames);
+        return (installedCount, errorCount, runtimePackages);
     }
 
     /// <summary>
@@ -1412,16 +1413,17 @@ internal class WorkspaceSetupService(
     /// presence check an unpackaged WinUI app's bootstrapper performs, so callers can gate the launch
     /// instead of starting an app that would crash resolving its runtime.
     /// <para>
-    /// When <paramref name="expectedRuntimePackageNames"/> is supplied (the versioned identities from
-    /// the resolved runtime inventory), each is additionally required to be registered for the arch.
-    /// This closes the false-pass where a version-specific install silently failed but a DIFFERENT
-    /// WinAppSDK version is registered for the arch (common on dev boxes) — without it the generic
-    /// prefix check would pass and the app would still crash at bootstrap (spec R2-M1). When empty or
-    /// null (folder mode / legacy callers), only the generic presence check runs — byte-identical to
-    /// the previous behavior.
+    /// When <paramref name="expectedRuntimePackages"/> is supplied (the versioned identities from
+    /// the resolved runtime inventory), each is additionally required to be registered for the arch
+    /// at a version <b>greater than or equal to</b> the required one. This closes the false-pass where
+    /// a version-specific install silently failed but a DIFFERENT WinAppSDK version — or a stale OLDER
+    /// patch of the same Framework family (whose family name is only <c>major.minor</c>) — is registered
+    /// for the arch (common on dev boxes); without it the generic prefix check would pass and the app
+    /// would still crash at bootstrap (spec R2-M1). When empty or null (folder mode / legacy callers),
+    /// only the generic presence check runs — byte-identical to the previous behavior.
     /// </para>
     /// </summary>
-    public bool IsWindowsAppRuntimeRegistered(string? architecture, IReadOnlyList<string>? expectedRuntimePackageNames = null)
+    public bool IsWindowsAppRuntimeRegistered(string? architecture, IReadOnlyList<(string Name, string Version)>? expectedRuntimePackages = null)
     {
         var arch = RunArchHelper.NormalizeArchitecture(architecture) ?? GetSystemArchitecture();
 
@@ -1434,11 +1436,25 @@ internal class WorkspaceSetupService(
             return false;
         }
 
-        if (expectedRuntimePackageNames is { Count: > 0 })
+        if (expectedRuntimePackages is { Count: > 0 })
         {
-            foreach (var expectedName in expectedRuntimePackageNames)
+            foreach (var (name, requiredVersion) in expectedRuntimePackages)
             {
-                if (!packageRegistrationService.IsPackageInstalled(expectedName, arch))
+                // Require the SPECIFIC identity the app was built against to be registered for the arch.
+                var installedVersion = packageRegistrationService.GetInstalledVersion(name, arch);
+                if (installedVersion is null)
+                {
+                    return false;
+                }
+
+                // Patch-level guard (spec R2-M1 residual): the Framework family name is only major.minor,
+                // so a stale OLDER patch of the same minor would satisfy a name-presence check even when
+                // the newer patch the app needs failed to install. Reject when both versions parse and the
+                // installed one is older. If either is unparseable, fall back to presence (already confirmed
+                // above) rather than blocking a launch on an unexpected version string.
+                if (Version.TryParse(requiredVersion, out var required) &&
+                    Version.TryParse(installedVersion, out var installed) &&
+                    installed < required)
                 {
                     return false;
                 }

@@ -94,14 +94,15 @@ public class WorkspaceSetupServiceRuntimeGateTests : BaseCommandTests
     public void IsWindowsAppRuntimeRegistered_ExpectedVersionPresent_ReturnsTrueAndForwardsArch()
     {
         // Spec R2-M1: when the resolved runtime identities are supplied, each must also be registered
-        // (for the arch). Here everything is present, so the gate passes.
+        // for the arch at a version >= the required one. Here the exact version is present, so it passes.
         const string expected = "Microsoft.WindowsAppRuntime.1.8";
         _fakePackageRegistration.IsPackageInstalledPredicate = _ => true;
+        _fakePackageRegistration.GetInstalledVersionFunc = (name, _) => name == expected ? "8000.144.0.0" : null;
         var service = GetRequiredService<IWorkspaceSetupService>();
 
-        Assert.IsTrue(service.IsWindowsAppRuntimeRegistered("arm64", new[] { expected }));
+        Assert.IsTrue(service.IsWindowsAppRuntimeRegistered("arm64", new[] { (expected, "8000.144.0.0") }));
 
-        var expectedCall = _fakePackageRegistration.IsPackageInstalledCalls.Single(c => c.NamePrefix == expected);
+        var expectedCall = _fakePackageRegistration.GetInstalledVersionCalls.Single(c => c.PackageName == expected);
         Assert.AreEqual("arm64", expectedCall.Architecture, "the version-specific check must be arch-scoped too");
     }
 
@@ -113,10 +114,40 @@ public class WorkspaceSetupServiceRuntimeGateTests : BaseCommandTests
         // against silently failed to install. The gate must fail instead of false-passing and booting an
         // app that crashes at bootstrap.
         const string required = "Microsoft.WindowsAppRuntime.1.8";
-        _fakePackageRegistration.IsPackageInstalledPredicate = name => name != required;
+        _fakePackageRegistration.IsPackageInstalledPredicate = _ => true;
+        _fakePackageRegistration.GetInstalledVersionFunc = (_, _) => null; // the required identity isn't registered
         var service = GetRequiredService<IWorkspaceSetupService>();
 
-        Assert.IsFalse(service.IsWindowsAppRuntimeRegistered("x64", new[] { required }));
+        Assert.IsFalse(service.IsWindowsAppRuntimeRegistered("x64", new[] { (required, "8000.144.0.0") }));
+    }
+
+    [TestMethod]
+    public void IsWindowsAppRuntimeRegistered_OlderPatchRegistered_ReturnsFalse()
+    {
+        // Spec R2-M1 residual: the Framework family name is only major.minor, so a stale OLDER patch of
+        // the same minor is registered (name present) while the NEWER patch the app was built against
+        // failed to install. A name-presence check would false-pass; the version compare must reject it so
+        // the launch aborts with an actionable error instead of crashing at bootstrap on a MinVersion gap.
+        const string framework = "Microsoft.WindowsAppRuntime.1.8";
+        _fakePackageRegistration.IsPackageInstalledPredicate = _ => true;
+        _fakePackageRegistration.GetInstalledVersionFunc = (name, _) => name == framework ? "8000.144.1000.0" : null;
+        var service = GetRequiredService<IWorkspaceSetupService>();
+
+        // App requires a newer patch (…2000) than what's registered (…1000).
+        Assert.IsFalse(service.IsWindowsAppRuntimeRegistered("x64", new[] { (framework, "8000.144.2000.0") }));
+    }
+
+    [TestMethod]
+    public void IsWindowsAppRuntimeRegistered_NewerPatchRegistered_ReturnsTrue()
+    {
+        // The gate requires installed >= required, so a NEWER patch than the app was built against still
+        // satisfies it (WinAppSDK framework packages are backward-compatible within a minor).
+        const string framework = "Microsoft.WindowsAppRuntime.1.8";
+        _fakePackageRegistration.IsPackageInstalledPredicate = _ => true;
+        _fakePackageRegistration.GetInstalledVersionFunc = (name, _) => name == framework ? "8000.144.2000.0" : null;
+        var service = GetRequiredService<IWorkspaceSetupService>();
+
+        Assert.IsTrue(service.IsWindowsAppRuntimeRegistered("x64", new[] { (framework, "8000.144.1000.0") }));
     }
 
     [TestMethod]
