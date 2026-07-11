@@ -15,6 +15,20 @@ internal partial class RunCommand
     public partial class Handler
     {
         /// <summary>
+        /// Logs a user-facing error, emits the error-shaped JSON envelope in <c>--json</c> mode, and
+        /// returns exit code 1. Consolidates the repeated log + PrintJson + return pattern (spec L5).
+        /// </summary>
+        private int Fail(string message, bool isJson)
+        {
+            logger.LogError("{UISymbol} {Message}", UiSymbols.Error, message);
+            if (isJson)
+            {
+                PrintJson(aumid: null, processId: null, message);
+            }
+            return 1;
+        }
+
+        /// <summary>
         /// Project-mode entry point (spec §7/§8): build the <c>.csproj</c>, resolve its MSBuild
         /// output properties, then launch it as packaged (loose-layout register + AUMID, reusing the
         /// shared folder pipeline) or unpackaged (launch the apphost <c>.exe</c> directly). Folder
@@ -36,6 +50,16 @@ internal partial class RunCommand
             var noRestore = parseResult.GetValue(NoRestoreOption);
             var properties = parseResult.GetValue(PropertyOption) ?? [];
 
+            // Reject malformed -p values early (spec L3): each must be Name=Value with a non-empty
+            // name, otherwise it would become a nonsensical '-p:' / '-p:=Value' MSBuild argument.
+            foreach (var property in properties)
+            {
+                if (property.IndexOf('=') <= 0)
+                {
+                    return Fail($"Invalid --property '{property}'. Expected Name=Value (for example: -p WindowsPackageType=None).", isJson);
+                }
+            }
+
             // Shared launch/identity options (validity depends on packaging, checked below).
             var noLaunch = parseResult.GetValue(NoLaunchOption);
             var withAlias = parseResult.GetValue(WithAliasOption);
@@ -51,12 +75,7 @@ internal partial class RunCommand
             // Resolve the target architecture: --runtime's arch beats --arch; else the process arch.
             if (!TryResolveArchitecture(archOption, runtimeOption, out var architecture, out var archError))
             {
-                logger.LogError("{UISymbol} {Message}", UiSymbols.Error, archError);
-                if (isJson)
-                {
-                    PrintJson(aumid: null, processId: null, archError);
-                }
-                return 1;
+                return Fail(archError!, isJson);
             }
 
             // A capable SDK (≥ 8.0.100) is required for MSBuild --getProperty.
@@ -64,12 +83,7 @@ internal partial class RunCommand
             var sdkError = await projectRunService.CheckSdkAsync(workingDir, cancellationToken);
             if (sdkError != null)
             {
-                logger.LogError("{UISymbol} {Message}", UiSymbols.Error, sdkError);
-                if (isJson)
-                {
-                    PrintJson(aumid: null, processId: null, sdkError);
-                }
-                return 1;
+                return Fail(sdkError, isJson);
             }
 
             // Build (unless --no-build) and resolve the output properties. Build output streams to
@@ -83,12 +97,7 @@ internal partial class RunCommand
             }
             catch (ProjectRunException ex)
             {
-                logger.LogError("{UISymbol} {Message}", UiSymbols.Error, ex.Message);
-                if (isJson)
-                {
-                    PrintJson(aumid: null, processId: null, ex.Message);
-                }
-                return 1;
+                return Fail(ex.Message, isJson);
             }
 
             if (outcome.Resolution is null)
@@ -147,12 +156,7 @@ internal partial class RunCommand
                 var message =
                     $"'{csproj.Name}' resolves to a packaged (MSIX) app but no AppxManifest.xml was found in the build output ({targetDir.FullName}). " +
                     "Ensure the project is a packaged WinUI app (EnableMsixTooling=true with a Package.appxmanifest), or force an unpackaged run with -p:WindowsPackageType=None.";
-                logger.LogError("{UISymbol} {Message}", UiSymbols.Error, message);
-                if (isJson)
-                {
-                    PrintJson(aumid: null, processId: null, message);
-                }
-                return 1;
+                return Fail(message, isJson);
             }
 
             return await ExecuteRunPipelineAsync(
@@ -215,12 +219,7 @@ internal partial class RunCommand
                 var message =
                     $"The option(s) {string.Join(", ", rejected)} don't apply to unpackaged apps — they're only valid for packaged (MSIX) apps. " +
                     $"'{csproj.Name}' resolves to an unpackaged WinUI app (WindowsPackageType=None). Remove them, or make the app packaged to use them.";
-                logger.LogError("{UISymbol} {Message}", UiSymbols.Error, message);
-                if (isJson)
-                {
-                    PrintJson(aumid: null, processId: null, message);
-                }
-                return 1;
+                return Fail(message, isJson);
             }
 
             var exePath = resolution.RunCommand!; // guaranteed non-null for unpackaged by BuildAndResolveAsync

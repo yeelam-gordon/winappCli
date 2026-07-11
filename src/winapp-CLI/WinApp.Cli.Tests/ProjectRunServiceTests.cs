@@ -42,6 +42,27 @@ public class ProjectRunServiceTests
         </Project>
         """;
 
+    // No inline OutputType: a static parse treats this as non-executable, but an MSBuild evaluation
+    // resolves OutputType from an import (SDK/props). Used by the M5 disambiguation tests.
+    private const string NoInlineOutputTypeCsproj = """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+          </PropertyGroup>
+        </Project>
+        """;
+
+    // Inline OutputType=Exe with no inline IsTestProject: a static parse treats this as a runnable
+    // executable, but an MSBuild evaluation can reveal IsTestProject=true (set by the test SDK).
+    private const string InlineExeNoTestFlagCsproj = """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <OutputType>Exe</OutputType>
+            <TargetFramework>net10.0</TargetFramework>
+          </PropertyGroup>
+        </Project>
+        """;
+
     [TestInitialize]
     public void Setup()
     {
@@ -210,91 +231,142 @@ public class ProjectRunServiceTests
     #region ResolveInput
 
     [TestMethod]
-    public void ResolveInput_CsprojFile_ReturnsProjectMode()
+    public async Task ResolveInput_CsprojFile_ReturnsProjectMode()
     {
         var csproj = WriteFile("App.csproj", ExecutableCsproj);
 
-        var resolution = _service.ResolveInput(csproj);
+        var resolution = await _service.ResolveInputAsync(csproj, CancellationToken.None);
 
         Assert.AreEqual(WinAppRunMode.Project, resolution.Mode);
         Assert.AreEqual(csproj.FullName, resolution.Csproj!.FullName);
     }
 
     [TestMethod]
-    public void ResolveInput_NonCsprojFile_Throws()
+    public async Task ResolveInput_NonCsprojFile_Throws()
     {
         var txt = WriteFile("readme.txt", "hello");
 
-        Assert.ThrowsExactly<ProjectRunException>(() => _service.ResolveInput(txt));
+        await Assert.ThrowsExactlyAsync<ProjectRunException>(() => _service.ResolveInputAsync(txt, CancellationToken.None));
     }
 
     [TestMethod]
-    public void ResolveInput_DirectoryWithNoCsproj_ReturnsFolderMode()
+    public async Task ResolveInput_DirectoryWithNoCsproj_ReturnsFolderMode()
     {
-        var resolution = _service.ResolveInput(_tempDir);
+        var resolution = await _service.ResolveInputAsync(_tempDir, CancellationToken.None);
 
         Assert.AreEqual(WinAppRunMode.Folder, resolution.Mode);
         Assert.IsNull(resolution.Csproj);
     }
 
     [TestMethod]
-    public void ResolveInput_DirectoryWithSingleCsproj_ReturnsProjectMode()
+    public async Task ResolveInput_DirectoryWithSingleCsproj_ReturnsProjectMode()
     {
         WriteFile("App.csproj", ExecutableCsproj);
 
-        var resolution = _service.ResolveInput(_tempDir);
+        var resolution = await _service.ResolveInputAsync(_tempDir, CancellationToken.None);
 
         Assert.AreEqual(WinAppRunMode.Project, resolution.Mode);
         Assert.AreEqual("App.csproj", resolution.Csproj!.Name);
     }
 
     [TestMethod]
-    public void ResolveInput_MultipleCsproj_SingleExecutable_PicksExecutable()
+    public async Task ResolveInput_MultipleCsproj_SingleExecutable_PicksExecutable()
     {
+        // With no canned evaluation the classifier falls back to the static parse, which reads the
+        // inline OutputType of these fixtures: App=WinExe (executable), Lib=Library (not).
         WriteFile("App.csproj", ExecutableCsproj);
         WriteFile("Lib.csproj", LibraryCsproj);
 
-        var resolution = _service.ResolveInput(_tempDir);
+        var resolution = await _service.ResolveInputAsync(_tempDir, CancellationToken.None);
 
         Assert.AreEqual(WinAppRunMode.Project, resolution.Mode);
         Assert.AreEqual("App.csproj", resolution.Csproj!.Name);
     }
 
     [TestMethod]
-    public void ResolveInput_MultipleExecutableCsproj_ThrowsAmbiguity()
+    public async Task ResolveInput_MultipleExecutableCsproj_ThrowsAmbiguity()
     {
         WriteFile("App1.csproj", ExecutableCsproj);
         WriteFile("App2.csproj", ExecutableCsproj);
 
-        var ex = Assert.ThrowsExactly<ProjectRunException>(() => _service.ResolveInput(_tempDir));
+        var ex = await Assert.ThrowsExactlyAsync<ProjectRunException>(() => _service.ResolveInputAsync(_tempDir, CancellationToken.None));
         StringAssert.Contains(ex.Message, "Multiple .csproj files");
     }
 
     [TestMethod]
-    public void ResolveInput_MultipleCsproj_ExecutablePlusTestProject_PicksExecutable()
+    public async Task ResolveInput_MultipleCsproj_ExecutablePlusTestProject_PicksExecutable()
     {
         // A test project (IsTestProject=true) is excluded from the executable set even when its
         // OutputType is Exe, so an app + its test project disambiguates to the app (spec M5).
         WriteFile("App.csproj", ExecutableCsproj);
         WriteFile("App.Tests.csproj", TestProjectCsproj);
 
-        var resolution = _service.ResolveInput(_tempDir);
+        var resolution = await _service.ResolveInputAsync(_tempDir, CancellationToken.None);
 
         Assert.AreEqual(WinAppRunMode.Project, resolution.Mode);
         Assert.AreEqual("App.csproj", resolution.Csproj!.Name);
     }
 
     [TestMethod]
-    public void ResolveInput_MultipleCsproj_NoExecutable_ThrowsAmbiguity()
+    public async Task ResolveInput_MultipleCsproj_NoExecutable_ThrowsAmbiguity()
     {
         // Multiple projects, none statically executable → we cannot pick one; guide the user to
         // name a project explicitly rather than silently building a non-runnable one (spec M5).
         WriteFile("Lib1.csproj", LibraryCsproj);
         WriteFile("Lib2.csproj", LibraryCsproj);
 
-        var ex = Assert.ThrowsExactly<ProjectRunException>(() => _service.ResolveInput(_tempDir));
+        var ex = await Assert.ThrowsExactlyAsync<ProjectRunException>(() => _service.ResolveInputAsync(_tempDir, CancellationToken.None));
         StringAssert.Contains(ex.Message, "Multiple .csproj files");
     }
+
+    [TestMethod]
+    public async Task ResolveInput_MultipleCsproj_EvaluationDetectsExecutableFromImport_DoesNotSilentlyPickWrongProject()
+    {
+        // Spec M5: App.csproj gets its OutputType from an import (nothing inline) while Tool.csproj
+        // declares OutputType=Exe inline. A STATIC parse sees only Tool as executable and would
+        // silently build+run Tool. MSBuild evaluation reveals BOTH are runnable → ambiguity error,
+        // so the wrong project is never launched behind the user's back.
+        var app = WriteFile("App.csproj", NoInlineOutputTypeCsproj);
+        var tool = WriteFile("Tool.csproj", InlineExeNoTestFlagCsproj);
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetCommandHandler = args =>
+                args.Contains(app.FullName, StringComparison.OrdinalIgnoreCase) ? (0, EvalJson("WinExe"), string.Empty)
+                : args.Contains(tool.FullName, StringComparison.OrdinalIgnoreCase) ? (0, EvalJson("Exe"), string.Empty)
+                : (0, string.Empty, string.Empty),
+        };
+        var service = NewServiceWith(dotnet, out _);
+
+        var ex = await Assert.ThrowsExactlyAsync<ProjectRunException>(() => service.ResolveInputAsync(_tempDir, CancellationToken.None));
+        StringAssert.Contains(ex.Message, "Multiple .csproj files");
+    }
+
+    [TestMethod]
+    public async Task ResolveInput_MultipleCsproj_EvaluationDetectsTestFromImport_PicksApp()
+    {
+        // Spec M5: App.Tests.csproj declares OutputType=Exe inline but no inline IsTestProject (the
+        // test SDK sets it via an import). A STATIC parse would treat BOTH App and App.Tests as
+        // executable → ambiguity. MSBuild evaluation reveals App.Tests is a test project, so the app
+        // is correctly and unambiguously selected.
+        var app = WriteFile("App.csproj", ExecutableCsproj);
+        var tests = WriteFile("App.Tests.csproj", InlineExeNoTestFlagCsproj);
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetCommandHandler = args =>
+                args.Contains(tests.FullName, StringComparison.OrdinalIgnoreCase) ? (0, EvalJson("Exe", isTestProject: "true"), string.Empty)
+                : args.Contains(app.FullName, StringComparison.OrdinalIgnoreCase) ? (0, EvalJson("WinExe"), string.Empty)
+                : (0, string.Empty, string.Empty),
+        };
+        var service = NewServiceWith(dotnet, out _);
+
+        var resolution = await service.ResolveInputAsync(_tempDir, CancellationToken.None);
+
+        Assert.AreEqual(WinAppRunMode.Project, resolution.Mode);
+        Assert.AreEqual("App.csproj", resolution.Csproj!.Name);
+    }
+
+    private static string EvalJson(string outputType, string isTestProject = "") =>
+        $$"""{ "Properties": { "OutputType": "{{outputType}}", "IsTestProject": "{{isTestProject}}" } }""";
 
     #endregion
 
@@ -396,6 +468,149 @@ public class ProjectRunServiceTests
 
         Assert.IsNotNull(outcome.Resolution);
         Assert.AreEqual(ProjectPackaging.Packaged, outcome.Resolution!.Packaging);
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_HappyPath_CarriesResolvedArchitecture()
+    {
+        // The resolved architecture must flow onto the resolution so the correct-arch runtime is
+        // installed for the packaged/unpackaged launch (spec §8.4 / H1).
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+        var options = new ProjectRunOptions("Debug", "arm64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNotNull(outcome.Resolution);
+        Assert.AreEqual("arm64", outcome.Resolution!.Architecture);
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_NonExecutableOutputType_Throws()
+    {
+        // Guardrail: a non-runnable project (OutputType=Library) must fail fast, never launch.
+        var csproj = WriteFile("Lib.csproj", LibraryCsproj);
+        var json = $$"""{ "Properties": { "TargetDir": "{{_tempDir.FullName.Replace("\\", "\\\\")}}", "RunCommand": "", "WindowsPackageType": "None", "OutputType": "Library" } }""";
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, json, string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var ex = await Assert.ThrowsExactlyAsync<ProjectRunException>(() => service.BuildAndResolveAsync(csproj, options, CancellationToken.None));
+        StringAssert.Contains(ex.Message, "OutputType");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_EmptyTargetDir_Throws()
+    {
+        // Guardrail: an empty TargetDir means we have nowhere to register/launch from (the M4 surface
+        // — a braced build preamble that broke parsing used to reach here with an empty dict).
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var json = """{ "Properties": { "TargetDir": "", "RunCommand": "", "WindowsPackageType": "MSIX", "OutputType": "WinExe" } }""";
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, json, string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var ex = await Assert.ThrowsExactlyAsync<ProjectRunException>(() => service.BuildAndResolveAsync(csproj, options, CancellationToken.None));
+        StringAssert.Contains(ex.Message, "TargetDir");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_UnpackagedMissingRunCommand_Throws()
+    {
+        // Guardrail: an unpackaged app with no launchable .exe (empty/absent RunCommand) must error.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var json = $$"""{ "Properties": { "TargetDir": "{{_tempDir.FullName.Replace("\\", "\\\\")}}", "RunCommand": "", "WindowsPackageType": "None", "OutputType": "WinExe" } }""";
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, json, string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var ex = await Assert.ThrowsExactlyAsync<ProjectRunException>(() => service.BuildAndResolveAsync(csproj, options, CancellationToken.None));
+        StringAssert.Contains(ex.Message, "unpackaged");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_NoBuildUnpackagedMissingExe_HintsToRemoveNoBuild()
+    {
+        // With --no-build the guardrail should point the user at removing --no-build so the exe exists.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var json = $$"""{ "Properties": { "TargetDir": "{{_tempDir.FullName.Replace("\\", "\\\\")}}", "RunCommand": "{{Path.Combine(_tempDir.FullName, "missing.exe").Replace("\\", "\\\\")}}", "WindowsPackageType": "None", "OutputType": "WinExe" } }""";
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, json, string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: true, NoRestore: false, Properties: [], Json: false);
+
+        var ex = await Assert.ThrowsExactlyAsync<ProjectRunException>(() => service.BuildAndResolveAsync(csproj, options, CancellationToken.None));
+        StringAssert.Contains(ex.Message, "--no-build");
+    }
+
+    #endregion
+
+    #region CheckSdkAsync
+
+    [TestMethod]
+    public async Task CheckSdkAsync_DotnetNotOnPath_ReturnsNotFoundError()
+    {
+        // Process.Start throws when dotnet is not on PATH → surfaced as an actionable install hint.
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => throw new System.ComponentModel.Win32Exception("not found") };
+        var service = NewServiceWith(dotnet, out _);
+
+        var error = await service.CheckSdkAsync(_tempDir, CancellationToken.None);
+
+        Assert.IsNotNull(error);
+        StringAssert.Contains(error!, "not found");
+    }
+
+    [TestMethod]
+    public async Task CheckSdkAsync_NonZeroExit_ReturnsError()
+    {
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (1, string.Empty, "boom") };
+        var service = NewServiceWith(dotnet, out _);
+
+        var error = await service.CheckSdkAsync(_tempDir, CancellationToken.None);
+
+        Assert.IsNotNull(error);
+        StringAssert.Contains(error!, "Could not determine");
+    }
+
+    [TestMethod]
+    public async Task CheckSdkAsync_TooOldVersion_ReturnsError()
+    {
+        // 8.0.99 < 8.0.100 (the first SDK with --getProperty) → too old.
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, "8.0.99", string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+
+        var error = await service.CheckSdkAsync(_tempDir, CancellationToken.None);
+
+        Assert.IsNotNull(error);
+        StringAssert.Contains(error!, "too old");
+    }
+
+    [TestMethod]
+    public async Task CheckSdkAsync_CapableVersion_ReturnsNull()
+    {
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, "8.0.100", string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+
+        Assert.IsNull(await service.CheckSdkAsync(_tempDir, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task CheckSdkAsync_NewerVersion_ReturnsNull()
+    {
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, "10.0.301", string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+
+        Assert.IsNull(await service.CheckSdkAsync(_tempDir, CancellationToken.None));
+    }
+
+    [TestMethod]
+    public async Task CheckSdkAsync_UnparseableVersion_ReturnsNull()
+    {
+        // Present but unparseable → assume a modern SDK; the build surfaces a real error if not.
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, "not-a-version", string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+
+        Assert.IsNull(await service.CheckSdkAsync(_tempDir, CancellationToken.None));
     }
 
     #endregion

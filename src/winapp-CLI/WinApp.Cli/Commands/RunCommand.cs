@@ -162,7 +162,7 @@ internal partial class RunCommand : Command, IShortDescription
         PropertyOption = new Option<string[]>("--property")
         {
             Description = "Project mode: MSBuild property as Name=Value, forwarded to both build and evaluation. Repeatable (e.g. -p WindowsPackageType=None). Ignored in folder mode.",
-            Arity = ArgumentArity.ZeroOrMore,
+            Arity = ArgumentArity.OneOrMore,
             AllowMultipleArgumentsPerToken = false,
         };
         PropertyOption.Aliases.Add("-p");
@@ -329,16 +329,11 @@ internal partial class RunCommand : Command, IShortDescription
             RunInputResolution inputResolution;
             try
             {
-                inputResolution = projectRunService.ResolveInput(inputFsi);
+                inputResolution = await projectRunService.ResolveInputAsync(inputFsi, cancellationToken);
             }
             catch (ProjectRunException ex)
             {
-                logger.LogError("{UISymbol} {Message}", UiSymbols.Error, ex.Message);
-                if (isJson)
-                {
-                    PrintJson(aumid: null, processId: null, errorMessage: ex.Message);
-                }
-                return 1;
+                return Fail(ex.Message, isJson);
             }
 
             if (inputResolution.Mode == WinAppRunMode.Project)

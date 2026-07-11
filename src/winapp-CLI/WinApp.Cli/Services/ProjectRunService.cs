@@ -26,7 +26,7 @@ internal sealed class ProjectRunService(
     ];
 
     /// <inheritdoc />
-    public RunInputResolution ResolveInput(FileSystemInfo input)
+    public async Task<RunInputResolution> ResolveInputAsync(FileSystemInfo input, CancellationToken cancellationToken)
     {
         // Explicit file input: must be a .csproj (the unambiguous project-mode form).
         if (input is FileInfo file)
@@ -53,7 +53,7 @@ internal sealed class ProjectRunService(
         }
 
         // No top-level .csproj → folder mode (existing, unchanged behavior). Build-output folders
-        // (bin/…) fall here.
+        // (bin/…) fall here. This path performs NO MSBuild evaluation, so folder mode stays identical.
         if (csprojs.Count == 0)
         {
             return new RunInputResolution(WinAppRunMode.Folder, null, dir);
@@ -64,17 +64,73 @@ internal sealed class ProjectRunService(
             return new RunInputResolution(WinAppRunMode.Project, csprojs[0], dir);
         }
 
-        // Multiple .csproj files — prefer a single executable one (static parse first cut; the
-        // build step later confirms via the evaluated OutputType). Ambiguous otherwise.
-        var executable = csprojs.Where(ProjectDetectionService.IsExecutableNonTestProject).ToList();
+        // Multiple .csproj files — classify each via MSBuild evaluation so an executable/test project
+        // is detected even when OutputType/IsTestProject come from an import (SDK defaults,
+        // Directory.Build.props, the test SDK) rather than inline XML. A static parse cannot see those
+        // and could silently pick the wrong project (spec M5). Evaluation falls back to the static
+        // parse per-project when the SDK/restore is unavailable, so behavior never regresses.
+        var executable = new List<FileInfo>();
+        foreach (var csproj in csprojs)
+        {
+            if (await IsExecutableNonTestProjectAsync(csproj, dir, cancellationToken))
+            {
+                executable.Add(csproj);
+            }
+        }
+
         if (executable.Count == 1)
         {
             return new RunInputResolution(WinAppRunMode.Project, executable[0], dir);
         }
 
+        // Zero or several runnable candidates → we cannot safely guess; require explicit selection.
         var names = string.Join(", ", csprojs.Select(c => c.Name).OrderBy(n => n, StringComparer.OrdinalIgnoreCase));
         throw new ProjectRunException(
             $"Multiple .csproj files found in '{dir.FullName}' ({names}). Specify which project to run, e.g. 'winapp run {csprojs[0].Name}'.");
+    }
+
+    /// <summary>
+    /// Classifies a candidate project as a runnable non-test executable, preferring an MSBuild
+    /// evaluation of <c>OutputType</c>/<c>IsTestProject</c> (which honors imports) and falling back
+    /// to the static XML parse when evaluation is unavailable (no capable SDK, project not restored).
+    /// </summary>
+    private async Task<bool> IsExecutableNonTestProjectAsync(FileInfo csproj, DirectoryInfo workingDirectory, CancellationToken cancellationToken)
+    {
+        // Evaluate-only (no -t:Build): fast and side-effect free. Unlike a build, we only read
+        // static-ish properties, so a stale/absent output is irrelevant here.
+        var arguments = WindowsCommandLine.JoinArguments(
+        [
+            "msbuild",
+            csproj.FullName,
+            "--getProperty:OutputType",
+            "--getProperty:IsTestProject",
+        ]) ?? string.Empty;
+
+        try
+        {
+            var (exitCode, stdout, _) = await dotNetService.RunDotnetCommandAsync(workingDirectory, arguments, cancellationToken);
+            if (exitCode == 0)
+            {
+                var props = MsBuildPropertyReader.Parse(stdout, ["OutputType", "IsTestProject"]);
+                if (props.Count > 0)
+                {
+                    var outputType = GetProp(props, "OutputType");
+                    var isTest = string.Equals(GetProp(props, "IsTestProject"), "true", StringComparison.OrdinalIgnoreCase);
+                    var isExecutable = string.Equals(outputType, "Exe", StringComparison.OrdinalIgnoreCase)
+                        || string.Equals(outputType, "WinExe", StringComparison.OrdinalIgnoreCase);
+                    return isExecutable && !isTest;
+                }
+            }
+
+            logger.LogDebug("{UISymbol} Could not evaluate {Project} for disambiguation; falling back to static parse.", UiSymbols.Note, csproj.Name);
+        }
+        catch (Exception ex)
+        {
+            // dotnet not on PATH / evaluation failed → fall back to the static parse below.
+            logger.LogDebug("{UISymbol} Evaluation of {Project} failed ({Message}); falling back to static parse.", UiSymbols.Note, csproj.Name, ex.Message);
+        }
+
+        return ProjectDetectionService.IsExecutableNonTestProject(csproj);
     }
 
     /// <inheritdoc />

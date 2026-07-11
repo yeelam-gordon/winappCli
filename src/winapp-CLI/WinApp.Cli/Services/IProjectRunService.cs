@@ -17,11 +17,18 @@ internal interface IProjectRunService
     /// </summary>
     /// <param name="input">The positional argument: a <c>.csproj</c> file or a directory.</param>
     /// <returns>The resolved mode + project file (when project mode).</returns>
+    /// <remarks>
+    /// When a directory contains multiple <c>.csproj</c> files, each candidate is classified via a
+    /// lightweight MSBuild evaluation (<c>--getProperty:OutputType,IsTestProject</c>) so properties
+    /// contributed by imports (e.g. <c>Directory.Build.props</c>, the test SDK) are honored, not just
+    /// inline XML. Evaluation falls back to a static parse when the SDK/restore is unavailable.
+    /// Folder mode (a directory with no <c>.csproj</c>) never evaluates, keeping its behavior identical.
+    /// </remarks>
     /// <exception cref="ProjectRunException">
     /// Thrown when the input is an unsupported file type, or a directory contains multiple candidate
     /// <c>.csproj</c> files and the intended one is ambiguous.
     /// </exception>
-    RunInputResolution ResolveInput(FileSystemInfo input);
+    Task<RunInputResolution> ResolveInputAsync(FileSystemInfo input, CancellationToken cancellationToken);
 
     /// <summary>
     /// Verifies that a capable .NET SDK (≥ 8.0.100, which supports <c>--getProperty</c>) is available.

@@ -1547,7 +1547,7 @@
           "valueType": "System.String[]",
           "hasDefaultValue": false,
           "arity": {
-            "minimum": 0
+            "minimum": 1
           },
           "required": false,
           "recursive": false

@@ -283,6 +283,36 @@ public class RunCommandProjectModeTests : BaseCommandTests
         Assert.AreEqual(0, _fakeProjectRunService.BuildAndResolveCalls.Count);
     }
 
+    [TestMethod]
+    public async Task ProjectMode_MalformedProperty_Errors()
+    {
+        // Spec L3: a -p value that isn't Name=Value (here, no '=') is rejected before building so it
+        // never becomes a malformed '-p:' MSBuild argument.
+        var csproj = CreateCsproj();
+        SetUnpackagedOutcome(csproj, CreateTargetDir(withManifest: false), selfContained: false);
+        var command = GetRequiredService<RunCommand>();
+
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, [csproj.FullName, "-p", "NoEqualsSign", "--detach"]);
+
+        Assert.AreEqual(1, exitCode, "A malformed -p (no '=') must fail");
+        Assert.AreEqual(0, _fakeProjectRunService.BuildAndResolveCalls.Count, "Validation must happen before building");
+    }
+
+    [TestMethod]
+    public async Task ProjectMode_ValuelessProperty_Errors()
+    {
+        // Spec L3: a bare -p with no value is rejected by the option arity (OneOrMore) before the
+        // handler runs, rather than silently producing an empty property.
+        var csproj = CreateCsproj();
+        SetUnpackagedOutcome(csproj, CreateTargetDir(withManifest: false), selfContained: false);
+        var command = GetRequiredService<RunCommand>();
+
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, [csproj.FullName, "-p"]);
+
+        Assert.AreNotEqual(0, exitCode, "A valueless -p must fail to parse");
+        Assert.AreEqual(0, _fakeProjectRunService.BuildAndResolveCalls.Count);
+    }
+
     #endregion
 
     #region Folder mode (regression)

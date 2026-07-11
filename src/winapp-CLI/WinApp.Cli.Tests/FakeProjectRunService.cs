@@ -16,7 +16,7 @@ internal sealed class FakeProjectRunService : IProjectRunService
     /// <summary>Overrides the input classification. When null, a .csproj file maps to project mode and a directory to folder mode.</summary>
     public RunInputResolution? InputResolutionOverride { get; set; }
 
-    /// <summary>When set, <see cref="ResolveInput"/> throws this (simulates the multi-csproj ambiguity error).</summary>
+    /// <summary>When set, <see cref="ResolveInputAsync"/> throws this (simulates the multi-csproj ambiguity error).</summary>
     public ProjectRunException? ResolveInputThrows { get; set; }
 
     /// <summary>Returned from <see cref="CheckSdkAsync"/>. Null = capable SDK.</summary>
@@ -32,7 +32,7 @@ internal sealed class FakeProjectRunService : IProjectRunService
     public List<FileInfo> BuildAndResolveCalls { get; } = [];
     public List<ProjectRunOptions> BuildOptions { get; } = [];
 
-    public RunInputResolution ResolveInput(FileSystemInfo input)
+    public Task<RunInputResolution> ResolveInputAsync(FileSystemInfo input, CancellationToken cancellationToken)
     {
         ResolveInputCalls.Add(input);
         if (ResolveInputThrows != null)
@@ -42,16 +42,16 @@ internal sealed class FakeProjectRunService : IProjectRunService
 
         if (InputResolutionOverride != null)
         {
-            return InputResolutionOverride;
+            return Task.FromResult(InputResolutionOverride);
         }
 
         if (input is FileInfo file && string.Equals(file.Extension, ".csproj", StringComparison.OrdinalIgnoreCase))
         {
-            return new RunInputResolution(WinAppRunMode.Project, file, file.Directory ?? new DirectoryInfo(Directory.GetCurrentDirectory()));
+            return Task.FromResult(new RunInputResolution(WinAppRunMode.Project, file, file.Directory ?? new DirectoryInfo(Directory.GetCurrentDirectory())));
         }
 
         var dir = input as DirectoryInfo ?? new DirectoryInfo(input.FullName);
-        return new RunInputResolution(WinAppRunMode.Folder, null, dir);
+        return Task.FromResult(new RunInputResolution(WinAppRunMode.Folder, null, dir));
     }
 
     public Task<string?> CheckSdkAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
