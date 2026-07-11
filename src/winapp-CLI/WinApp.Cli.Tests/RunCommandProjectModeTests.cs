@@ -144,6 +144,28 @@ public class RunCommandProjectModeTests : BaseCommandTests
     }
 
     [TestMethod]
+    public async Task ProjectMode_Unpackaged_PropagatesNonZeroExitCode()
+    {
+        // Spec M3: a directly-launched unpackaged app that exits non-zero must be reported as a
+        // failure, not masked as success. Waiting on the owned handle (not a PID re-attach) keeps
+        // ExitCode valid even when the process exits before the wait begins. Runs WITHOUT --detach so
+        // the wait/exit-code path is exercised; self-contained to skip the runtime-install branch.
+        var csproj = CreateCsproj();
+        var targetDir = CreateTargetDir(withManifest: false);
+        SetUnpackagedOutcome(csproj, targetDir, selfContained: true);
+        _fakeAppLauncherService.FakeExitCode = 42;
+        var command = GetRequiredService<RunCommand>();
+
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, [csproj.FullName]);
+
+        Assert.AreEqual(42, exitCode, "A non-zero exit from the launched app must propagate (M3 exit-code loss)");
+        Assert.AreEqual(1, _fakeAppLauncherService.LaunchExecutableCalls.Count);
+        Assert.IsNotNull(_fakeAppLauncherService.LastLaunchedProcess);
+        Assert.IsTrue(_fakeAppLauncherService.LastLaunchedProcess!.Disposed, "The owned handle must be disposed after the wait");
+        Assert.IsFalse(_fakeAppLauncherService.LastLaunchedProcess!.Killed, "A normally-exiting app must not be killed");
+    }
+
+    [TestMethod]
     public async Task ProjectMode_Unpackaged_RejectsIdentityOnlyOption()
     {
         var csproj = CreateCsproj();
