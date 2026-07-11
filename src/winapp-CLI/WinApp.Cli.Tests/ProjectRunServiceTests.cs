@@ -342,5 +342,41 @@ public class ProjectRunServiceTests
             "non-json mode should print the human-readable build banner");
     }
 
+    [TestMethod]
+    public async Task BuildAndResolveAsync_WindowsPackageTypeNone_ResolvesUnpackaged()
+    {
+        // Spec §7.1: WindowsPackageType=None => unpackaged; RunCommand is the launchable apphost .exe.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var exe = WriteFile("App.exe", "stub"); // must exist for the unpackaged launch path
+        var json = $$"""{ "Properties": { "TargetDir": "{{_tempDir.FullName.Replace("\\", "\\\\")}}", "RunCommand": "{{exe.FullName.Replace("\\", "\\\\")}}", "WindowsPackageType": "None", "OutputType": "WinExe", "WindowsAppSDKSelfContained": "false" } }""";
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, json, string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNotNull(outcome.Resolution);
+        Assert.AreEqual(ProjectPackaging.Unpackaged, outcome.Resolution!.Packaging);
+        Assert.AreEqual(exe.FullName, outcome.Resolution.RunCommand);
+        Assert.IsFalse(outcome.Resolution.SelfContained);
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_EmptyPackageTypeWithMsixTooling_ResolvesPackaged()
+    {
+        // --no-build evaluate-only path: MSIX targets don't run so WindowsPackageType is empty;
+        // fall back to EnableMsixTooling=true => packaged (spec §7.1).
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var json = $$"""{ "Properties": { "TargetDir": "{{_tempDir.FullName.Replace("\\", "\\\\")}}", "RunCommand": "", "WindowsPackageType": "", "EnableMsixTooling": "true", "OutputType": "WinExe" } }""";
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, json, string.Empty) };
+        var service = NewServiceWith(dotnet, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: true, NoRestore: false, Properties: [], Json: false);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNotNull(outcome.Resolution);
+        Assert.AreEqual(ProjectPackaging.Packaged, outcome.Resolution!.Packaging);
+    }
+
     #endregion
 }
