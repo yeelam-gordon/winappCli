@@ -54,6 +54,40 @@ public class MsBuildPropertyReaderTests
     }
 
     [TestMethod]
+    public void Parse_JsonWithTrailingDiagnostic_StillParses()
+    {
+        // Spec M4: trailing content after the JSON object must not defeat parsing. A plain
+        // JsonDocument.Parse rejects trailing non-whitespace; the reader-based scan must ignore it.
+        var stdout = "{ \"Properties\": { \"WindowsPackageType\": \"MSIX\" } }\nBuild succeeded.";
+
+        var result = MsBuildPropertyReader.Parse(stdout, MultipleNames);
+
+        Assert.AreEqual("MSIX", result["WindowsPackageType"]);
+    }
+
+    [TestMethod]
+    public void Parse_PreambleContainingBrace_StillParses()
+    {
+        // Spec M4: a '{' in a diagnostic preamble that is NOT the JSON object must be skipped, and the
+        // real { "Properties": {...} } object found — the first '{' is a false positive.
+        var stdout = "note: token {placeholder} expanded\n{ \"Properties\": { \"WindowsPackageType\": \"None\" } }";
+
+        var result = MsBuildPropertyReader.Parse(stdout, MultipleNames);
+
+        Assert.AreEqual("None", result["WindowsPackageType"]);
+    }
+
+    [TestMethod]
+    public void Parse_SingleProperty_ScalarContainingBrace_ReturnsWholeValue()
+    {
+        // Spec M4: a single-property scalar value that merely contains '{' must be returned verbatim,
+        // never misread as the JSON shape.
+        var result = MsBuildPropertyReader.Parse("TRACE;DEBUG;NET{0}", SingleName);
+
+        Assert.AreEqual("TRACE;DEBUG;NET{0}", result["OutputType"]);
+    }
+
+    [TestMethod]
     public void Parse_EmptyStringPropertyValue_Preserved()
     {
         var stdout = """{ "Properties": { "WindowsPackageType": "" } }""";

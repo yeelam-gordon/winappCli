@@ -70,8 +70,19 @@ internal class FakeDotNetService : IDotNetService
 
     public Task<(int ExitCode, string Output, string Error)> RunDotnetCommandAsync(DirectoryInfo workingDirectory, string arguments, CancellationToken cancellationToken = default)
     {
+        if (RunDotnetCommandHandler is not null)
+        {
+            return Task.FromResult(RunDotnetCommandHandler(arguments));
+        }
         return Task.FromResult((0, "Fake dotnet command executed successfully.", string.Empty));
     }
+
+    /// <summary>
+    /// When set, <see cref="RunDotnetCommandAsync"/> returns this handler's result (keyed on the
+    /// argument string) instead of the fixed success tuple. Lets a test feed canned
+    /// <c>--getProperty</c> JSON for build/resolve scenarios.
+    /// </summary>
+    public Func<string, (int ExitCode, string Output, string Error)>? RunDotnetCommandHandler { get; set; }
 
     public Task<DotNetPackageListJson?> GetPackageListAsync(FileInfo csprojFile, bool includeTransitive = true, CancellationToken cancellationToken = default)
     {

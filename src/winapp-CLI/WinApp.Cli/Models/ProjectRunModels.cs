@@ -69,13 +69,15 @@ internal sealed record ProjectRunResolution(
 /// <param name="NoBuild">Skip the build and evaluate the existing output only.</param>
 /// <param name="NoRestore">Pass <c>--no-restore</c> to the build.</param>
 /// <param name="Properties">Raw repeatable <c>-p Name=Value</c> passthrough, forwarded to both build and evaluation.</param>
+/// <param name="Json">When true, suppress human-readable stdout (banner) and route build diagnostics to stderr so stdout stays pure JSON.</param>
 internal sealed record ProjectRunOptions(
     string Configuration,
     string Architecture,
     string? Framework,
     bool NoBuild,
     bool NoRestore,
-    IReadOnlyList<string> Properties);
+    IReadOnlyList<string> Properties,
+    bool Json = false);
 
 /// <summary>
 /// Outcome of <see cref="Services.IProjectRunService.BuildAndResolveAsync"/>. On success,

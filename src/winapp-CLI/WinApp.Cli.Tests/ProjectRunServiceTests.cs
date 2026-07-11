@@ -32,6 +32,16 @@ public class ProjectRunServiceTests
         </Project>
         """;
 
+    private const string TestProjectCsproj = """
+        <Project Sdk="Microsoft.NET.Sdk">
+          <PropertyGroup>
+            <OutputType>Exe</OutputType>
+            <IsTestProject>true</IsTestProject>
+            <TargetFramework>net10.0</TargetFramework>
+          </PropertyGroup>
+        </Project>
+        """;
+
     [TestInitialize]
     public void Setup()
     {
@@ -141,6 +151,34 @@ public class ProjectRunServiceTests
         StringAssert.Contains(args, "-f net10.0-windows10.0.26100.0");
     }
 
+    [TestMethod]
+    public void BuildDotnetArguments_NoBuild_DedicatedConfigAndRidWinOverUserProperty()
+    {
+        // Spec M2: on the --no-build (evaluate-only) path the dedicated Configuration/RID are emitted
+        // as -p: too. A conflicting user -p must NOT override them — the dedicated value must be emitted
+        // LAST so MSBuild's last-wins makes the dedicated flag win, matching the build path and
+        // WarnOnOverriddenFlags (dedicated flag beats a same-named -p).
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: true, NoRestore: false,
+            Properties: ["Configuration=Release", "RuntimeIdentifier=win-arm64"]);
+
+        var args = ProjectRunService.BuildDotnetArguments(csproj, options);
+
+        var userConfigIdx = args.IndexOf("-p:Configuration=Release", StringComparison.Ordinal);
+        var dedicatedConfigIdx = args.IndexOf("-p:Configuration=Debug", StringComparison.Ordinal);
+        Assert.IsTrue(userConfigIdx >= 0, "user -p:Configuration must still be forwarded to the evaluation");
+        Assert.IsTrue(dedicatedConfigIdx >= 0, "dedicated Configuration must be emitted");
+        Assert.IsTrue(dedicatedConfigIdx > userConfigIdx,
+            "dedicated -p:Configuration must come AFTER the user -p so last-wins makes it win");
+
+        var userRidIdx = args.IndexOf("-p:RuntimeIdentifier=win-arm64", StringComparison.Ordinal);
+        var dedicatedRidIdx = args.IndexOf("-p:RuntimeIdentifier=win-x64", StringComparison.Ordinal);
+        Assert.IsTrue(userRidIdx >= 0, "user -p:RuntimeIdentifier must still be forwarded");
+        Assert.IsTrue(dedicatedRidIdx >= 0, "dedicated RuntimeIdentifier must be emitted");
+        Assert.IsTrue(dedicatedRidIdx > userRidIdx,
+            "dedicated -p:RuntimeIdentifier must come AFTER the user -p so last-wins makes it win");
+    }
+
     #endregion
 
     #region TryParseSdkVersion
@@ -230,6 +268,78 @@ public class ProjectRunServiceTests
 
         var ex = Assert.ThrowsExactly<ProjectRunException>(() => _service.ResolveInput(_tempDir));
         StringAssert.Contains(ex.Message, "Multiple .csproj files");
+    }
+
+    [TestMethod]
+    public void ResolveInput_MultipleCsproj_ExecutablePlusTestProject_PicksExecutable()
+    {
+        // A test project (IsTestProject=true) is excluded from the executable set even when its
+        // OutputType is Exe, so an app + its test project disambiguates to the app (spec M5).
+        WriteFile("App.csproj", ExecutableCsproj);
+        WriteFile("App.Tests.csproj", TestProjectCsproj);
+
+        var resolution = _service.ResolveInput(_tempDir);
+
+        Assert.AreEqual(WinAppRunMode.Project, resolution.Mode);
+        Assert.AreEqual("App.csproj", resolution.Csproj!.Name);
+    }
+
+    [TestMethod]
+    public void ResolveInput_MultipleCsproj_NoExecutable_ThrowsAmbiguity()
+    {
+        // Multiple projects, none statically executable → we cannot pick one; guide the user to
+        // name a project explicitly rather than silently building a non-runnable one (spec M5).
+        WriteFile("Lib1.csproj", LibraryCsproj);
+        WriteFile("Lib2.csproj", LibraryCsproj);
+
+        var ex = Assert.ThrowsExactly<ProjectRunException>(() => _service.ResolveInput(_tempDir));
+        StringAssert.Contains(ex.Message, "Multiple .csproj files");
+    }
+
+    #endregion
+
+    #region BuildAndResolveAsync (--json banner suppression, spec H2)
+
+    private static ProjectRunService NewServiceWith(FakeDotNetService dotnet, out TestConsole console)
+    {
+        console = new TestConsole();
+        return new ProjectRunService(dotnet, console, NullLogger<ProjectRunService>.Instance);
+    }
+
+    private string PackagedPropertiesJson() =>
+        // TargetDir must be non-empty and the packaging must resolve to Packaged (WindowsPackageType=MSIX)
+        // so BuildAndResolveAsync succeeds without needing a real apphost .exe on disk.
+        $$"""{ "Properties": { "TargetDir": "{{_tempDir.FullName.Replace("\\", "\\\\")}}", "RunCommand": "", "WindowsPackageType": "MSIX", "OutputType": "WinExe", "WindowsAppSDKSelfContained": "" } }""";
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_JsonMode_DoesNotPrintBuildBannerToConsole()
+    {
+        // Spec H2: in --json mode stdout must be pure JSON, so the human-readable "Building…" banner
+        // must not be written to the (stdout) console.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty) };
+        var service = NewServiceWith(dotnet, out var console);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: true);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNotNull(outcome.Resolution, "the canned packaged build should resolve successfully");
+        Assert.IsFalse(console.Output.Contains("Building", StringComparison.OrdinalIgnoreCase),
+            "--json mode must not print the build banner to stdout");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_NonJsonMode_PrintsBuildBanner()
+    {
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty) };
+        var service = NewServiceWith(dotnet, out var console);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        StringAssert.Contains(console.Output, "Building",
+            "non-json mode should print the human-readable build banner");
     }
 
     #endregion

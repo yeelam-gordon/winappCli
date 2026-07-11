@@ -130,7 +130,10 @@ internal sealed class ProjectRunService(
         var arguments = BuildDotnetArguments(csproj, options);
         logger.LogDebug("{UISymbol} dotnet {Arguments}", UiSymbols.Note, arguments);
 
-        if (!options.NoBuild)
+        // In --json mode stdout must be pure JSON, so the human-readable banner and any build
+        // diagnostics are suppressed / routed to stderr (spec H2). dotnet's own stdout/stderr are
+        // captured by RunDotnetCommandAsync (not streamed), so they never reach our stdout directly.
+        if (!options.NoBuild && !options.Json)
         {
             ansiConsole.MarkupLineInterpolated($"{UiSymbols.Wrench} Building {csproj.Name} ({options.Configuration} | {options.Architecture})...");
         }
@@ -145,7 +148,15 @@ internal sealed class ProjectRunService(
                 new[] { stdout, stderr }.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.TrimEnd()));
             if (!string.IsNullOrWhiteSpace(combined))
             {
-                ansiConsole.WriteLine(combined);
+                // Keep stdout clean for --json consumers; route build diagnostics to stderr instead.
+                if (options.Json)
+                {
+                    Console.Error.WriteLine(combined);
+                }
+                else
+                {
+                    ansiConsole.WriteLine(combined);
+                }
             }
 
             return new ProjectBuildOutcome(null, exitCode);
@@ -255,19 +266,9 @@ internal sealed class ProjectRunService(
 
         if (options.NoBuild)
         {
-            // dotnet msbuild does NOT accept -c/-r (MSB1001); use raw -p: equivalents.
+            // dotnet msbuild does NOT accept -c/-r (MSB1001); the -p: equivalents are emitted below.
             tokens.Add("msbuild");
             tokens.Add(csproj.FullName);
-            tokens.Add($"-p:Configuration={options.Configuration}");
-            tokens.Add($"-p:RuntimeIdentifier={rid}");
-            if (!userSpecifiesPlatform)
-            {
-                tokens.Add($"-p:Platform={platform}");
-            }
-            if (!string.IsNullOrWhiteSpace(options.Framework))
-            {
-                tokens.Add($"-p:TargetFramework={options.Framework}");
-            }
         }
         else
         {
@@ -280,10 +281,6 @@ internal sealed class ProjectRunService(
             tokens.Add(options.Configuration);
             tokens.Add("-r");
             tokens.Add(rid);
-            if (!userSpecifiesPlatform)
-            {
-                tokens.Add($"-p:Platform={platform}");
-            }
             if (options.NoRestore)
             {
                 tokens.Add("--no-restore");
@@ -295,11 +292,31 @@ internal sealed class ProjectRunService(
             }
         }
 
-        // User -p properties: forwarded verbatim to BOTH build and evaluation. dotnet resolves
-        // precedence (dedicated flag beats -p; duplicate -p is last-wins).
+        // User -p properties come FIRST so the dedicated equivalents below win on a conflict
+        // (MSBuild is last-wins for duplicate -p:). This matches the build path, where the
+        // dedicated -c/-r/-f switches always beat a -p: regardless of order, so both paths behave
+        // consistently: a dedicated flag beats a same-named user -p (see WarnOnOverriddenFlags).
         foreach (var property in options.Properties)
         {
             tokens.Add($"-p:{property}");
+        }
+
+        // Dedicated build inputs as -p:, emitted LAST so they take precedence over a conflicting
+        // user -p. On the --no-build (msbuild) path these carry Configuration/RID (and TFM) since the
+        // switches aren't accepted there; on both paths Platform is only set when the user didn't.
+        if (options.NoBuild)
+        {
+            tokens.Add($"-p:Configuration={options.Configuration}");
+            tokens.Add($"-p:RuntimeIdentifier={rid}");
+            if (!string.IsNullOrWhiteSpace(options.Framework))
+            {
+                tokens.Add($"-p:TargetFramework={options.Framework}");
+            }
+        }
+
+        if (!userSpecifiesPlatform)
+        {
+            tokens.Add($"-p:Platform={platform}");
         }
 
         foreach (var name in RequestedProperties)
@@ -307,7 +324,7 @@ internal sealed class ProjectRunService(
             tokens.Add($"--getProperty:{name}");
         }
 
-        return string.Join(' ', tokens.Select(QuoteIfNeeded));
+        return WindowsCommandLine.JoinArguments(tokens) ?? string.Empty;
     }
 
     private void WarnOnOverriddenFlags(ProjectRunOptions options)
@@ -328,16 +345,6 @@ internal sealed class ProjectRunService(
 
     private static string GetProp(IReadOnlyDictionary<string, string> props, string name)
         => props.TryGetValue(name, out var value) ? value.Trim() : string.Empty;
-
-    private static string QuoteIfNeeded(string token)
-    {
-        if (token.Length == 0 || token.IndexOfAny([' ', '\t', '"']) >= 0)
-        {
-            return "\"" + token.Replace("\"", "\\\"") + "\"";
-        }
-
-        return token;
-    }
 
     /// <summary>
     /// Parses the leading <c>major.minor.patch</c> of a <c>dotnet --version</c> string

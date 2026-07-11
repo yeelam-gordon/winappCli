@@ -44,33 +44,13 @@ internal static class MsBuildPropertyReader
             return result;
         }
 
-        // JSON shape (multiple properties, or a single property when the SDK still emits an object).
-        // Normally stdout is clean JSON, but be tolerant of a diagnostic preamble before the object.
-        var braceIndex = trimmed.IndexOf('{');
-        if (braceIndex >= 0)
+        // JSON shape: { "Properties": { "Name": "Value", ... } }. Normally stdout is clean JSON, but be
+        // tolerant of a diagnostic preamble before the object AND of trailing content after it. We only
+        // accept an object that actually carries a "Properties" object, so a scalar value that merely
+        // contains a '{' can never be misread as the JSON shape.
+        if (TryReadPropertiesObject(trimmed, result))
         {
-            var jsonCandidate = trimmed[braceIndex..];
-            try
-            {
-                using var doc = JsonDocument.Parse(jsonCandidate);
-                if (doc.RootElement.ValueKind == JsonValueKind.Object &&
-                    doc.RootElement.TryGetProperty("Properties", out var props) &&
-                    props.ValueKind == JsonValueKind.Object)
-                {
-                    foreach (var prop in props.EnumerateObject())
-                    {
-                        result[prop.Name] = prop.Value.ValueKind == JsonValueKind.String
-                            ? prop.Value.GetString() ?? string.Empty
-                            : prop.Value.ToString();
-                    }
-
-                    return result;
-                }
-            }
-            catch (JsonException)
-            {
-                // Fall through to scalar handling — the leading '{' was not a JSON properties object.
-            }
+            return result;
         }
 
         // Scalar shape: a single requested property whose raw value is the whole output.
@@ -80,5 +60,59 @@ internal static class MsBuildPropertyReader
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Scans <paramref name="text"/> for the first JSON object that is a <c>{ "Properties": {...} }</c>
+    /// envelope and, if found, fills <paramref name="result"/> and returns <c>true</c>. Each <c>'{'</c>
+    /// is tried as a candidate start (skipping a non-JSON preamble brace), and a single JSON value is
+    /// read via <see cref="JsonDocument.TryParseValue"/> so trailing diagnostics after the object are
+    /// ignored rather than causing a parse failure.
+    /// </summary>
+    private static bool TryReadPropertiesObject(string text, Dictionary<string, string> result)
+    {
+        var searchStart = 0;
+        while (searchStart < text.Length)
+        {
+            var braceIndex = text.IndexOf('{', searchStart);
+            if (braceIndex < 0)
+            {
+                return false;
+            }
+
+            var candidate = text[braceIndex..];
+            var bytes = System.Text.Encoding.UTF8.GetBytes(candidate);
+            var reader = new Utf8JsonReader(bytes, isFinalBlock: true, state: default);
+            try
+            {
+                if (JsonDocument.TryParseValue(ref reader, out var doc))
+                {
+                    using (doc)
+                    {
+                        if (doc.RootElement.ValueKind == JsonValueKind.Object &&
+                            doc.RootElement.TryGetProperty("Properties", out var props) &&
+                            props.ValueKind == JsonValueKind.Object)
+                        {
+                            foreach (var prop in props.EnumerateObject())
+                            {
+                                result[prop.Name] = prop.Value.ValueKind == JsonValueKind.String
+                                    ? prop.Value.GetString() ?? string.Empty
+                                    : prop.Value.ToString();
+                            }
+
+                            return true;
+                        }
+                    }
+                }
+            }
+            catch (JsonException)
+            {
+                // This '{' did not begin a valid JSON value — try the next one (preamble brace).
+            }
+
+            searchStart = braceIndex + 1;
+        }
+
+        return false;
     }
 }
