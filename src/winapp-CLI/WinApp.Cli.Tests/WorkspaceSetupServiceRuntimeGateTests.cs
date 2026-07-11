@@ -151,6 +151,46 @@ public class WorkspaceSetupServiceRuntimeGateTests : BaseCommandTests
     }
 
     [TestMethod]
+    public void IsWindowsAppRuntimeRegistered_ExpectedDdlmNotExactlyRegistered_StillReturnsTrue()
+    {
+        // Spec R4-L1: DDLM package names embed the FULL version (e.g.
+        // Microsoft.WinAppRuntime.DDLM.8000.144.1000.0-x64) and install side-by-side, so the gate must NOT
+        // demand the app's EXACT DDLM identity — a newer compatible DDLM for the same framework minor
+        // satisfies the bootstrapper. Only the generic DDLM presence (checked at the top of the gate) is
+        // required for the DDLM; the exact/version check applies to the app-facing Framework family only.
+        const string framework = "Microsoft.WindowsAppRuntime.1.8";
+        const string expectedDdlm = "Microsoft.WinAppRuntime.DDLM.8000.144.1000.0-x64";
+        // Generic Framework + DDLM presence both satisfied (a newer DDLM is registered side-by-side).
+        _fakePackageRegistration.IsPackageInstalledPredicate = _ => true;
+        // The Framework is registered at the required version; the app's EXACT DDLM is NOT (returns null).
+        _fakePackageRegistration.GetInstalledVersionFunc = (name, _) => name == framework ? "8000.144.2000.0" : null;
+        var service = GetRequiredService<IWorkspaceSetupService>();
+
+        Assert.IsTrue(service.IsWindowsAppRuntimeRegistered(
+            "x64",
+            new[] { (framework, "8000.144.2000.0"), (expectedDdlm, "8000.144.1000.0") }),
+            "an unregistered exact DDLM must not fail the gate when a DDLM is present and the Framework version matches");
+
+        Assert.IsFalse(_fakePackageRegistration.GetInstalledVersionCalls.Any(c => c.PackageName == expectedDdlm),
+            "the DDLM identity must not be exact-version-checked; the generic DDLM presence check covers it");
+    }
+
+    [TestMethod]
+    public void WinAppRuntimeFrameworkPrefix_MatchesFrameworkNotDdlm()
+    {
+        // Guard the Framework-vs-DDLM discrimination the gate relies on to decide which expected identities
+        // get the exact/version check (Framework) vs generic presence (DDLM). The two use DIFFERENT prefixes
+        // (WindowsAppRuntime vs WinAppRuntime.DDLM), so a DDLM name must not be treated as a Framework.
+        const string frameworkName = "Microsoft.WindowsAppRuntime.1.8";
+        const string ddlmName = "Microsoft.WinAppRuntime.DDLM.8000.144.1000.0-x64";
+
+        Assert.IsTrue(frameworkName.StartsWith("Microsoft.WindowsAppRuntime.", StringComparison.Ordinal),
+            "a real Framework package name must match the Framework prefix");
+        Assert.IsFalse(ddlmName.StartsWith("Microsoft.WindowsAppRuntime.", StringComparison.Ordinal),
+            "a real DDLM package name must NOT match the Framework prefix (so it isn't exact/version-checked)");
+    }
+
+    [TestMethod]
     public void WinAppRuntimeCbsInfix_DiscriminatesCbsFromFramework()
     {
         // Spec R2-L1: guard the exclusion substring against a real CBS name vs a real Framework name,

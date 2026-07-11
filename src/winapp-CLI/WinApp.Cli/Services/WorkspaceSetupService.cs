@@ -1397,12 +1397,21 @@ internal class WorkspaceSetupService(
     internal const string WinAppRuntimeCbsInfix = ".CBS.";
 
     /// <summary>
+    /// Classifies a package name as the app-facing versioned Framework (whose family name is
+    /// <c>Microsoft.WindowsAppRuntime.{major.minor}</c>, excluding the CBS system component). This is the
+    /// identity the gate exact-matches and version-compares, since the Framework's version lives in its
+    /// package Version (not its name).
+    /// </summary>
+    private static bool IsFrameworkGatePackageName(string packageName) =>
+        packageName.StartsWith(WinAppRuntimeFrameworkPrefix, StringComparison.OrdinalIgnoreCase)
+        && !packageName.Contains(WinAppRuntimeCbsInfix, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
     /// Classifies a package name as one of the framework-dependent runtime identities the gate cares
     /// about: a versioned Framework (excluding the CBS system component) or a DDLM.
     /// </summary>
     private static bool IsRuntimeGatePackageName(string packageName) =>
-        (packageName.StartsWith(WinAppRuntimeFrameworkPrefix, StringComparison.OrdinalIgnoreCase)
-            && !packageName.Contains(WinAppRuntimeCbsInfix, StringComparison.OrdinalIgnoreCase))
+        IsFrameworkGatePackageName(packageName)
         || packageName.StartsWith(WinAppRuntimeDdlmPrefix, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
@@ -1414,13 +1423,17 @@ internal class WorkspaceSetupService(
     /// instead of starting an app that would crash resolving its runtime.
     /// <para>
     /// When <paramref name="expectedRuntimePackages"/> is supplied (the versioned identities from
-    /// the resolved runtime inventory), each is additionally required to be registered for the arch
-    /// at a version <b>greater than or equal to</b> the required one. This closes the false-pass where
-    /// a version-specific install silently failed but a DIFFERENT WinAppSDK version — or a stale OLDER
-    /// patch of the same Framework family (whose family name is only <c>major.minor</c>) — is registered
-    /// for the arch (common on dev boxes); without it the generic prefix check would pass and the app
-    /// would still crash at bootstrap (spec R2-M1). When empty or null (folder mode / legacy callers),
-    /// only the generic presence check runs — byte-identical to the previous behavior.
+    /// the resolved runtime inventory), the app-facing <b>Framework</b> family is additionally required to
+    /// be registered for the arch at a version <b>greater than or equal to</b> the required one. This
+    /// closes the false-pass where a version-specific install silently failed but a DIFFERENT WinAppSDK
+    /// version — or a stale OLDER patch of the same Framework family (whose family name is only
+    /// <c>major.minor</c>) — is registered for the arch (common on dev boxes); without it the generic
+    /// prefix check would pass and the app would still crash at bootstrap (spec R2-M1). The DDLM identities
+    /// are intentionally NOT exact-matched here — their names embed the full version and they install
+    /// side-by-side, so the generic DDLM presence check above suffices and demanding the app's exact DDLM
+    /// would over-strictly false-fail when a newer compatible DDLM is present (spec R4-L1). When empty or
+    /// null (folder mode / legacy callers), only the generic presence check runs — byte-identical to the
+    /// previous behavior.
     /// </para>
     /// </summary>
     public bool IsWindowsAppRuntimeRegistered(string? architecture, IReadOnlyList<(string Name, string Version)>? expectedRuntimePackages = null)
@@ -1440,7 +1453,22 @@ internal class WorkspaceSetupService(
         {
             foreach (var (name, requiredVersion) in expectedRuntimePackages)
             {
-                // Require the SPECIFIC identity the app was built against to be registered for the arch.
+                // Only the app-facing Framework family gets an exact-identity + version check. The DDLM is
+                // deliberately NOT exact-matched here — it's already covered by the generic hasDdlm presence
+                // check above. DDLM package names embed the FULL version (e.g.
+                // Microsoft.WinAppRuntime.DDLM.8000.806.2252.0-x64) and install side-by-side, so demanding
+                // the app's EXACT DDLM would over-strictly false-FAIL a launch when a newer compatible DDLM
+                // is registered but that specific one failed to install (spec R4-L1). The Framework version
+                // compare below is the authoritative patch-level guard; DDLMs track the Framework, so a
+                // present DDLM plus the correct Framework version is sufficient.
+                if (!IsFrameworkGatePackageName(name))
+                {
+                    continue;
+                }
+
+                // Require the SPECIFIC Framework family the app was built against to be registered for the
+                // arch. GetInstalledVersion is an exact-name match, so a wrong minor (e.g. need 1.8, have
+                // 1.6) returns null here and fails the gate.
                 var installedVersion = packageRegistrationService.GetInstalledVersion(name, arch);
                 if (installedVersion is null)
                 {
