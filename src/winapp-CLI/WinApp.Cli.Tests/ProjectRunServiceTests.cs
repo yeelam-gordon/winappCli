@@ -329,6 +329,26 @@ public class ProjectRunServiceTests
     }
 
     [TestMethod]
+    public async Task BuildAndResolveAsync_JsonMode_BuildFailureDiagnosticsGoToStderrNotStdout()
+    {
+        // Spec H2: on a failed build in --json mode, dotnet's captured diagnostics must be routed to
+        // stderr so the (stdout) console stays free of non-JSON noise.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        const string diag = "error NETSDK9999: totally broken build";
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (1, diag, "MSB1234: also broken") };
+        var service = NewServiceWith(dotnet, out var console);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: true);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNull(outcome.Resolution, "a failed build should not resolve");
+        Assert.AreEqual(1, outcome.ExitCode, "the dotnet exit code should propagate");
+        Assert.IsFalse(console.Output.Contains(diag, StringComparison.OrdinalIgnoreCase),
+            "--json mode must not write build diagnostics to stdout");
+        Assert.IsFalse(console.Output.Contains("Building", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [TestMethod]
     public async Task BuildAndResolveAsync_NonJsonMode_PrintsBuildBanner()
     {
         var csproj = WriteFile("App.csproj", ExecutableCsproj);
