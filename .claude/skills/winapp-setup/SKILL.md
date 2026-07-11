@@ -257,7 +257,7 @@ Creates packaged layout, registers the Application, and launches the packaged ap
 | `--no-restore` | Project mode: skip restoring the project before building. Ignored in folder mode. | (none) |
 | `--output-appx-directory` | Output directory for the loose layout package. If not specified, a directory named AppX inside the input-folder directory will be used. | (none) |
 | `--property` | Project mode: MSBuild property as Name=Value, forwarded to both build and evaluation. Repeatable (e.g. -p WindowsPackageType=None). Ignored in folder mode. | (none) |
-| `--runtime` | Project mode: target .NET runtime identifier (RID), e.g. win-x64. Its architecture overrides --arch. Ignored in folder mode. | (none) |
+| `--runtime` | Project mode: target .NET runtime identifier (RID), e.g. win-x64. Only the RID's architecture is used; it overrides --arch (the RID is reduced to its architecture). Ignored in folder mode. | (none) |
 | `--symbols` | Download symbols from Microsoft Symbol Server for richer native crash analysis. Only used with --debug-output. First run downloads symbols and caches them locally; subsequent runs use the cache. | (none) |
 | `--unregister-on-exit` | Unregister the development package after the application exits. Only removes packages registered in development mode. | (none) |
 | `--with-alias` | Launch the app using its execution alias instead of AUMID activation. The app runs in the current terminal with inherited stdin/stdout/stderr. Requires a uap5:ExecutionAlias in the manifest. Use "winapp manifest add-alias" to add an execution alias to the manifest. | (none) |

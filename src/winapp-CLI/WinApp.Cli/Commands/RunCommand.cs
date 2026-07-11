@@ -139,7 +139,7 @@ internal partial class RunCommand : Command, IShortDescription
 
         RuntimeOption = new Option<string?>("--runtime")
         {
-            Description = "Project mode: target .NET runtime identifier (RID), e.g. win-x64. Its architecture overrides --arch. Ignored in folder mode."
+            Description = "Project mode: target .NET runtime identifier (RID), e.g. win-x64. Only the RID's architecture is used; it overrides --arch (the RID is reduced to its architecture). Ignored in folder mode."
         };
         RuntimeOption.Aliases.Add("-r");
 

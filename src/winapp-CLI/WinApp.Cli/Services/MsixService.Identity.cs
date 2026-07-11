@@ -420,14 +420,15 @@ internal partial class MsixService
     public async Task EnsureWindowsAppRuntimeInstalledAsync(FileInfo? projectFile, string? architecture, TaskContext taskContext, CancellationToken cancellationToken = default)
     {
         var packageList = await ResolveDotNetPackageListAsync(projectFile, cancellationToken);
-        await EnsureWindowsAppRuntimeInstalledAsync(packageList, architecture, taskContext, cancellationToken);
+        var expectedRuntimePackageNames = await EnsureWindowsAppRuntimeInstalledAsync(packageList, architecture, taskContext, cancellationToken);
 
         // Presence gate (spec §8.4 / H1): after the install attempt, verify the framework-dependent
         // runtime (Framework + matching-arch DDLM) is actually registered for the target arch. A
         // missing runtime dir was previously treated as success, so a cross-arch run could skip the
-        // install and the app would crash at bootstrap. Fail loudly instead so the caller aborts the
-        // launch with an actionable error.
-        if (!workspaceSetupService.IsWindowsAppRuntimeRegistered(architecture))
+        // install and the app would crash at bootstrap. The expected identities pin the check to the
+        // SPECIFIC version the app needs (spec R2-M1), so a different registered version can't mask a
+        // failed install. Fail loudly instead so the caller aborts the launch with an actionable error.
+        if (!workspaceSetupService.IsWindowsAppRuntimeRegistered(architecture, expectedRuntimePackageNames))
         {
             var arch = architecture ?? WorkspaceSetupService.GetSystemArchitecture();
             throw new InvalidOperationException(
@@ -453,16 +454,16 @@ internal partial class MsixService
     /// Locates the runtime MSIX directory from the NuGet package cache and installs any
     /// missing or outdated packages (Framework, DDLM, Singleton, Main) via Add-AppxPackage.
     /// </summary>
-    private async Task EnsureWindowsAppRuntimeInstalledAsync(DotNetPackageListJson? dotNetPackageList, string? architecture, TaskContext taskContext, CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<string>> EnsureWindowsAppRuntimeInstalledAsync(DotNetPackageListJson? dotNetPackageList, string? architecture, TaskContext taskContext, CancellationToken cancellationToken)
     {
         var msixDir = await GetRuntimeMsixDirAsync(dotNetPackageList, taskContext, cancellationToken);
         if (msixDir == null)
         {
             taskContext.AddDebugMessage($"{UiSymbols.Warning} Could not locate Windows App Runtime MSIX packages. The runtime may need to be installed manually.");
-            return;
+            return Array.Empty<string>();
         }
 
-        var (installedCount, errorCount) = await workspaceSetupService.InstallWindowsAppRuntimeAsync(msixDir, taskContext, cancellationToken, architecture);
+        var (installedCount, errorCount, runtimePackageNames) = await workspaceSetupService.InstallWindowsAppRuntimeAsync(msixDir, taskContext, cancellationToken, architecture);
 
         if (errorCount > 0)
         {
@@ -472,6 +473,8 @@ internal partial class MsixService
         {
             taskContext.AddDebugMessage($"{UiSymbols.Check} Installed {installedCount} Windows App Runtime package(s)");
         }
+
+        return runtimePackageNames;
     }
 
     private async Task EmbedMsixIdentityToExeAsync(FileInfo exePath, MsixIdentityResult identityInfo, TaskContext taskContext, CancellationToken cancellationToken)

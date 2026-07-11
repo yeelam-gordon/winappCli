@@ -166,6 +166,25 @@ public class RunCommandProjectModeTests : BaseCommandTests
     }
 
     [TestMethod]
+    public async Task ProjectMode_Unpackaged_RuntimePrepFailure_AbortsWithoutLaunching()
+    {
+        // Spec R2-M2: when runtime preparation throws (e.g. the version-specific gate can't confirm the
+        // required Windows App Runtime is registered), the run must abort with a non-zero exit and must
+        // never launch the app. Verifies the command wiring of the abort, not just the gate in isolation.
+        var csproj = CreateCsproj();
+        var targetDir = CreateTargetDir(withManifest: false);
+        SetUnpackagedOutcome(csproj, targetDir, selfContained: false);
+        _fakeMsixService.EnsureRuntimeInstalledException = new InvalidOperationException("runtime not registered");
+        var command = GetRequiredService<RunCommand>();
+
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, [csproj.FullName, "--detach"]);
+
+        Assert.AreNotEqual(0, exitCode, "A runtime-prep failure must produce a non-zero exit");
+        Assert.AreEqual(1, _fakeMsixService.EnsureRuntimeInstalledCalls.Count, "Runtime prep should have been attempted");
+        Assert.AreEqual(0, _fakeAppLauncherService.LaunchExecutableCalls.Count, "The app must NOT launch when runtime prep fails");
+    }
+
+    [TestMethod]
     public async Task ProjectMode_Unpackaged_RejectsIdentityOnlyOption()
     {
         var csproj = CreateCsproj();

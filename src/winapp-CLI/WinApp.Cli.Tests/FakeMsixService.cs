@@ -18,6 +18,13 @@ internal class FakeMsixService : IMsixService
     public List<(string? ProjectFile, string? Architecture)> EnsureRuntimeInstalledCalls { get; } = [];
     public Exception? ExceptionToThrow { get; set; }
 
+    /// <summary>
+    /// When set, <see cref="EnsureWindowsAppRuntimeInstalledAsync"/> throws this to exercise the
+    /// unpackaged run's runtime-prep failure path (abort with a non-zero exit, no launch). Kept
+    /// separate from <see cref="ExceptionToThrow"/> so identity vs runtime-prep failures are isolated.
+    /// </summary>
+    public Exception? EnsureRuntimeInstalledException { get; set; }
+
     public Task<MsixIdentityResult> AddLooseLayoutIdentityAsync(
         FileInfo appxManifestPath,
         DirectoryInfo inputDirectory,
@@ -45,6 +52,10 @@ internal class FakeMsixService : IMsixService
         CancellationToken cancellationToken = default)
     {
         EnsureRuntimeInstalledCalls.Add((projectFile?.FullName, architecture));
+        if (EnsureRuntimeInstalledException != null)
+        {
+            throw EnsureRuntimeInstalledException;
+        }
         return Task.CompletedTask;
     }
 

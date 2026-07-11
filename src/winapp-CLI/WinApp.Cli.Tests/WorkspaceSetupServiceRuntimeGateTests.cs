@@ -89,4 +89,47 @@ public class WorkspaceSetupServiceRuntimeGateTests : BaseCommandTests
         Assert.IsTrue(_fakePackageRegistration.IsPackageInstalledCalls.All(c => c.Architecture == expectedArch),
             "a null arch must resolve to the host architecture for both the framework and DDLM checks");
     }
+
+    [TestMethod]
+    public void IsWindowsAppRuntimeRegistered_ExpectedVersionPresent_ReturnsTrueAndForwardsArch()
+    {
+        // Spec R2-M1: when the resolved runtime identities are supplied, each must also be registered
+        // (for the arch). Here everything is present, so the gate passes.
+        const string expected = "Microsoft.WindowsAppRuntime.1.8";
+        _fakePackageRegistration.IsPackageInstalledPredicate = _ => true;
+        var service = GetRequiredService<IWorkspaceSetupService>();
+
+        Assert.IsTrue(service.IsWindowsAppRuntimeRegistered("arm64", new[] { expected }));
+
+        var expectedCall = _fakePackageRegistration.IsPackageInstalledCalls.Single(c => c.NamePrefix == expected);
+        Assert.AreEqual("arm64", expectedCall.Architecture, "the version-specific check must be arch-scoped too");
+    }
+
+    [TestMethod]
+    public void IsWindowsAppRuntimeRegistered_DifferentVersionRegistered_ReturnsFalse()
+    {
+        // Spec R2-M1: the generic Framework + DDLM prefixes are present (a DIFFERENT WinAppSDK version
+        // is registered for the arch — common on dev boxes), but the SPECIFIC version the app was built
+        // against silently failed to install. The gate must fail instead of false-passing and booting an
+        // app that crashes at bootstrap.
+        const string required = "Microsoft.WindowsAppRuntime.1.8";
+        _fakePackageRegistration.IsPackageInstalledPredicate = name => name != required;
+        var service = GetRequiredService<IWorkspaceSetupService>();
+
+        Assert.IsFalse(service.IsWindowsAppRuntimeRegistered("x64", new[] { required }));
+    }
+
+    [TestMethod]
+    public void WinAppRuntimeCbsInfix_DiscriminatesCbsFromFramework()
+    {
+        // Spec R2-L1: guard the exclusion substring against a real CBS name vs a real Framework name,
+        // rather than pinning the constant to a literal copy of itself.
+        const string cbsName = "Microsoft.WindowsAppRuntime.CBS.1.8";
+        const string frameworkName = "Microsoft.WindowsAppRuntime.1.8";
+
+        Assert.IsTrue(cbsName.Contains(WorkspaceSetupService.WinAppRuntimeCbsInfix, StringComparison.Ordinal),
+            "the CBS system component name must contain the exclusion infix");
+        Assert.IsFalse(frameworkName.Contains(WorkspaceSetupService.WinAppRuntimeCbsInfix, StringComparison.Ordinal),
+            "a real Framework package name must NOT contain the exclusion infix (so it isn't wrongly excluded)");
+    }
 }

@@ -643,7 +643,7 @@ internal class WorkspaceSetupService(
                             if (msixDir != null)
                             {
                                 // Install Windows App SDK runtime packages
-                                (int installedCount, int errorCount) = await InstallWindowsAppRuntimeAsync(msixDir, taskContext, cancellationToken);
+                                (int installedCount, int errorCount, _) = await InstallWindowsAppRuntimeAsync(msixDir, taskContext, cancellationToken);
 
                                 string? version = null;
                                 if (usedVersions != null)
@@ -1271,7 +1271,7 @@ internal class WorkspaceSetupService(
     /// </summary>
     /// <param name="msixDir">Directory containing the MSIX packages</param>
     /// <param name="cancellationToken">Cancellation token</param>
-    public async Task<(int InstalledCount, int ErrorCount)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null)
+    public async Task<(int InstalledCount, int ErrorCount, IReadOnlyList<string> RuntimePackageNames)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null)
     {
         // Directory/inventory arch: needs a concrete value to locate win10-{arch}. Default to the CLI's
         // process arch (folder mode / legacy callers — byte-identical to the previous behavior). Project
@@ -1288,7 +1288,7 @@ internal class WorkspaceSetupService(
         var packageEntries = await ParseMsixInventoryAsync(taskContext, msixDir, cancellationToken, dirArch);
         if (packageEntries == null || packageEntries.Count == 0)
         {
-            return (0, 0);
+            return (0, 0, Array.Empty<string>());
         }
 
         var msixArchDir = Path.Combine(msixDir.FullName, $"win10-{dirArch}");
@@ -1320,7 +1320,7 @@ internal class WorkspaceSetupService(
 
         if (packagesToCheck.Count == 0)
         {
-            return (0, 0);
+            return (0, 0, Array.Empty<string>());
         }
 
         taskContext.AddDebugMessage($"{UiSymbols.Info} Checking and installing {packagesToCheck.Count} MSIX packages");
@@ -1370,7 +1370,16 @@ internal class WorkspaceSetupService(
             taskContext.AddDebugMessage($"{UiSymbols.Note} {errorCount} packages failed to install");
         }
 
-        return (installedCount, errorCount);
+        // Surface the versioned Framework + DDLM identities from this inventory so the caller can gate
+        // on the SPECIFIC runtime the app was built against (spec R2-M1), rather than accepting any
+        // registered WinAppSDK version for the arch.
+        var runtimePackageNames = packagesToCheck
+            .Select(p => p.PackageName)
+            .Where(IsRuntimeGatePackageName)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        return (installedCount, errorCount, runtimePackageNames);
     }
 
     /// <summary>
@@ -1383,7 +1392,17 @@ internal class WorkspaceSetupService(
 
     // The Component Store (CBS) package shares the Framework prefix but is a system singleton, not the
     // app-facing Framework — exclude it so its presence never masks a missing target-arch Framework.
-    private const string WinAppRuntimeCbsInfix = ".CBS.";
+    // Internal so a test can assert this infix actually discriminates a CBS name from a Framework name.
+    internal const string WinAppRuntimeCbsInfix = ".CBS.";
+
+    /// <summary>
+    /// Classifies a package name as one of the framework-dependent runtime identities the gate cares
+    /// about: a versioned Framework (excluding the CBS system component) or a DDLM.
+    /// </summary>
+    private static bool IsRuntimeGatePackageName(string packageName) =>
+        (packageName.StartsWith(WinAppRuntimeFrameworkPrefix, StringComparison.OrdinalIgnoreCase)
+            && !packageName.Contains(WinAppRuntimeCbsInfix, StringComparison.OrdinalIgnoreCase))
+        || packageName.StartsWith(WinAppRuntimeDdlmPrefix, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Returns <c>true</c> when a framework-dependent Windows App Runtime is registered for the current
@@ -1392,8 +1411,17 @@ internal class WorkspaceSetupService(
     /// matching-arch DDLM (<c>Microsoft.WinAppRuntime.DDLM.*</c>) are present. Mirrors the runtime
     /// presence check an unpackaged WinUI app's bootstrapper performs, so callers can gate the launch
     /// instead of starting an app that would crash resolving its runtime.
+    /// <para>
+    /// When <paramref name="expectedRuntimePackageNames"/> is supplied (the versioned identities from
+    /// the resolved runtime inventory), each is additionally required to be registered for the arch.
+    /// This closes the false-pass where a version-specific install silently failed but a DIFFERENT
+    /// WinAppSDK version is registered for the arch (common on dev boxes) — without it the generic
+    /// prefix check would pass and the app would still crash at bootstrap (spec R2-M1). When empty or
+    /// null (folder mode / legacy callers), only the generic presence check runs — byte-identical to
+    /// the previous behavior.
+    /// </para>
     /// </summary>
-    public bool IsWindowsAppRuntimeRegistered(string? architecture)
+    public bool IsWindowsAppRuntimeRegistered(string? architecture, IReadOnlyList<string>? expectedRuntimePackageNames = null)
     {
         var arch = RunArchHelper.NormalizeArchitecture(architecture) ?? GetSystemArchitecture();
 
@@ -1401,7 +1429,23 @@ internal class WorkspaceSetupService(
             WinAppRuntimeFrameworkPrefix, arch, excludeNameSubstring: WinAppRuntimeCbsInfix);
         var hasDdlm = packageRegistrationService.IsPackageInstalled(WinAppRuntimeDdlmPrefix, arch);
 
-        return hasFramework && hasDdlm;
+        if (!hasFramework || !hasDdlm)
+        {
+            return false;
+        }
+
+        if (expectedRuntimePackageNames is { Count: > 0 })
+        {
+            foreach (var expectedName in expectedRuntimePackageNames)
+            {
+                if (!packageRegistrationService.IsPackageInstalled(expectedName, arch))
+                {
+                    return false;
+                }
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

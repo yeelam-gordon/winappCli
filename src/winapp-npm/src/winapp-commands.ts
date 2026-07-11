@@ -471,8 +471,8 @@ export interface RunOptions extends CommonOptions {
   /** Output directory for the loose layout package. If not specified, a directory named AppX inside the input-folder directory will be used. */
   outputAppxDirectory?: string;
   /** Project mode: MSBuild property as Name=Value, forwarded to both build and evaluation. Repeatable (e.g. -p WindowsPackageType=None). Ignored in folder mode. */
-  property?: string;
-  /** Project mode: target .NET runtime identifier (RID), e.g. win-x64. Its architecture overrides --arch. Ignored in folder mode. */
+  property?: string | string[];
+  /** Project mode: target .NET runtime identifier (RID), e.g. win-x64. Only the RID's architecture is used; it overrides --arch (the RID is reduced to its architecture). Ignored in folder mode. */
   runtime?: string;
   /** Download symbols from Microsoft Symbol Server for richer native crash analysis. Only used with --debug-output. First run downloads symbols and caches them locally; subsequent runs use the cache. */
   symbols?: boolean;
@@ -506,7 +506,10 @@ export async function run(options: RunOptions): Promise<WinappResult> {
   if (options.noLaunch) args.push('--no-launch');
   if (options.noRestore) args.push('--no-restore');
   if (options.outputAppxDirectory) args.push('--output-appx-directory', options.outputAppxDirectory);
-  if (options.property) args.push('--property', options.property);
+  if (options.property) {
+    const propertyArr = Array.isArray(options.property) ? options.property : [options.property];
+    for (const v of propertyArr) args.push('--property', v);
+  }
   if (options.runtime) args.push('--runtime', options.runtime);
   if (options.symbols) args.push('--symbols');
   if (options.unregisterOnExit) args.push('--unregister-on-exit');

@@ -396,6 +396,16 @@ internal sealed class ProjectRunService(
                     "{UISymbol} -p:{Property} is overridden by the dedicated flag (matches dotnet precedence).",
                     UiSymbols.Note, property);
             }
+            else if (name.Equals("Platform", StringComparison.OrdinalIgnoreCase))
+            {
+                // Opposite precedence to Configuration/RID (spec R2-L2): a user -p:Platform WINS over the
+                // --arch-derived Platform (which is suppressed). The RuntimeIdentifier still follows
+                // --arch, so an inconsistent pair (e.g. --arch x86 -p:Platform=ARM64) builds a mismatched
+                // app — warn so the divergence isn't silent.
+                logger.LogDebug(
+                    "{UISymbol} -p:{Property} overrides the --arch-derived Platform; the RuntimeIdentifier still follows --arch, so ensure they are consistent.",
+                    UiSymbols.Note, property);
+            }
         }
     }
 

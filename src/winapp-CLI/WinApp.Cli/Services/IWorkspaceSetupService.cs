@@ -28,7 +28,11 @@ internal interface IWorkspaceSetupService
     /// Project mode passes the app's resolved <c>--arch</c> so an unpackaged app of a different arch gets
     /// the matching Framework/DDLM.
     /// </param>
-    public Task<(int InstalledCount, int ErrorCount)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null);
+    /// <returns>
+    /// Install/error counts plus the versioned Framework/DDLM package identities discovered in the
+    /// inventory, so the caller can gate on the SPECIFIC runtime the app needs (spec R2-M1).
+    /// </returns>
+    public Task<(int InstalledCount, int ErrorCount, IReadOnlyList<string> RuntimePackageNames)> InstallWindowsAppRuntimeAsync(DirectoryInfo msixDir, TaskContext taskContext, CancellationToken cancellationToken, string? architecture = null);
 
     /// <summary>
     /// Returns <c>true</c> when a framework-dependent Windows App Runtime (a versioned Framework package
@@ -37,5 +41,11 @@ internal interface IWorkspaceSetupService
     /// launch rather than starting an app that would fail to resolve its runtime.
     /// </summary>
     /// <param name="architecture">Target architecture (<c>x64</c> / <c>arm64</c> / <c>x86</c>); <c>null</c> uses the current process architecture.</param>
-    public bool IsWindowsAppRuntimeRegistered(string? architecture);
+    /// <param name="expectedRuntimePackageNames">
+    /// Optional versioned Framework/DDLM identities (from <see cref="InstallWindowsAppRuntimeAsync"/>) the
+    /// app was built against. When supplied, each must be registered for the arch — closing the false-pass
+    /// where a different WinAppSDK version is registered but the required version silently failed to install
+    /// (spec R2-M1). When null/empty (folder mode / legacy callers) only the generic presence check runs.
+    /// </param>
+    public bool IsWindowsAppRuntimeRegistered(string? architecture, IReadOnlyList<string>? expectedRuntimePackageNames = null);
 }
