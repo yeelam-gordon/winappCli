@@ -342,16 +342,58 @@ public class RunCommandProjectModeTests : BaseCommandTests
     [TestMethod]
     public async Task ProjectMode_ValuelessProperty_Errors()
     {
-        // Spec L3: a bare -p with no value is rejected by the option arity (OneOrMore) before the
-        // handler runs, rather than silently producing an empty property.
+        // Spec L3: a bare -p with no value is rejected in the handler (via the raw OptionResult:
+        // more '-p' identifier tokens than captured values) rather than silently producing no
+        // property. Detecting it in the handler -- instead of relying on a System.CommandLine arity
+        // error -- keeps the failure on the command's own error path so --json still gets JSON.
         var csproj = CreateCsproj();
         SetUnpackagedOutcome(csproj, CreateTargetDir(withManifest: false), selfContained: false);
         var command = GetRequiredService<RunCommand>();
 
         var exitCode = await ParseAndInvokeWithCaptureAsync(command, [csproj.FullName, "-p"]);
 
-        Assert.AreNotEqual(0, exitCode, "A valueless -p must fail to parse");
+        Assert.AreEqual(1, exitCode, "A valueless -p must fail");
+        Assert.AreEqual(0, _fakeProjectRunService.BuildAndResolveCalls.Count, "Validation must happen before building");
+    }
+
+    [TestMethod]
+    public async Task ProjectMode_ValuelessProperty_Json_EmitsJsonError()
+    {
+        // Spec L3: under --json a valueless -p must produce a structured JSON error envelope, not
+        // just a plain-text/parser error. This is the case the fix targets.
+        var csproj = CreateCsproj();
+        SetUnpackagedOutcome(csproj, CreateTargetDir(withManifest: false), selfContained: false);
+        var command = GetRequiredService<RunCommand>();
+        // Widen the test console so Spectre does not word-wrap the (long) JSON error line, which
+        // would inject newlines into the string value and make it unparseable.
+        TestAnsiConsole.Profile.Width = 1000;
+
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, [csproj.FullName, "--json", "-p"]);
+
+        Assert.AreEqual(1, exitCode, "A valueless -p must fail");
         Assert.AreEqual(0, _fakeProjectRunService.BuildAndResolveCalls.Count);
+        var output = TestAnsiConsole.Output;
+        var jsonStart = output.IndexOf('{');
+        var jsonEnd = output.LastIndexOf('}');
+        Assert.IsTrue(jsonStart >= 0 && jsonEnd > jsonStart, "Output should contain a JSON object");
+        var doc = System.Text.Json.JsonDocument.Parse(output[jsonStart..(jsonEnd + 1)]);
+        Assert.IsTrue(doc.RootElement.TryGetProperty("Error", out var error), "JSON must carry an 'Error' field");
+        StringAssert.Contains(error.GetString(), "without a value", "Error must explain the valueless -p");
+    }
+
+    [TestMethod]
+    public async Task ProjectMode_RepeatableProperty_Succeeds()
+    {
+        // The valueless-detection must not regress the supported repeatable -p happy path.
+        var csproj = CreateCsproj();
+        SetUnpackagedOutcome(csproj, CreateTargetDir(withManifest: false), selfContained: false);
+        var command = GetRequiredService<RunCommand>();
+
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command, [csproj.FullName, "-p", "WindowsPackageType=None", "-p", "Foo=Bar", "--detach"]);
+
+        Assert.AreEqual(0, exitCode, "Repeatable -p with values must succeed");
+        Assert.AreEqual(1, _fakeProjectRunService.BuildAndResolveCalls.Count, "The project must still build");
     }
 
     #endregion

@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using System.CommandLine;
 using System.CommandLine.Invocation;
+using System.CommandLine.Parsing;
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
@@ -162,7 +163,7 @@ internal partial class RunCommand : Command, IShortDescription
         PropertyOption = new Option<string[]>("--property")
         {
             Description = "Project mode: MSBuild property as Name=Value, forwarded to both build and evaluation. Repeatable (e.g. -p WindowsPackageType=None). Ignored in folder mode.",
-            Arity = ArgumentArity.OneOrMore,
+            Arity = ArgumentArity.ZeroOrMore,
             AllowMultipleArgumentsPerToken = false,
         };
         PropertyOption.Aliases.Add("-p");
@@ -219,6 +220,18 @@ internal partial class RunCommand : Command, IShortDescription
             var useSymbols = parseResult.GetValue(SymbolsOption);
             var executable = parseResult.GetValue(ExecutableOption);
             var isJson = parseResult.GetValue(WinAppRootCommand.JsonOption);
+
+            // Reject a valueless -p/--property (spec L3). The option uses ZeroOrMore arity so a bare
+            // '-p' (no Name=Value) parses without a value instead of raising a System.CommandLine
+            // arity error -- which would bypass this command's --json error envelope and print only
+            // plain text. Detect it from the raw result: there is one identifier token per '-p'
+            // occurrence, so more identifiers than captured value tokens means at least one '-p' was
+            // supplied without its argument. Handling it here lets --json callers get structured JSON.
+            if (parseResult.GetResult(PropertyOption) is OptionResult propertyResult &&
+                propertyResult.IdentifierTokenCount > propertyResult.Tokens.Count)
+            {
+                return Fail("A --property/-p option was provided without a value. Expected Name=Value (for example: -p WindowsPackageType=None).", isJson);
+            }
 
             // Collect passthrough args from the token stream.
             // With a ZeroOrMore positional argument, System.CommandLine absorbs ALL extra
