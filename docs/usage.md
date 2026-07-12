@@ -594,6 +594,8 @@ Project mode requires the **.NET SDK 8.0.100 or newer** (for MSBuild `--getPrope
 - `--no-restore` - Skip restoring the project before building.
 - `-p, --property <Name=Value>` - MSBuild property, forwarded to both the build and the property evaluation. Repeatable (e.g. `-p WindowsPackageType=None`).
 
+**Build output & verbosity:** the project is built in two steps — a `dotnet build` whose output **streams live** to your console, followed by a fast property-evaluation pass. In an interactive terminal a spinner shows build progress; on failure the full build log is shown so the error is visible. Add `--verbose` to stream dotnet's full build log as it runs (it maps to dotnet's `-v`). Under `--json` the build output is routed to stderr so stdout stays pure JSON.
+
 **Option applicability:** the identity/loose-layout options (`--manifest`, `--output-appx-directory`, `--no-launch`, `--with-alias`, `--unregister-on-exit`, `--clean`) apply to packaged apps only. They are rejected with a clear error for unpackaged apps (which have no MSIX package). Launch/debug options (`--args`/`--`, `--detach`, `--debug-output`, `--symbols`, `--json`) work in both.
 
 **Project-mode examples:**
@@ -616,6 +618,9 @@ winapp run . -p WindowsPackageType=None
 
 # Run the existing build output without rebuilding, and capture crash diagnostics
 winapp run . --no-build --debug-output
+
+# Stream dotnet's full build log while building (maps to dotnet -v)
+winapp run . --verbose
 
 # Launch and detach (prints PID), forwarding args to the app
 winapp run . --detach -- --my-flag value

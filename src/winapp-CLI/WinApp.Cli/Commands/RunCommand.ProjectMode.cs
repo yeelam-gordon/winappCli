@@ -86,9 +86,10 @@ internal partial class RunCommand
                 return Fail(sdkError, isJson);
             }
 
-            // Build (unless --no-build) and resolve the output properties. Build output streams to
-            // the console, so this runs OUTSIDE the status spinner. In --json mode ProjectRunService
-            // suppresses the banner and routes build diagnostics to stderr to keep stdout pure JSON.
+            // Build (unless --no-build) and resolve the output properties. ProjectRunService owns the
+            // build UX (Change #1/#4): it streams dotnet output live, shows an interactive spinner for
+            // humans, and maps --verbose to dotnet's -v. In --json mode it suppresses the banner and
+            // routes build output to stderr to keep stdout pure JSON.
             var buildOptions = new ProjectRunOptions(configuration, architecture, framework, noBuild, noRestore, properties, isJson);
             ProjectBuildOutcome outcome;
             try

@@ -14,7 +14,7 @@ internal sealed class ProjectRunService(
     IAnsiConsole ansiConsole,
     ILogger<ProjectRunService> logger) : IProjectRunService
 {
-    /// <summary>MSBuild properties requested from the build/evaluate step (always ≥2 → JSON output).</summary>
+    /// <summary>MSBuild properties requested from the evaluate step (always ≥2 → JSON output).</summary>
     private static readonly string[] RequestedProperties =
     [
         "TargetDir",
@@ -24,6 +24,9 @@ internal sealed class ProjectRunService(
         "EnableMsixTooling",
         "OutputType",
     ];
+
+    /// <summary>Upper bound on build-output lines retained for the spinner failure dump (bounded tail).</summary>
+    private const int MaxBuildTailLines = 500;
 
     /// <inheritdoc />
     public async Task<RunInputResolution> ResolveInputAsync(FileSystemInfo input, CancellationToken cancellationToken)
@@ -183,28 +186,41 @@ internal sealed class ProjectRunService(
         var workingDir = csproj.Directory ?? new DirectoryInfo(Directory.GetCurrentDirectory());
         WarnOnOverriddenFlags(options);
 
-        var arguments = BuildDotnetArguments(csproj, options);
-        logger.LogDebug("{UISymbol} dotnet {Arguments}", UiSymbols.Note, arguments);
-
-        // In --json mode stdout must be pure JSON, so the human-readable banner and any build
-        // diagnostics are suppressed / routed to stderr (spec H2). dotnet's own stdout/stderr are
-        // captured by RunDotnetCommandAsync (not streamed), so they never reach our stdout directly.
-        if (!options.NoBuild && !options.Json)
+        // Two passes (spec §8.2, Change #1): (1) BUILD — a plain `dotnet build` whose console log
+        // STREAMS live so the user sees progress (skipped under --no-build); then (2) EVALUATE — a
+        // fast `dotnet msbuild --getProperty` that returns the resolved output paths as JSON. The
+        // split is required because `--getProperty` SUPPRESSES normal MSBuild console output, so a
+        // single combined pass would build silently. The evaluate pass is fed the SAME effective
+        // Configuration/RID/Platform/TFM/-p as the build so its TargetDir/RunCommand match what was
+        // actually built.
+        if (!options.NoBuild)
         {
-            ansiConsole.MarkupLineInterpolated($"{UiSymbols.Wrench} Building {csproj.Name} ({options.Configuration} | {options.Architecture})...");
+            var useLiveSpinner = ProgressDisplay.ShouldUseLiveSpinner(ansiConsole, logger);
+            var buildExit = await RunBuildPassAsync(csproj, options, workingDir, useLiveSpinner, cancellationToken);
+            if (buildExit != 0)
+            {
+                // dotnet's diagnostics were already streamed live (or dumped on the spinner-failure
+                // path); just log the summary and propagate the exit code — do not attempt to launch.
+                logger.LogError("{UISymbol} Build failed for {Project} (exit code {ExitCode}).", UiSymbols.Error, csproj.Name, buildExit);
+                return new ProjectBuildOutcome(null, buildExit);
+            }
         }
 
-        var (exitCode, stdout, stderr) = await dotNetService.RunDotnetCommandAsync(workingDir, arguments, cancellationToken);
+        var evaluateArgs = BuildEvaluateArguments(csproj, options);
+        logger.LogDebug("{UISymbol} dotnet {Arguments}", UiSymbols.Note, evaluateArgs);
+
+        var (exitCode, stdout, stderr) = await dotNetService.RunDotnetCommandAsync(workingDir, evaluateArgs, cancellationToken);
 
         if (exitCode != 0)
         {
-            // Surface dotnet's own diagnostics and propagate its exit code — do not attempt to launch.
-            logger.LogError("{UISymbol} Build failed for {Project} (exit code {ExitCode}).", UiSymbols.Error, csproj.Name, exitCode);
+            // The build (if any) succeeded but property evaluation failed — surface dotnet's
+            // diagnostics and propagate the exit code rather than launch against unknown output.
+            logger.LogError("{UISymbol} Could not evaluate project properties for {Project} (exit code {ExitCode}).", UiSymbols.Error, csproj.Name, exitCode);
             var combined = string.Join(Environment.NewLine,
                 new[] { stdout, stderr }.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.TrimEnd()));
             if (!string.IsNullOrWhiteSpace(combined))
             {
-                // Keep stdout clean for --json consumers; route build diagnostics to stderr instead.
+                // Keep stdout clean for --json consumers; route diagnostics to stderr instead.
                 if (options.Json)
                 {
                     Console.Error.WriteLine(combined);
@@ -308,66 +324,91 @@ internal sealed class ProjectRunService(
     }
 
     /// <summary>
-    /// Builds the argument string for <c>dotnet build -t:Build</c> (default) or
-    /// <c>dotnet msbuild</c> (<c>--no-build</c> evaluate-only), forwarding the same user
-    /// <c>-p</c> properties to both build and evaluation (spec §8.3/§8.5).
+    /// Builds the argument string for the project-mode BUILD pass: a plain <c>dotnet build</c> that
+    /// produces the output and STREAMS its console log. It deliberately omits <c>--getProperty</c>
+    /// (which suppresses that log) and needs no explicit <c>-t:Build</c> (Build is the default
+    /// target). The dedicated <c>-c</c>/<c>-r</c>/<c>-f</c> switches always beat a same-named user
+    /// <c>-p</c>; Platform is derived from <c>--arch</c> only when the user didn't set it; and the
+    /// <c>-v</c> verbosity is mapped from the CLI's log level (Change #1, spec §8.3/§8.5).
     /// </summary>
-    internal static string BuildDotnetArguments(FileInfo csproj, ProjectRunOptions options)
+    internal static string BuildBuildPassArguments(FileInfo csproj, ProjectRunOptions options, string verbosity)
     {
         var rid = RunArchHelper.ToRuntimeIdentifier(options.Architecture);
         var platform = RunArchHelper.ToPlatform(options.Architecture);
         var userSpecifiesPlatform = options.Properties.Any(p => p.StartsWith("Platform=", StringComparison.OrdinalIgnoreCase));
 
-        var tokens = new List<string>();
+        var tokens = new List<string>
+        {
+            "build",
+            csproj.FullName,
+            "-c",
+            options.Configuration,
+            "-r",
+            rid,
+        };
 
-        if (options.NoBuild)
+        if (options.NoRestore)
         {
-            // dotnet msbuild does NOT accept -c/-r (MSB1001); the -p: equivalents are emitted below.
-            tokens.Add("msbuild");
-            tokens.Add(csproj.FullName);
-        }
-        else
-        {
-            // Combined build + property retrieval REQUIRES an explicit -t:Build; without it,
-            // dotnet build --getProperty evaluates only and does not build (verified, spec §8.2).
-            tokens.Add("build");
-            tokens.Add(csproj.FullName);
-            tokens.Add("-t:Build");
-            tokens.Add("-c");
-            tokens.Add(options.Configuration);
-            tokens.Add("-r");
-            tokens.Add(rid);
-            if (options.NoRestore)
-            {
-                tokens.Add("--no-restore");
-            }
-            if (!string.IsNullOrWhiteSpace(options.Framework))
-            {
-                tokens.Add("-f");
-                tokens.Add(options.Framework);
-            }
+            tokens.Add("--no-restore");
         }
 
-        // User -p properties come FIRST so the dedicated equivalents below win on a conflict
-        // (MSBuild is last-wins for duplicate -p:). This matches the build path, where the
-        // dedicated -c/-r/-f switches always beat a -p: regardless of order, so both paths behave
-        // consistently: a dedicated flag beats a same-named user -p (see WarnOnOverriddenFlags).
+        if (!string.IsNullOrWhiteSpace(options.Framework))
+        {
+            tokens.Add("-f");
+            tokens.Add(options.Framework);
+        }
+
+        tokens.Add("-v");
+        tokens.Add(verbosity);
+
+        // User -p properties come FIRST; the dedicated -c/-r/-f switches above always beat a
+        // same-named -p (see WarnOnOverriddenFlags).
         foreach (var property in options.Properties)
         {
             tokens.Add($"-p:{property}");
         }
 
-        // Dedicated build inputs as -p:, emitted LAST so they take precedence over a conflicting
-        // user -p. On the --no-build (msbuild) path these carry Configuration/RID (and TFM) since the
-        // switches aren't accepted there; on both paths Platform is only set when the user didn't.
-        if (options.NoBuild)
+        // Derived Platform only when the user didn't specify one (a user -p:Platform wins, spec R2-L2).
+        if (!userSpecifiesPlatform)
         {
-            tokens.Add($"-p:Configuration={options.Configuration}");
-            tokens.Add($"-p:RuntimeIdentifier={rid}");
-            if (!string.IsNullOrWhiteSpace(options.Framework))
-            {
-                tokens.Add($"-p:TargetFramework={options.Framework}");
-            }
+            tokens.Add($"-p:Platform={platform}");
+        }
+
+        return WindowsCommandLine.JoinArguments(tokens) ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Builds the argument string for the project-mode EVALUATE pass: a fast, side-effect-free
+    /// <c>dotnet msbuild --getProperty</c> that returns the resolved output paths as JSON. It is the
+    /// same shape used on the <c>--no-build</c> path and is fed the SAME effective build inputs as the
+    /// build pass so its <c>TargetDir</c>/<c>RunCommand</c> match what was built. <c>dotnet msbuild</c>
+    /// rejects <c>-c</c>/<c>-r</c> (MSB1001), so Configuration/RID/TFM are passed as <c>-p:</c> and are
+    /// emitted LAST so MSBuild's last-wins makes a dedicated value beat a conflicting user <c>-p</c>
+    /// (spec §8.2/M2).
+    /// </summary>
+    internal static string BuildEvaluateArguments(FileInfo csproj, ProjectRunOptions options)
+    {
+        var rid = RunArchHelper.ToRuntimeIdentifier(options.Architecture);
+        var platform = RunArchHelper.ToPlatform(options.Architecture);
+        var userSpecifiesPlatform = options.Properties.Any(p => p.StartsWith("Platform=", StringComparison.OrdinalIgnoreCase));
+
+        var tokens = new List<string>
+        {
+            "msbuild",
+            csproj.FullName,
+        };
+
+        // User -p first so the dedicated equivalents below win on a conflict (MSBuild is last-wins).
+        foreach (var property in options.Properties)
+        {
+            tokens.Add($"-p:{property}");
+        }
+
+        tokens.Add($"-p:Configuration={options.Configuration}");
+        tokens.Add($"-p:RuntimeIdentifier={rid}");
+        if (!string.IsNullOrWhiteSpace(options.Framework))
+        {
+            tokens.Add($"-p:TargetFramework={options.Framework}");
         }
 
         if (!userSpecifiesPlatform)
@@ -381,6 +422,119 @@ internal sealed class ProjectRunService(
         }
 
         return WindowsCommandLine.JoinArguments(tokens) ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Runs the project-mode BUILD pass, streaming dotnet's output according to the environment
+    /// (Change #1 + Change #4):
+    /// <list type="bullet">
+    ///   <item><c>--json</c>: stream to stderr only so stdout stays pure JSON — no banner, no spinner.</item>
+    ///   <item>Interactive terminal, non-verbose: animate a Spectre status spinner and hide the raw
+    ///   build lines; on failure, dump the captured output so the MSBuild error is visible.</item>
+    ///   <item>Otherwise (verbose, or an agent/CI/redirected terminal): print a single "Building…"
+    ///   line and stream dotnet's output live (plain lines — no spinner-frame flooding).</item>
+    /// </list>
+    /// </summary>
+    internal async Task<int> RunBuildPassAsync(
+        FileInfo csproj,
+        ProjectRunOptions options,
+        DirectoryInfo workingDir,
+        bool useLiveSpinner,
+        CancellationToken cancellationToken)
+    {
+        var verbosity = ResolveBuildVerbosity(logger, options.Json);
+        var buildArgs = BuildBuildPassArguments(csproj, options, verbosity);
+        logger.LogDebug("{UISymbol} dotnet {Arguments}", UiSymbols.Note, buildArgs);
+
+        var banner = $"Building {csproj.Name} ({options.Configuration} | {options.Architecture})...";
+
+        // --json: stdout must stay pure JSON, so route ALL build output to stderr and show no banner.
+        // Console.Error is synchronized, so the concurrent stdout/stderr callbacks are safe.
+        if (options.Json)
+        {
+            return await dotNetService.RunDotnetStreamingAsync(
+                workingDir, buildArgs,
+                onOutputLine: static line => Console.Error.WriteLine(line),
+                onErrorLine: static line => Console.Error.WriteLine(line),
+                cancellationToken);
+        }
+
+        // Interactive human, non-verbose: animate a spinner and keep the raw build lines hidden,
+        // revealing the (bounded) captured output only if the build fails.
+        if (useLiveSpinner && !logger.IsEnabled(LogLevel.Debug))
+        {
+            var captured = new List<string>();
+            void Capture(string line)
+            {
+                lock (captured)
+                {
+                    captured.Add(line);
+                    if (captured.Count > MaxBuildTailLines)
+                    {
+                        captured.RemoveAt(0);
+                    }
+                }
+            }
+
+            var spinnerExit = await ansiConsole.Status()
+                .AutoRefresh(true)
+                .Spinner(Spinner.Known.Dots)
+                .SpinnerStyle(Style.Parse("blue"))
+                .StartAsync(banner, async _ =>
+                    await dotNetService.RunDotnetStreamingAsync(
+                        workingDir, buildArgs, Capture, Capture, cancellationToken));
+
+            if (spinnerExit != 0)
+            {
+                foreach (var line in captured)
+                {
+                    ansiConsole.WriteLine(line);
+                }
+            }
+
+            return spinnerExit;
+        }
+
+        // Verbose, or a non-interactive/agent/CI terminal: a single static line + live streamed output.
+        // Serialize the writes so the concurrent stdout/stderr callbacks don't interleave.
+        ansiConsole.MarkupLineInterpolated($"{UiSymbols.Wrench} {banner}");
+        var writeLock = new object();
+        void WriteLive(string line)
+        {
+            lock (writeLock)
+            {
+                ansiConsole.WriteLine(line);
+            }
+        }
+
+        return await dotNetService.RunDotnetStreamingAsync(
+            workingDir, buildArgs, WriteLive, WriteLive, cancellationToken);
+    }
+
+    /// <summary>
+    /// Maps the CLI's effective log level to a dotnet <c>-v</c> verbosity for the build pass so that
+    /// <c>--verbose</c> reaches dotnet (Change #1): trace ⇒ detailed, verbose ⇒ normal, <c>--quiet</c>
+    /// ⇒ quiet; otherwise minimal to keep ordinary runs tidy.
+    /// </summary>
+    private static string ResolveBuildVerbosity(ILogger logger, bool json)
+    {
+        if (logger.IsEnabled(LogLevel.Trace))
+        {
+            return "detailed";
+        }
+
+        if (logger.IsEnabled(LogLevel.Debug))
+        {
+            return "normal";
+        }
+
+        // --quiet suppresses Information (and is never combined with --json); keep dotnet quiet too.
+        if (!json && !logger.IsEnabled(LogLevel.Information))
+        {
+            return "quiet";
+        }
+
+        return "minimal";
     }
 
     private void WarnOnOverriddenFlags(ProjectRunOptions options)

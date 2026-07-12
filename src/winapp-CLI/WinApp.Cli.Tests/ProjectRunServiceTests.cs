@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 // Licensed under the MIT License.
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Spectre.Console.Testing;
 using WinApp.Cli.Models;
@@ -84,21 +85,108 @@ public class ProjectRunServiceTests
         return new FileInfo(path);
     }
 
-    #region BuildDotnetArguments
+    #region BuildBuildPassArguments (streamed build pass, Change #1)
 
     [TestMethod]
-    public void BuildDotnetArguments_Default_UsesBuildTargetAndRid()
+    public void BuildBuildPassArguments_Default_UsesBuildAndRid_NoGetProperty()
     {
         var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
         var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
 
-        var args = ProjectRunService.BuildDotnetArguments(csproj, options);
+        var args = ProjectRunService.BuildBuildPassArguments(csproj, options, "minimal");
 
         StringAssert.StartsWith(args, "build ");
-        // -t:Build is REQUIRED: without it, dotnet build --getProperty only evaluates and never builds.
-        StringAssert.Contains(args, "-t:Build");
         StringAssert.Contains(args, "-c Debug");
         StringAssert.Contains(args, "-r win-x64");
+        StringAssert.Contains(args, "-p:Platform=x64");
+        StringAssert.Contains(args, "-v minimal");
+        // The build pass must NOT request properties: --getProperty SUPPRESSES MSBuild's console log,
+        // which is exactly the streamed output we want the user to see (Change #1). Nor does it need
+        // an explicit -t:Build (Build is the default target when no --getProperty is present).
+        Assert.IsFalse(args.Contains("--getProperty"), "build pass must not request properties");
+        Assert.IsFalse(args.Contains("-t:Build"), "build pass does not need an explicit -t:Build");
+    }
+
+    [TestMethod]
+    public void BuildBuildPassArguments_Arm64_UsesArmRidAndPlatform()
+    {
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Release", "arm64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        var args = ProjectRunService.BuildBuildPassArguments(csproj, options, "minimal");
+
+        StringAssert.Contains(args, "-c Release");
+        StringAssert.Contains(args, "-r win-arm64");
+        StringAssert.Contains(args, "-p:Platform=ARM64");
+    }
+
+    [TestMethod]
+    public void BuildBuildPassArguments_Verbosity_ForwardedAsDashV()
+    {
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        var args = ProjectRunService.BuildBuildPassArguments(csproj, options, "normal");
+
+        StringAssert.Contains(args, "-v normal");
+    }
+
+    [TestMethod]
+    public void BuildBuildPassArguments_UserPlatformProperty_SuppressesDerivedPlatform()
+    {
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: ["Platform=ARM64"]);
+
+        var args = ProjectRunService.BuildBuildPassArguments(csproj, options, "minimal");
+
+        StringAssert.Contains(args, "-p:Platform=ARM64");
+        Assert.IsFalse(args.Contains("-p:Platform=x64"), "derived Platform must not override a user-specified one");
+    }
+
+    [TestMethod]
+    public void BuildBuildPassArguments_UserProperties_ForwardedToBuild()
+    {
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: true, Properties: ["WindowsPackageType=None", "Foo=Bar"]);
+
+        var args = ProjectRunService.BuildBuildPassArguments(csproj, options, "minimal");
+
+        StringAssert.Contains(args, "-p:WindowsPackageType=None");
+        StringAssert.Contains(args, "-p:Foo=Bar");
+        StringAssert.Contains(args, "--no-restore");
+    }
+
+    [TestMethod]
+    public void BuildBuildPassArguments_Framework_ForwardedToBuild()
+    {
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", "net10.0-windows10.0.26100.0", NoBuild: false, NoRestore: false, Properties: []);
+
+        var args = ProjectRunService.BuildBuildPassArguments(csproj, options, "minimal");
+
+        StringAssert.Contains(args, "-f net10.0-windows10.0.26100.0");
+    }
+
+    #endregion
+
+    #region BuildEvaluateArguments (evaluate-only property pass, Change #1)
+
+    [TestMethod]
+    public void BuildEvaluateArguments_UsesMsbuildGetProperty_NotBuild()
+    {
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        var args = ProjectRunService.BuildEvaluateArguments(csproj, options);
+
+        StringAssert.StartsWith(args, "msbuild ");
+        // dotnet msbuild rejects -c/-r (MSB1001); the evaluate pass must use -p: equivalents and must
+        // not build (no -t:Build) — the build pass already produced the output.
+        Assert.IsFalse(args.Contains("-t:Build"), "evaluate pass must not build");
+        Assert.IsFalse(args.Contains("-c Debug"), "evaluate pass must not pass -c");
+        Assert.IsFalse(args.Contains("-r win-x64"), "evaluate pass must not pass -r");
+        StringAssert.Contains(args, "-p:Configuration=Debug");
+        StringAssert.Contains(args, "-p:RuntimeIdentifier=win-x64");
         StringAssert.Contains(args, "-p:Platform=x64");
         StringAssert.Contains(args, "--getProperty:TargetDir");
         StringAssert.Contains(args, "--getProperty:RunCommand");
@@ -107,83 +195,27 @@ public class ProjectRunServiceTests
     }
 
     [TestMethod]
-    public void BuildDotnetArguments_Arm64_UsesArmRidAndPlatform()
-    {
-        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
-        var options = new ProjectRunOptions("Release", "arm64", null, NoBuild: false, NoRestore: false, Properties: []);
-
-        var args = ProjectRunService.BuildDotnetArguments(csproj, options);
-
-        StringAssert.Contains(args, "-c Release");
-        StringAssert.Contains(args, "-r win-arm64");
-        StringAssert.Contains(args, "-p:Platform=ARM64");
-    }
-
-    [TestMethod]
-    public void BuildDotnetArguments_NoBuild_UsesMsbuildEvaluateOnly()
-    {
-        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
-        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: true, NoRestore: false, Properties: []);
-
-        var args = ProjectRunService.BuildDotnetArguments(csproj, options);
-
-        StringAssert.StartsWith(args, "msbuild ");
-        // dotnet msbuild rejects -c/-r (MSB1001); the evaluate-only path must use -p: equivalents.
-        Assert.IsFalse(args.Contains("-t:Build"), "no-build path must not build");
-        Assert.IsFalse(args.Contains("-c Debug"), "no-build path must not pass -c");
-        StringAssert.Contains(args, "-p:Configuration=Debug");
-        StringAssert.Contains(args, "-p:RuntimeIdentifier=win-x64");
-        StringAssert.Contains(args, "--getProperty:TargetDir");
-    }
-
-    [TestMethod]
-    public void BuildDotnetArguments_UserPlatformProperty_SuppressesDerivedPlatform()
-    {
-        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
-        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: ["Platform=ARM64"]);
-
-        var args = ProjectRunService.BuildDotnetArguments(csproj, options);
-
-        StringAssert.Contains(args, "-p:Platform=ARM64");
-        Assert.IsFalse(args.Contains("-p:Platform=x64"), "derived Platform must not override a user-specified one");
-    }
-
-    [TestMethod]
-    public void BuildDotnetArguments_UserProperties_ForwardedToBuild()
-    {
-        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
-        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: true, Properties: ["WindowsPackageType=None", "Foo=Bar"]);
-
-        var args = ProjectRunService.BuildDotnetArguments(csproj, options);
-
-        StringAssert.Contains(args, "-p:WindowsPackageType=None");
-        StringAssert.Contains(args, "-p:Foo=Bar");
-        StringAssert.Contains(args, "--no-restore");
-    }
-
-    [TestMethod]
-    public void BuildDotnetArguments_Framework_ForwardedToBuild()
+    public void BuildEvaluateArguments_Framework_ForwardedAsProperty()
     {
         var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
         var options = new ProjectRunOptions("Debug", "x64", "net10.0-windows10.0.26100.0", NoBuild: false, NoRestore: false, Properties: []);
 
-        var args = ProjectRunService.BuildDotnetArguments(csproj, options);
+        var args = ProjectRunService.BuildEvaluateArguments(csproj, options);
 
-        StringAssert.Contains(args, "-f net10.0-windows10.0.26100.0");
+        StringAssert.Contains(args, "-p:TargetFramework=net10.0-windows10.0.26100.0");
     }
 
     [TestMethod]
-    public void BuildDotnetArguments_NoBuild_DedicatedConfigAndRidWinOverUserProperty()
+    public void BuildEvaluateArguments_DedicatedConfigAndRidWinOverUserProperty()
     {
-        // Spec M2: on the --no-build (evaluate-only) path the dedicated Configuration/RID are emitted
-        // as -p: too. A conflicting user -p must NOT override them — the dedicated value must be emitted
-        // LAST so MSBuild's last-wins makes the dedicated flag win, matching the build path and
-        // WarnOnOverriddenFlags (dedicated flag beats a same-named -p).
+        // Spec M2: the dedicated Configuration/RID are emitted as -p: on the evaluate pass. A conflicting
+        // user -p must NOT override them — the dedicated value is emitted LAST so MSBuild's last-wins
+        // makes the dedicated flag win, matching the build path and WarnOnOverriddenFlags.
         var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
-        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: true, NoRestore: false,
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false,
             Properties: ["Configuration=Release", "RuntimeIdentifier=win-arm64"]);
 
-        var args = ProjectRunService.BuildDotnetArguments(csproj, options);
+        var args = ProjectRunService.BuildEvaluateArguments(csproj, options);
 
         var userConfigIdx = args.IndexOf("-p:Configuration=Release", StringComparison.Ordinal);
         var dedicatedConfigIdx = args.IndexOf("-p:Configuration=Debug", StringComparison.Ordinal);
@@ -198,6 +230,18 @@ public class ProjectRunServiceTests
         Assert.IsTrue(dedicatedRidIdx >= 0, "dedicated RuntimeIdentifier must be emitted");
         Assert.IsTrue(dedicatedRidIdx > userRidIdx,
             "dedicated -p:RuntimeIdentifier must come AFTER the user -p so last-wins makes it win");
+    }
+
+    [TestMethod]
+    public void BuildEvaluateArguments_UserPlatformProperty_SuppressesDerivedPlatform()
+    {
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: ["Platform=ARM64"]);
+
+        var args = ProjectRunService.BuildEvaluateArguments(csproj, options);
+
+        StringAssert.Contains(args, "-p:Platform=ARM64");
+        Assert.IsFalse(args.Contains("-p:Platform=x64"), "derived Platform must not override a user-specified one");
     }
 
     #endregion
@@ -378,6 +422,12 @@ public class ProjectRunServiceTests
         return new ProjectRunService(dotnet, console, NullLogger<ProjectRunService>.Instance);
     }
 
+    private static ProjectRunService NewServiceWith(FakeDotNetService dotnet, LogLevel minLevel, out TestConsole console)
+    {
+        console = new TestConsole();
+        return new ProjectRunService(dotnet, console, new LevelLogger<ProjectRunService>(minLevel));
+    }
+
     private string PackagedPropertiesJson() =>
         // TargetDir must be non-empty and the packaging must resolve to Packaged (WindowsPackageType=MSIX)
         // so BuildAndResolveAsync succeeds without needing a real apphost .exe on disk.
@@ -541,6 +591,215 @@ public class ProjectRunServiceTests
 
         var ex = await Assert.ThrowsExactlyAsync<ProjectRunException>(() => service.BuildAndResolveAsync(csproj, options, CancellationToken.None));
         StringAssert.Contains(ex.Message, "--no-build");
+    }
+
+    #endregion
+
+    #region Two-pass build + verbosity + spinner (Change #1 / #4)
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_TwoPass_StreamsBuildThenEvaluatesProperties()
+    {
+        // Change #1: the build must run as TWO dotnet invocations — a streamed `dotnet build` (no
+        // --getProperty, which would suppress the console log) followed by an evaluate-only
+        // `dotnet msbuild --getProperty` that returns the resolved paths.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        string? evalArgs = null;
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetCommandHandler = a => { evalArgs = a; return (0, PackagedPropertiesJson(), string.Empty); },
+        };
+        var service = NewServiceWith(dotnet, LogLevel.Information, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNotNull(outcome.Resolution, "the canned packaged build should resolve");
+        Assert.AreEqual(1, dotnet.StreamingCalls.Count, "the build pass should stream exactly once");
+        StringAssert.StartsWith(dotnet.StreamingCalls[0], "build ");
+        Assert.IsFalse(dotnet.StreamingCalls[0].Contains("--getProperty"),
+            "the streamed build pass must not request properties");
+        Assert.IsNotNull(evalArgs, "the evaluate pass must run");
+        StringAssert.StartsWith(evalArgs!, "msbuild ");
+        StringAssert.Contains(evalArgs!, "--getProperty:TargetDir");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_VerboseLogger_MapsToNormalDotnetVerbosity()
+    {
+        // Change #1: verbose (ILogger Debug, the signal behind --verbose) must reach dotnet as -v normal.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty) };
+        var service = NewServiceWith(dotnet, LogLevel.Debug, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        StringAssert.Contains(dotnet.StreamingCalls[0], "-v normal");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_DefaultLogger_MapsToMinimalDotnetVerbosity()
+    {
+        // Change #1: an ordinary (Information) run keeps dotnet tidy with -v minimal.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty) };
+        var service = NewServiceWith(dotnet, LogLevel.Information, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        StringAssert.Contains(dotnet.StreamingCalls[0], "-v minimal");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_QuietLogger_MapsToQuietDotnetVerbosity()
+    {
+        // Change #1: --quiet (Information suppressed) keeps dotnet quiet too.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty) };
+        var service = NewServiceWith(dotnet, LogLevel.Warning, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        StringAssert.Contains(dotnet.StreamingCalls[0], "-v quiet");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_NoBuild_SkipsBuildPass_EvaluatesOnly()
+    {
+        // Change #1: --no-build must skip the streamed build pass and only evaluate properties.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService { RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty) };
+        var service = NewServiceWith(dotnet, LogLevel.Information, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: true, NoRestore: false, Properties: [], Json: false);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNotNull(outcome.Resolution);
+        Assert.AreEqual(0, dotnet.StreamingCalls.Count, "--no-build must not run the streamed build pass");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_BuildFailure_ShortCircuitsBeforeEvaluate()
+    {
+        // Change #1: a failed build pass must propagate its exit code and NOT evaluate properties.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var evaluated = false;
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetStreamingHandler = (_, _, _) => 7,
+            RunDotnetCommandHandler = _ => { evaluated = true; return (0, PackagedPropertiesJson(), string.Empty); },
+        };
+        var service = NewServiceWith(dotnet, LogLevel.Information, out _);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNull(outcome.Resolution, "a failed build must not resolve");
+        Assert.AreEqual(7, outcome.ExitCode, "the build exit code must propagate");
+        Assert.IsFalse(evaluated, "a failed build must short-circuit before the evaluate pass");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_NonJsonNonSpinner_StreamsBuildLinesLive()
+    {
+        // Change #1: in a non-json, non-spinner terminal the streamed build output must be visible.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetStreamingHandler = (_, onOut, _) => { onOut?.Invoke("MSBuild-line-ABC"); return 0; },
+            RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty),
+        };
+        var service = NewServiceWith(dotnet, LogLevel.Information, out var console);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        StringAssert.Contains(console.Output, "Building", "the plain build banner should be shown");
+        StringAssert.Contains(console.Output, "MSBuild-line-ABC", "streamed build output should be visible");
+    }
+
+    [TestMethod]
+    public async Task BuildAndResolveAsync_JsonMode_StreamedBuildLinesNotOnStdout()
+    {
+        // Change #1 + spec H2: under --json the streamed build output must go to stderr, never stdout,
+        // so the final stdout stays pure JSON.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetStreamingHandler = (_, onOut, onErr) => { onOut?.Invoke("STDOUT-POISON"); onErr?.Invoke("STDERR-POISON"); return 0; },
+            RunDotnetCommandHandler = _ => (0, PackagedPropertiesJson(), string.Empty),
+        };
+        var service = NewServiceWith(dotnet, out var console);
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: true);
+
+        var outcome = await service.BuildAndResolveAsync(csproj, options, CancellationToken.None);
+
+        Assert.IsNotNull(outcome.Resolution);
+        Assert.IsFalse(console.Output.Contains("STDOUT-POISON"), "--json must not write build output to stdout");
+        Assert.IsFalse(console.Output.Contains("STDERR-POISON"), "--json must not write build stderr to stdout");
+    }
+
+    [TestMethod]
+    public async Task RunBuildPassAsync_Spinner_SuccessHidesBuildOutput()
+    {
+        // Change #4: the interactive spinner path hides raw build lines on success (clean output).
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetStreamingHandler = (_, onOut, _) => { onOut?.Invoke("hidden-spinner-noise"); return 0; },
+        };
+        var console = new TestConsole();
+        var service = new ProjectRunService(dotnet, console, new LevelLogger<ProjectRunService>(LogLevel.Information));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var exit = await service.RunBuildPassAsync(csproj, options, _tempDir, useLiveSpinner: true, CancellationToken.None);
+
+        Assert.AreEqual(0, exit);
+        Assert.IsFalse(console.Output.Contains("hidden-spinner-noise"),
+            "the spinner path must hide streamed build lines on success");
+    }
+
+    [TestMethod]
+    public async Task RunBuildPassAsync_Spinner_FailureDumpsBuildOutput()
+    {
+        // Change #4: on failure the spinner path must dump the captured output so the error is visible.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetStreamingHandler = (_, _, onErr) => { onErr?.Invoke("error CS9999: the real failure"); return 1; },
+        };
+        var console = new TestConsole();
+        var service = new ProjectRunService(dotnet, console, new LevelLogger<ProjectRunService>(LogLevel.Information));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var exit = await service.RunBuildPassAsync(csproj, options, _tempDir, useLiveSpinner: true, CancellationToken.None);
+
+        Assert.AreEqual(1, exit);
+        StringAssert.Contains(console.Output, "error CS9999: the real failure",
+            "the spinner path must reveal build output when the build fails");
+    }
+
+    [TestMethod]
+    public async Task RunBuildPassAsync_Verbose_StreamsLiveEvenWhenSpinnerEligible()
+    {
+        // Change #4: --verbose wins over the spinner — the user asked for detail, so stream full output.
+        var csproj = WriteFile("App.csproj", ExecutableCsproj);
+        var dotnet = new FakeDotNetService
+        {
+            RunDotnetStreamingHandler = (_, onOut, _) => { onOut?.Invoke("detailed-build-output"); return 0; },
+        };
+        var console = new TestConsole();
+        var service = new ProjectRunService(dotnet, console, new LevelLogger<ProjectRunService>(LogLevel.Debug));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: [], Json: false);
+
+        var exit = await service.RunBuildPassAsync(csproj, options, _tempDir, useLiveSpinner: true, CancellationToken.None);
+
+        Assert.AreEqual(0, exit);
+        StringAssert.Contains(console.Output, "detailed-build-output",
+            "verbose mode must stream full build output even when a spinner would otherwise be used");
     }
 
     #endregion

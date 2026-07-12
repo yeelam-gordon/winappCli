@@ -176,7 +176,7 @@ dotnet build -c Debug
 winapp run .\bin\Debug\net10.0-windows10.0.26100.0
 ```
 
-Project mode supports both **packaged** and **unpackaged** WinUI apps — it detects which from the project's `WindowsPackageType` and installs the matching-architecture Windows App Runtime automatically. To force an unpackaged run of a packaged project, add `-p WindowsPackageType=None`. Project mode requires the .NET SDK 8.0.100 or newer. See [`winapp run` in the usage reference](../usage.md#project-mode-net-sdk-projects) for the full option list.
+Project mode supports both **packaged** and **unpackaged** WinUI apps — it detects which from the project's `WindowsPackageType` and installs the matching-architecture Windows App Runtime automatically. To force an unpackaged run of a packaged project, add `-p WindowsPackageType=None`. The `dotnet build` output **streams live** while it builds (with a progress spinner in interactive terminals); add `--verbose` to stream dotnet's full build log. Project mode requires the .NET SDK 8.0.100 or newer. See [`winapp run` in the usage reference](../usage.md#project-mode-net-sdk-projects) for the full option list.
 
 To add the NuGet package back: `dotnet add package Microsoft.Windows.SDK.BuildTools.WinApp --prerelease`
 
