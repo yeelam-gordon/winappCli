@@ -495,12 +495,12 @@ Create a loose layout package from a build output folder, register it with Windo
 > **This is the preferred command for debugging with package identity** for most frameworks (.NET, C++, Rust, Flutter, Tauri). Unlike [`create-debug-identity`](#create-debug-identity) which registers a sparse package for a single exe, `winapp run` registers the entire folder as a loose layout package, just like a real MSIX install. See the [Debugging Guide](debugging.md) for common debugging workflows.
 
 ```bash
-winapp run <input> [options]
+winapp run [<input>] [options]
 ```
 
 **Arguments:**
 
-- `input` - The app to run: a build-output folder (folder mode), a `.csproj` project, or a directory containing a single buildable `.csproj` (project mode). Use `.` to build/run the project in the current directory. Required.
+- `input` - The app to run: a build-output folder (folder mode), a `.csproj` project, or a directory containing a single buildable `.csproj` (project mode). Use `.` to build/run the project in the current directory. **Optional — defaults to the current directory when omitted** (matches `dotnet run`).
 
 **Options:**
 
@@ -601,6 +601,9 @@ Project mode requires the **.NET SDK 8.0.100 or newer** (for MSBuild `--getPrope
 ```bash
 # Build and run the WinUI project in the current directory
 winapp run .
+
+# Same as above — with no input, winapp run defaults to the current directory
+winapp run
 
 # Run a specific project
 winapp run ./src/MyApp/MyApp.csproj

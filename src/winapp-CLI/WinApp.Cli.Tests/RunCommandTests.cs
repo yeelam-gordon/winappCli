@@ -115,7 +115,7 @@ public class RunCommandTests : BaseCommandTests
     }
 
     [TestMethod]
-    public void ParseOptions_NoInputFolder_HasParseError()
+    public void ParseOptions_NoInputFolder_NoParseError_ArgumentIsNull()
     {
         // Arrange
         var command = GetRequiredService<RunCommand>();
@@ -123,8 +123,65 @@ public class RunCommandTests : BaseCommandTests
         // Act
         var parseResult = command.Parse([]);
 
+        // Assert: input-folder is now optional (ArgumentArity.ZeroOrOne). With no path there is no
+        // parse error; the argument value is null and the handler substitutes the current directory.
+        Assert.IsEmpty(parseResult.Errors, "Omitting the optional input-folder should not produce a parse error");
+        Assert.IsNull(parseResult.GetValue(RunCommand.InputFolderArgument),
+            "With no positional token, the input-folder value should be null (handler defaults it to cwd)");
+    }
+
+    [TestMethod]
+    public void ParseOptions_NoInputFolderWithPassthrough_ProducesNoParseErrors()
+    {
+        // Arrange
+        var command = GetRequiredService<RunCommand>();
+
+        // Act: no path, straight into '-- --appflag value'. With input-folder now optional
+        // (ArgumentArity.ZeroOrOne) and AcceptExistingOnly removed, System.CommandLine greedily
+        // binds the first post-'--' token to the positional, but that no longer hard-errors. The
+        // handler detects the stolen token and falls back to cwd (see the handler-level test
+        // RunCommand_NoInputFolderWithPassthrough_UsesCwdAndForwardsAppArgs).
+        var parseResult = command.Parse(["--", "--appflag", "value"]);
+
         // Assert
-        Assert.IsNotEmpty(parseResult.Errors, "Missing required input-folder should produce a parse error");
+        Assert.IsEmpty(parseResult.Errors,
+            "A bare '-- <app args>' with no path must not produce a parse error");
+    }
+
+    [TestMethod]
+    public void ParseOptions_DotInputFolder_ResolvesToProcessCurrentDirectory()
+    {
+        // Arrange
+        var command = GetRequiredService<RunCommand>();
+
+        // Act: an explicit '.' is a normal pre-'--' path token and binds to input-folder.
+        var parseResult = command.Parse(["."]);
+
+        // Assert
+        Assert.IsEmpty(parseResult.Errors, "'.' is a valid explicit path and should not error");
+        var input = parseResult.GetValue(RunCommand.InputFolderArgument);
+        Assert.IsNotNull(input, "'.' should bind to the input-folder argument");
+        Assert.AreEqual(Path.GetFullPath("."), input.FullName,
+            "'.' should resolve to the current directory");
+    }
+
+    [TestMethod]
+    public void ParseOptions_DotInputFolderWithPassthrough_PassthroughCaptured()
+    {
+        // Arrange
+        var command = GetRequiredService<RunCommand>();
+
+        // Act: an explicit path before '--' must not disturb passthrough capture.
+        var parseResult = command.Parse([".", "--", "--appflag", "value"]);
+
+        // Assert
+        Assert.IsEmpty(parseResult.Errors, "'. -- <app args>' should not produce a parse error");
+        Assert.IsNotNull(parseResult.GetValue(RunCommand.InputFolderArgument),
+            "'.' should bind to the input-folder argument");
+        var passthrough = parseResult.GetValue(RunCommand.PassthroughArgument);
+        var expectedPassthrough = new[] { "--appflag", "value" };
+        CollectionAssert.AreEqual(expectedPassthrough, passthrough,
+            "The post-'--' tokens should be captured by the passthrough argument");
     }
 
     [TestMethod]
@@ -379,6 +436,35 @@ public class RunCommandTests : BaseCommandTests
 
         var output = TestAnsiConsole.Output;
         Assert.Contains("{\n", output, "JSON should use \\n line endings");
+    }
+
+    [TestMethod]
+    public async Task RunCommand_MutualExclusionViolation_WithJson_EmitsJsonError()
+    {
+        // Change 2 (L5): run's own mutual-exclusion validation errors must be emitted as a JSON
+        // error object under --json, not a plain-text banner. --detach + --no-launch is one such
+        // invalid combination; it fails fast before any identity/launch work, so no manifest is
+        // needed. The test logger routes LogError to stderr, so stdout carries only the JSON.
+        var command = GetRequiredService<RunCommand>();
+
+        // Act
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+            [_tempDirectory.FullName, "--detach", "--no-launch", "--json"]);
+
+        // Assert
+        Assert.AreEqual(1, exitCode, "A mutually-exclusive option combination should fail");
+
+        // stdout must be pure JSON with no plain-text banner.
+        var stdout = TestAnsiConsole.Output.Trim();
+        Assert.IsTrue(stdout.StartsWith('{') && stdout.EndsWith('}'),
+            $"Under --json, stdout should contain only the JSON error object, but was: {stdout}");
+
+        var json = ParseJsonOutput();
+        Assert.AreEqual("--detach and --no-launch cannot be used together.",
+            json.GetProperty("Error").GetString(),
+            "The mutual-exclusion error should be surfaced in the JSON Error field");
+        Assert.IsFalse(json.TryGetProperty("AUMID", out _), "AUMID should not be present on a validation error");
+        Assert.IsFalse(json.TryGetProperty("ProcessId", out _), "ProcessId should not be present on a validation error");
     }
 
     [TestMethod]
@@ -794,7 +880,7 @@ public class RunCommandTests : BaseCommandTests
     }
 
     [TestMethod]
-    public async Task RunCommand_DetachWithoutJson_DoesNotOutputJson()
+    public async Task RunCommand_DetachWithoutJson_PrintsPidAndNoJson()
     {
         // Arrange
         await CreateTestManifestAsync();
@@ -809,6 +895,10 @@ public class RunCommandTests : BaseCommandTests
         var output = TestAnsiConsole.Output;
         Assert.IsFalse(output.Contains("\"AUMID\""), "JSON fields should not appear without --json flag");
         Assert.IsFalse(output.Contains("\"ProcessId\""), "JSON fields should not appear without --json flag");
+        // Change 3 (L6): the packaged --detach path must surface the launched PID in human-readable
+        // output too, consistent with the unpackaged/project-mode detach path.
+        Assert.Contains(_fakeAppLauncherService.FakeProcessId.ToString(), output,
+            "The launched PID should be printed in non-JSON output for the packaged --detach path");
     }
 
     #endregion
@@ -926,6 +1016,46 @@ public class RunCommandTests : BaseCommandTests
         Assert.AreEqual(1, _fakeAppLauncherService.LaunchCalls.Count, "Application should be launched");
         Assert.AreEqual("--title \"hello world\"", _fakeAppLauncherService.LaunchCalls[0].Arguments,
             "Values containing spaces must be quoted in the final command-line string");
+    }
+
+    // --- Handler: default-to-current-directory (no input path) ---
+
+    [TestMethod]
+    public async Task RunCommand_NoInputFolder_DefaultsToCurrentDirectory()
+    {
+        // `winapp run` with no path must default to the current directory (matches `dotnet run`).
+        // ICurrentDirectoryProvider is wired to _tempDirectory in the test harness, where
+        // CreateTestManifestAsync places a manifest, so folder mode resolves and launches.
+        await CreateTestManifestAsync();
+        var command = GetRequiredService<RunCommand>();
+
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, []);
+
+        Assert.AreEqual(0, exitCode, "Command with no path should default to cwd and succeed");
+        Assert.AreEqual(1, _fakeAppLauncherService.LaunchCalls.Count,
+            "Application should be launched from the current directory");
+        Assert.IsNull(_fakeAppLauncherService.LaunchCalls[0].Arguments,
+            "No app args should be passed when only the default input is used");
+    }
+
+    [TestMethod]
+    public async Task RunCommand_NoInputFolderWithPassthrough_UsesCwdAndForwardsAppArgs()
+    {
+        // The tricky parser-interaction case: `winapp run -- --appflag value`. With input-folder
+        // optional, System.CommandLine binds the first post-'--' token ('--appflag') to the
+        // positional. The handler must detect that the token was stolen from passthrough, fall back
+        // to the current directory, AND still forward '--appflag value' to the launched app.
+        await CreateTestManifestAsync();
+        var command = GetRequiredService<RunCommand>();
+
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+            ["--", "--appflag", "value"]);
+
+        Assert.AreEqual(0, exitCode, "No-path invocation with passthrough should default to cwd and succeed");
+        Assert.AreEqual(1, _fakeAppLauncherService.LaunchCalls.Count,
+            "Application should be launched from the current directory");
+        Assert.AreEqual("--appflag value", _fakeAppLauncherService.LaunchCalls[0].Arguments,
+            "The post-'--' tokens must be forwarded to the app, not consumed as the input path");
     }
 
     // --- Handler: unknown-token rejection ---

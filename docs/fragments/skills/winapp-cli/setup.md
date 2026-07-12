@@ -116,6 +116,9 @@ For .NET SDK projects you can point `winapp run` **at the project instead of the
 # Build and run the WinUI project in the current directory
 winapp run .
 
+# Same as above — with no input, winapp run defaults to the current directory
+winapp run
+
 # Run a specific project, configuration, and architecture
 winapp run ./src/MyApp/MyApp.csproj -c Release --arch arm64
 

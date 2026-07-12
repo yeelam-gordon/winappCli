@@ -53,10 +53,9 @@ internal partial class RunCommand : Command, IShortDescription
     {
         InputFolderArgument = new Argument<FileSystemInfo>("input-folder")
         {
-            Description = "Path to the app to run: a build-output folder, a .csproj project, or a directory containing one.",
-            Arity = ArgumentArity.ExactlyOne
+            Description = "Path to the app to run: a build-output folder, a .csproj project, or a directory containing one (default: current directory).",
+            Arity = ArgumentArity.ZeroOrOne
         };
-        InputFolderArgument.AcceptExistingOnly();
 
         PassthroughArgument = new Argument<string[]>("app-args")
         {
@@ -207,7 +206,12 @@ internal partial class RunCommand : Command, IShortDescription
     {
         public override async Task<int> InvokeAsync(ParseResult parseResult, CancellationToken cancellationToken = default)
         {
-            var inputFsi = parseResult.GetRequiredValue(InputFolderArgument);
+            // input-folder is optional (ArgumentArity.ZeroOrOne). The final FileSystemInfo is resolved
+            // below, AFTER the passthrough split, because a bare `winapp run -- <app-arg>` makes the
+            // parser greedily bind the first post-'--' token to this positional. That "stolen" case is
+            // detected by comparing what the passthrough argument absorbed against the raw post-'--'
+            // tokens; when it happens we fall back to the current directory (see resolution below).
+            var inputArg = parseResult.GetValue(InputFolderArgument);
             var manifest = parseResult.GetValue(ManifestOption);
             var outputAppXDirectory = parseResult.GetValue(OutputAppXDirectoryOption);
             var appArgs = parseResult.GetValue(ArgsOption);
@@ -263,6 +267,29 @@ internal partial class RunCommand : Command, IShortDescription
                 return 1;
             }
 
+            // Resolve the effective input path now that the passthrough split is known.
+            // ZeroOrOne input-folder + a trailing ZeroOrMore passthrough means the parser binds the
+            // FIRST positional token to input-folder even when it appears after '--' (e.g.
+            // `winapp run -- --flag`). SplitPassthroughTokens returns the RAW post-'--' tokens
+            // (passthroughArgs) independent of that binding, so when input-folder "stole" the first
+            // post-'--' token, passthrough absorbed one fewer token than actually followed '--'.
+            // In that case (or when no positional was supplied at all) default to the current
+            // directory and let ResolveInputAsync decide project-vs-folder mode from cwd (matches
+            // `dotnet run`). The stolen token still reaches the app because passthroughArgs is raw.
+            var inputStolenFromPassthrough = allAbsorbed.Length < passthroughArgs.Count;
+            var inputFsi = (inputArg is null || inputStolenFromPassthrough)
+                ? currentDirectoryProvider.GetCurrentDirectoryInfo()
+                : inputArg;
+
+            // Preserve the pre-existing "path must exist" guarantee. The input-folder argument no
+            // longer uses AcceptExistingOnly (that validator hard-errors on the stolen post-'--'
+            // token above, bypassing the --json envelope), so validate a genuinely-provided path
+            // here instead. Defaulted/stolen inputs resolve to the current directory and are skipped.
+            if (inputArg is not null && !inputStolenFromPassthrough && !inputArg.Exists)
+            {
+                return Fail($"'{inputArg.FullName}' does not exist.", isJson);
+            }
+
             // Merge '--args' value with any tokens collected after '--'.
             var passthroughStr = WindowsCommandLine.JoinArguments(passthroughArgs);
             if (passthroughStr != null)
@@ -270,59 +297,51 @@ internal partial class RunCommand : Command, IShortDescription
                 appArgs = string.IsNullOrEmpty(appArgs) ? passthroughStr : $"{appArgs} {passthroughStr}";
             }
 
-            // Validate mutually exclusive options
+            // Validate mutually exclusive options. Route through Fail so that under --json these
+            // emit the structured error envelope instead of a plain-text banner (Change 2 / L5).
             if (withAlias && noLaunch)
             {
-                logger.LogError("{UISymbol} --with-alias and --no-launch cannot be used together.", UiSymbols.Error);
-                return 1;
+                return Fail("--with-alias and --no-launch cannot be used together.", isJson);
             }
 
             if (debugOutput && noLaunch)
             {
-                logger.LogError("{UISymbol} --debug-output and --no-launch cannot be used together.", UiSymbols.Error);
-                return 1;
+                return Fail("--debug-output and --no-launch cannot be used together.", isJson);
             }
 
             if (isJson && debugOutput)
             {
-                logger.LogError("{UISymbol} --json and --debug-output cannot be used together.", UiSymbols.Error);
-                return 1;
+                return Fail("--json and --debug-output cannot be used together.", isJson);
             }
 
             if (isJson && withAlias)
             {
-                logger.LogError("{UISymbol} --json and --with-alias cannot be used together.", UiSymbols.Error);
-                return 1;
+                return Fail("--json and --with-alias cannot be used together.", isJson);
             }
 
             if (unregisterOnExit && noLaunch)
             {
-                logger.LogError("{UISymbol} --unregister-on-exit and --no-launch cannot be used together.", UiSymbols.Error);
-                return 1;
+                return Fail("--unregister-on-exit and --no-launch cannot be used together.", isJson);
             }
 
             if (detach && noLaunch)
             {
-                logger.LogError("{UISymbol} --detach and --no-launch cannot be used together.", UiSymbols.Error);
-                return 1;
+                return Fail("--detach and --no-launch cannot be used together.", isJson);
             }
 
             if (detach && debugOutput)
             {
-                logger.LogError("{UISymbol} --detach and --debug-output cannot be used together.", UiSymbols.Error);
-                return 1;
+                return Fail("--detach and --debug-output cannot be used together.", isJson);
             }
 
             if (detach && withAlias)
             {
-                logger.LogError("{UISymbol} --detach and --with-alias cannot be used together.", UiSymbols.Error);
-                return 1;
+                return Fail("--detach and --with-alias cannot be used together.", isJson);
             }
 
             if (detach && unregisterOnExit)
             {
-                logger.LogError("{UISymbol} --detach and --unregister-on-exit cannot be used together.", UiSymbols.Error);
-                return 1;
+                return Fail("--detach and --unregister-on-exit cannot be used together.", isJson);
             }
 
             // Validate the input path early so the command fails fast with a clear
@@ -517,6 +536,12 @@ internal partial class RunCommand : Command, IShortDescription
                 if (isJson)
                 {
                     PrintJson(aumid, processId, errorMessage: null);
+                }
+                else
+                {
+                    // Surface the launched PID for automation, consistent with the unpackaged
+                    // project-mode detach path (Change 3 / L6).
+                    ansiConsole.WriteLine(processId.ToString());
                 }
                 return 0;
             }

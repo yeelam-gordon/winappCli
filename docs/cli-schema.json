@@ -1331,13 +1331,13 @@
       "hidden": false,
       "arguments": {
         "input-folder": {
-          "description": "Path to the app to run: a build-output folder, a .csproj project, or a directory containing one.",
+          "description": "Path to the app to run: a build-output folder, a .csproj project, or a directory containing one (default: current directory).",
           "order": 0,
           "hidden": false,
           "valueType": "System.IO.FileSystemInfo",
           "hasDefaultValue": false,
           "arity": {
-            "minimum": 1,
+            "minimum": 0,
             "maximum": 1
           }
         },

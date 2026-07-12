@@ -121,6 +121,9 @@ For .NET SDK projects you can point `winapp run` **at the project instead of the
 # Build and run the WinUI project in the current directory
 winapp run .
 
+# Same as above — with no input, winapp run defaults to the current directory
+winapp run
+
 # Run a specific project, configuration, and architecture
 winapp run ./src/MyApp/MyApp.csproj -c Release --arch arm64
 
@@ -235,7 +238,7 @@ Creates packaged layout, registers the Application, and launches the packaged ap
 <!-- auto-generated from cli-schema.json -->
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<input-folder>` | Yes | Path to the app to run: a build-output folder, a .csproj project, or a directory containing one. |
+| `<input-folder>` | No | Path to the app to run: a build-output folder, a .csproj project, or a directory containing one (default: current directory). |
 | `<app-args>` | No | Arguments to pass to the launched application. Provide after -- (e.g., winapp run . -- --flag value). |
 
 #### Options
