@@ -352,8 +352,10 @@ internal partial class RunCommand : Command, IShortDescription
             }
             catch (InvalidOperationException ex)
             {
-                logger.LogError("{UISymbol} {Message}", UiSymbols.Error, ex.Message);
-                return 1;
+                // Route through Fail so this run-local validation emits the structured error
+                // envelope under --json instead of a suppressed-logger silent exit (Change 2 / L5).
+                // Non-json output is unchanged (Fail's log call is identical to the prior line).
+                return Fail(ex.Message, isJson);
             }
 
             // Route folder mode (existing, unchanged behavior) vs project mode (build a .csproj).

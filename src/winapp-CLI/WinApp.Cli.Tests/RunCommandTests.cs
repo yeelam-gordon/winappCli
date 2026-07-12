@@ -2,8 +2,11 @@
 // Licensed under the MIT License.
 
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Spectre.Console;
 using System.Text.Json;
 using WinApp.Cli.Commands;
+using WinApp.Cli.Helpers;
 using WinApp.Cli.Services;
 
 namespace WinApp.Cli.Tests;
@@ -465,6 +468,56 @@ public class RunCommandTests : BaseCommandTests
             "The mutual-exclusion error should be surfaced in the JSON Error field");
         Assert.IsFalse(json.TryGetProperty("AUMID", out _), "AUMID should not be present on a validation error");
         Assert.IsFalse(json.TryGetProperty("ProcessId", out _), "ProcessId should not be present on a validation error");
+    }
+
+    [TestMethod]
+    public async Task RunCommand_LongPathValidation_WithJson_EmitsJsonError()
+    {
+        // Change 2 (L5) completeness: the early long-path validation is another run-local validation
+        // and, like the mutual-exclusion checks, must emit a JSON error object under --json rather than
+        // a suppressed-logger silent exit. ValidatePathLength only throws when the OS does not have long
+        // path support enabled, so guard on that (mirrors LongPathHelperTests). The >260-char path is
+        // supplied via the current-directory default (no input arg) so it is not pre-empted by the
+        // provided-path existence check, and needs no long path to exist on disk. The base harness
+        // registers ICurrentDirectoryProvider last (last-wins), so the long cwd is injected by
+        // constructing the handler directly with a CurrentDirectoryProvider override.
+        if (LongPathHelper.IsSystemLongPathEnabled())
+        {
+            Assert.Inconclusive(
+                "System long path support is enabled; ValidatePathLength does not throw, so the JSON error path cannot be exercised.");
+            return;
+        }
+
+        var longCwd = @"C:\" + new string('a', 300);
+        var command = GetRequiredService<RunCommand>();
+        var parseResult = command.Parse(["--json"]);
+
+        var handler = new RunCommand.Handler(
+            GetRequiredService<IMsixService>(),
+            GetRequiredService<IAppLauncherService>(),
+            GetRequiredService<IPackageRegistrationService>(),
+            GetRequiredService<IDebugOutputService>(),
+            new CurrentDirectoryProvider(longCwd),
+            GetRequiredService<IAnsiConsole>(),
+            GetRequiredService<IStatusService>(),
+            GetRequiredService<IProjectRunService>(),
+            GetRequiredService<ILogger<RunCommand>>());
+
+        // Act
+        var exitCode = await handler.InvokeAsync(parseResult, TestContext.CancellationToken);
+
+        // Assert
+        Assert.AreEqual(1, exitCode, "A path exceeding MAX_PATH without long-path support should fail");
+
+        // stdout must be pure JSON with no plain-text banner.
+        var stdout = TestAnsiConsole.Output.Trim();
+        Assert.IsTrue(stdout.StartsWith('{') && stdout.EndsWith('}'),
+            $"Under --json, stdout should contain only the JSON error object, but was: {stdout}");
+
+        var json = ParseJsonOutput();
+        Assert.IsTrue(json.GetProperty("Error").GetString()!.Contains("MAX_PATH"),
+            "The long-path validation error should be surfaced in the JSON Error field");
+        Assert.IsFalse(json.TryGetProperty("AUMID", out _), "AUMID should not be present on a validation error");
     }
 
     [TestMethod]
