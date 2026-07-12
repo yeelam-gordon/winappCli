@@ -3,7 +3,6 @@
 > **Status:** 🟡 Draft v0.4 — living document, iterate freely
 > **Branch:** `winui-devex`
 > **Owner:** (you) · **Author of draft:** Copilot
-> **Related:** overall plan in `nikolame/win-devex`
 >
 > **v0.4 changes (cross-model review):** three independent model reviews (Opus / Gemini / GPT) + local
 > experiments corrected §8.3's output-resolution mechanics: `dotnet build --getProperty` **does not
