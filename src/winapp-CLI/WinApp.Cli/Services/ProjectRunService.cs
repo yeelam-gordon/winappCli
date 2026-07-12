@@ -137,7 +137,7 @@ internal sealed class ProjectRunService(
     public async Task<string?> CheckSdkAsync(DirectoryInfo workingDirectory, CancellationToken cancellationToken)
     {
         const string upgradeHint =
-            "Project mode requires the .NET SDK 8.0.100 or newer (for MSBuild --getProperty). Install or update it from https://aka.ms/dotnet/download.";
+            "Running csproj requires .NET SDK 8.0.100 or newer. Install or update it from https://aka.ms/dotnet/download.";
 
         int exitCode;
         string output;
