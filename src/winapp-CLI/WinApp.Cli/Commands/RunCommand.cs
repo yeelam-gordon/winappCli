@@ -630,7 +630,13 @@ internal partial class RunCommand : Command, IShortDescription
             };
 
             var json = JsonSerializer.Serialize(result, RunCommandJsonContext.Default.RunCommandResult);
-            ansiConsole.WriteLine(json);
+
+            // Write the machine-readable payload straight to the underlying stdout writer rather than
+            // ansiConsole.WriteLine, which renders through Spectre's word-wrapping layer and injects raw
+            // CR/LF *inside* the JSON string values once a message exceeds the (redirected) console width
+            // (~80 cols) — corrupting the payload so strict parsers (JsonDocument.Parse) reject it. This
+            // mirrors how the other JSON-emitting commands (cert/ui) write their output.
+            ansiConsole.Profile.Out.Writer.WriteLine(json);
         }
 
         private static FileInfo FindManifest(string directory) => ManifestHelper.FindManifest(directory);

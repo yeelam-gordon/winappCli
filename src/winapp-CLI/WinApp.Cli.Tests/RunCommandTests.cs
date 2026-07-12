@@ -521,6 +521,39 @@ public class RunCommandTests : BaseCommandTests
     }
 
     [TestMethod]
+    public async Task RunCommand_LongErrorMessage_WithJson_EmitsValidParseableJson()
+    {
+        // Regression (M1): run's PrintJson previously emitted the payload via ansiConsole.WriteLine,
+        // which routes through Spectre's word-wrapping renderer and injects raw CR/LF *inside* the
+        // "Error" string value once the message exceeds the redirected console width (~80 cols) — the
+        // result is INVALID, unparseable JSON for any long error. Unlike the long-path validation above
+        // (which only throws when OS long-path support is disabled, so it self-skips on most machines),
+        // the provided-path existence check emits an always-long "'<path>' does not exist." message on
+        // EVERY machine, so this exercises the wrapping fix with a strict parser (JsonDocument.Parse)
+        // independent of any registry/OS state. The path stays under MAX_PATH (260) so FileSystemInfo
+        // binding never throws, but the full message comfortably exceeds the wrap width.
+        var longMissingPath = @"C:\" + new string('a', 200) + @"\does-not-exist";
+        var command = GetRequiredService<RunCommand>();
+
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, [longMissingPath, "--json"]);
+
+        Assert.AreEqual(1, exitCode, "A non-existent input path should fail");
+
+        // stdout must be pure, single-object JSON that a strict parser accepts (PowerShell's lenient
+        // ConvertFrom-Json masked the wrapping; JsonDocument.Parse does not).
+        var output = TestAnsiConsole.Output.Trim();
+        Assert.IsTrue(output.StartsWith('{') && output.EndsWith('}'),
+            $"Under --json, stdout should contain only the JSON error object, but was: {output}");
+
+        var root = JsonDocument.Parse(output).RootElement;
+        var error = root.GetProperty("Error").GetString();
+        Assert.IsNotNull(error, "The JSON error object must carry an Error field");
+        StringAssert.Contains(error, "does not exist",
+            "The existence error should be surfaced in the JSON Error field");
+        Assert.IsFalse(root.TryGetProperty("AUMID", out _), "AUMID should not be present on a validation error");
+    }
+
+    [TestMethod]
     public void ParseOptions_JsonOption_IsParsedCorrectly()
     {
         // Arrange
@@ -1256,19 +1289,14 @@ public class RunCommandTests : BaseCommandTests
         Assert.AreEqual(1, exitCode, "Bad pre-dash token must cause exit code 1 even in --json mode");
         Assert.AreEqual(0, _fakeAppLauncherService.LaunchCalls.Count, "App must NOT be launched");
 
-        // The handler must have written a JSON document (with an Error field that names the
-        // offending token) to stdout. We avoid full JsonDocument.Parse here because the test
-        // console wraps long string values at width boundaries; substring assertions are
-        // sufficient to demonstrate the error body was produced and references the bad token.
-        var output = TestAnsiConsole.Output;
-        StringAssert.Contains(output, "\"Error\":",
-            "JSON output must contain an Error field in --json mode (got: " + output + ")");
-        StringAssert.Contains(output, "--badtoken",
-            "Error message should name the offending token");
-        StringAssert.Contains(output, "{",
-            "Output should contain a JSON object opening brace");
-        StringAssert.Contains(output, "}",
-            "Output should contain a JSON object closing brace");
+        // The handler must have written a single-object JSON document (with an Error field that names
+        // the offending token) to stdout. With the M1 fix, run's --json payload is emitted without
+        // Spectre word-wrapping, so a strict parser accepts it directly even though this message
+        // (~105 chars) exceeds the redirected console width.
+        var json = ParseJsonOutput();
+        var error = json.GetProperty("Error").GetString();
+        Assert.IsNotNull(error, "JSON output must contain an Error field in --json mode");
+        StringAssert.Contains(error, "--badtoken", "Error message should name the offending token");
     }
 
     // --- BuildAliasProcessStartInfo: passthrough forwarded into execution-alias ProcessStartInfo ---
