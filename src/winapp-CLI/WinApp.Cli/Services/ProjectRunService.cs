@@ -328,7 +328,9 @@ internal sealed class ProjectRunService(
     /// produces the output and STREAMS its console log. It deliberately omits <c>--getProperty</c>
     /// (which suppresses that log) and needs no explicit <c>-t:Build</c> (Build is the default
     /// target). The dedicated <c>-c</c>/<c>-r</c>/<c>-f</c> switches always beat a same-named user
-    /// <c>-p</c>; Platform is derived from <c>--arch</c> only when the user didn't set it; and the
+    /// <c>-p</c>; Platform is derived from <c>--arch</c> only when the user didn't set it;
+    /// <c>EnableDynamicPlatformResolution</c> is enabled so a forced global Platform doesn't leak into
+    /// P2P references (multi-project apps, CS0006) unless the user set it explicitly; and the
     /// <c>-v</c> verbosity is mapped from the CLI's log level (Change #1, spec §8.3/§8.5).
     /// </summary>
     internal static string BuildBuildPassArguments(FileInfo csproj, ProjectRunOptions options, string verbosity)
@@ -336,6 +338,7 @@ internal sealed class ProjectRunService(
         var rid = RunArchHelper.ToRuntimeIdentifier(options.Architecture);
         var platform = RunArchHelper.ToPlatform(options.Architecture);
         var userSpecifiesPlatform = options.Properties.Any(p => p.StartsWith("Platform=", StringComparison.OrdinalIgnoreCase));
+        var userSpecifiesEdpr = options.Properties.Any(p => p.StartsWith("EnableDynamicPlatformResolution=", StringComparison.OrdinalIgnoreCase));
 
         var tokens = new List<string>
         {
@@ -374,6 +377,19 @@ internal sealed class ProjectRunService(
             tokens.Add($"-p:Platform={platform}");
         }
 
+        // Negotiate each ProjectReference's own platform instead of leaking the forced global Platform
+        // into them. A global -p:Platform=<arch> (forced above, or supplied by the user) otherwise flows
+        // into AnyCPU/netstandard2.0 P2P references, so a multi-project app resolves its reference to the
+        // AnyCPU output path while the reference was built under bin\<arch>\... → CS0006 "metadata file
+        // could not be found". EnableDynamicPlatformResolution (MSBuild platform negotiation, .NET 6+)
+        // does automatically what a .sln's ProjectConfigurationPlatforms map does by hand; it is a no-op
+        // for single-project apps and does not change the app's own TargetDir. Suppressed when the user
+        // set it explicitly so an intentional project/user value is respected.
+        if (!userSpecifiesEdpr)
+        {
+            tokens.Add("-p:EnableDynamicPlatformResolution=true");
+        }
+
         return WindowsCommandLine.JoinArguments(tokens) ?? string.Empty;
     }
 
@@ -391,6 +407,7 @@ internal sealed class ProjectRunService(
         var rid = RunArchHelper.ToRuntimeIdentifier(options.Architecture);
         var platform = RunArchHelper.ToPlatform(options.Architecture);
         var userSpecifiesPlatform = options.Properties.Any(p => p.StartsWith("Platform=", StringComparison.OrdinalIgnoreCase));
+        var userSpecifiesEdpr = options.Properties.Any(p => p.StartsWith("EnableDynamicPlatformResolution=", StringComparison.OrdinalIgnoreCase));
 
         var tokens = new List<string>
         {
@@ -414,6 +431,16 @@ internal sealed class ProjectRunService(
         if (!userSpecifiesPlatform)
         {
             tokens.Add($"-p:Platform={platform}");
+        }
+
+        // Keep the evaluate pass's project graph identical to the build pass so TargetDir/RunCommand
+        // resolve against the same P2P references. See BuildBuildPassArguments for the full rationale
+        // (forced global Platform leaks into AnyCPU/netstandard2.0 references → CS0006 without this).
+        // EDPR doesn't change the app's own TargetDir, so it is safe to add on the evaluate/--no-build
+        // path too. Suppressed when the user set it explicitly.
+        if (!userSpecifiesEdpr)
+        {
+            tokens.Add("-p:EnableDynamicPlatformResolution=true");
         }
 
         foreach (var name in RequestedProperties)

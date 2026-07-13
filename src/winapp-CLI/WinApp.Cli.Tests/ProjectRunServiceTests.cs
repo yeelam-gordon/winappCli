@@ -144,6 +144,37 @@ public class ProjectRunServiceTests
     }
 
     [TestMethod]
+    public void BuildBuildPassArguments_Default_EnablesDynamicPlatformResolution()
+    {
+        // A forced global -p:Platform=<arch> leaks into AnyCPU/netstandard2.0 ProjectReferences and
+        // breaks multi-project apps (CS0006). EnableDynamicPlatformResolution negotiates each
+        // reference's own platform; it must be enabled by default in project mode (no-op for
+        // single-project apps).
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        var args = ProjectRunService.BuildBuildPassArguments(csproj, options, "minimal");
+
+        StringAssert.Contains(args, "-p:EnableDynamicPlatformResolution=true");
+    }
+
+    [TestMethod]
+    public void BuildBuildPassArguments_UserEnableDynamicPlatformResolution_NotOverridden()
+    {
+        // An explicit user value (even =false) must be respected: winapp must NOT append its own
+        // =true, which as a command-line global would override a project that deliberately opted out.
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false,
+            Properties: ["EnableDynamicPlatformResolution=false"]);
+
+        var args = ProjectRunService.BuildBuildPassArguments(csproj, options, "minimal");
+
+        StringAssert.Contains(args, "-p:EnableDynamicPlatformResolution=false");
+        Assert.IsFalse(args.Contains("-p:EnableDynamicPlatformResolution=true"),
+            "winapp must not override an explicit user EnableDynamicPlatformResolution value");
+    }
+
+    [TestMethod]
     public void BuildBuildPassArguments_UserProperties_ForwardedToBuild()
     {
         var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
@@ -244,6 +275,34 @@ public class ProjectRunServiceTests
         Assert.IsFalse(args.Contains("-p:Platform=x64"), "derived Platform must not override a user-specified one");
     }
 
+    [TestMethod]
+    public void BuildEvaluateArguments_Default_EnablesDynamicPlatformResolution()
+    {
+        // The evaluate pass must see the SAME project graph as the build pass so TargetDir/RunCommand
+        // resolve against the same P2P references — so EDPR is enabled here too (spec: safe, doesn't
+        // change the app's own TargetDir).
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false, Properties: []);
+
+        var args = ProjectRunService.BuildEvaluateArguments(csproj, options);
+
+        StringAssert.Contains(args, "-p:EnableDynamicPlatformResolution=true");
+    }
+
+    [TestMethod]
+    public void BuildEvaluateArguments_UserEnableDynamicPlatformResolution_NotOverridden()
+    {
+        var csproj = new FileInfo(Path.Combine(_tempDir.FullName, "App.csproj"));
+        var options = new ProjectRunOptions("Debug", "x64", null, NoBuild: false, NoRestore: false,
+            Properties: ["EnableDynamicPlatformResolution=false"]);
+
+        var args = ProjectRunService.BuildEvaluateArguments(csproj, options);
+
+        StringAssert.Contains(args, "-p:EnableDynamicPlatformResolution=false");
+        Assert.IsFalse(args.Contains("-p:EnableDynamicPlatformResolution=true"),
+            "winapp must not override an explicit user EnableDynamicPlatformResolution value");
+    }
+
     #endregion
 
     #region TryParseSdkVersion
@@ -300,6 +359,21 @@ public class ProjectRunServiceTests
 
         Assert.AreEqual(WinAppRunMode.Folder, resolution.Mode);
         Assert.IsNull(resolution.Csproj);
+    }
+
+    [TestMethod]
+    public async Task FolderMode_NeverResolvesProject_SoProjectBuildArgsCannotLeak()
+    {
+        // Folder mode must stay byte-identical: a folder without a top-level .csproj routes to folder
+        // mode, which never resolves a project and never invokes the project-mode build. The
+        // project-mode build args — including the EnableDynamicPlatformResolution negotiation added for
+        // multi-project builds — are emitted ONLY by BuildBuildPassArguments/BuildEvaluateArguments,
+        // both of which are unreachable in folder mode. This guards against those args ever leaking
+        // into a folder-mode run.
+        var resolution = await _service.ResolveInputAsync(_tempDir, CancellationToken.None);
+
+        Assert.AreEqual(WinAppRunMode.Folder, resolution.Mode, "a manifest/output folder must route to folder mode");
+        Assert.IsNull(resolution.Csproj, "folder mode must not resolve a project to build (so no EDPR build args)");
     }
 
     [TestMethod]

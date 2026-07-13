@@ -221,9 +221,21 @@ Principle: **`run` reads the project's *effective* packaging and never mutates i
   (do *not* call `EnsureRuntimeIdentifierAsync`, which mutates).
 - For WinUI, derive `-p:Platform=<x64|ARM64|x86>` from the target arch so the output path
   and manifest generation line up.
+- **Multi-project platform negotiation.** Because the forced `-p:Platform=<arch>` is a *global*
+  MSBuild property, it would otherwise flow across `ProjectReference`s into `AnyCPU`/`netstandard2.0`
+  libraries: the referenced library builds under `bin\<arch>\…` while the app's compiler resolves the
+  reference to the `AnyCPU` path, producing `CS0006` "metadata file could not be found". A `.sln`
+  normally prevents this via its `ProjectConfigurationPlatforms` map (App `x64`→`x64`, Lib `x64`→
+  `AnyCPU`), but a bare-`.csproj` build doesn't see that map. So project mode also passes
+  **`-p:EnableDynamicPlatformResolution=true`** (MSBuild platform negotiation, .NET 6+), which makes
+  each reference negotiate its own platform — the same result the `.sln` map gives by hand. It is a
+  **no-op for single-project apps**, does not change the app's own `TargetDir`, and is added to
+  **both** the build and the `--getProperty` evaluation (§8.3/§8.5) so both passes see an identical
+  project graph. It is **suppressed when the user supplies their own** `-p:EnableDynamicPlatformResolution`
+  (mirroring the `-p:Platform` override rule) so an intentional value is respected.
 - Sketch:
   ```
-  dotnet build "<csproj>" -c <Config> -r win-<arch> [-p:Platform=<Plat>] [--no-restore] [-f <tfm>]
+  dotnet build "<csproj>" -c <Config> -r win-<arch> [-p:Platform=<Plat>] [-p:EnableDynamicPlatformResolution=true] [--no-restore] [-f <tfm>]
   ```
 - `--no-build` skips the build and goes straight to *evaluate-only* resolution + launch (§8.3).
 - ⚠️ **Verified caveat:** when the build and property retrieval are combined in one call, an explicit
@@ -240,7 +252,7 @@ mechanics below** — the earlier sketch would not have worked.
 
 - **Build + resolve (default) — one call, with an explicit `-t:Build`:**
   ```
-  dotnet build "<csproj>" -t:Build -c <Config> -r win-<arch> [-p:Platform=<Plat>] <user -p:…> \
+  dotnet build "<csproj>" -t:Build -c <Config> -r win-<arch> [-p:Platform=<Plat>] [-p:EnableDynamicPlatformResolution=true] <user -p:…> \
     --getProperty:TargetDir --getProperty:RunCommand \
     --getProperty:WindowsPackageType --getProperty:WindowsAppSDKSelfContained
   ```
@@ -248,7 +260,7 @@ mechanics below** — the earlier sketch would not have worked.
   output assembly did not exist afterward) — it would "succeed" against stale/absent output.
 - **`--no-build` — evaluate only (no build):**
   ```
-  dotnet msbuild "<csproj>" -p:Configuration=<Config> -p:RuntimeIdentifier=win-<arch> [-p:Platform=<Plat>] <user -p:…> \
+  dotnet msbuild "<csproj>" -p:Configuration=<Config> -p:RuntimeIdentifier=win-<arch> [-p:Platform=<Plat>] [-p:EnableDynamicPlatformResolution=true] <user -p:…> \
     --getProperty:TargetDir --getProperty:RunCommand \
     --getProperty:WindowsPackageType --getProperty:WindowsAppSDKSelfContained
   ```
@@ -420,6 +432,12 @@ Legend: ✅ supported · ❌ rejected with a clear message · ⚪ not applicable
 - **D-P — `-p` vs first-class flag?** Mirror `dotnet`: the dedicated flag wins over a same-named `-p`
   regardless of order; duplicate `-p` last-wins. Verified empirically; free because we invoke `dotnet`
   (§8.5).
+- **Multi-project builds (`CS0006`)?** Project mode passes **`-p:EnableDynamicPlatformResolution=true`**
+  alongside the forced `-p:Platform` so a global platform doesn't leak across `ProjectReference`s into
+  `AnyCPU`/`netstandard2.0` libraries (which caused `CS0006` "metadata file could not be found" for
+  solution-style apps such as AI Dev Gallery). Empirically verified: fixes the multi-project failure and
+  is a no-op for single-project apps. Added to the build **and** evaluate passes; suppressed when the
+  user supplies their own `EnableDynamicPlatformResolution` (§8.2).
 - **Mode-force flags?** Dropped, per your call. No `--packaged`/`--unpackaged`; the user configures the
   project (or uses `-p`) and `run` surfaces obvious misconfig (e.g. packaged but no manifest) as errors.
 
