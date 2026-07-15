@@ -22,6 +22,8 @@ internal static class UiJsonError
     public const string CodeZeroSize = "zero_size_element";
     public const string CodeForegroundNotTarget = "foreground_not_target";
     public const string CodeNoInteractiveDesktop = "no_interactive_desktop";
+    public const string CodeNoTargetWindow = "no_target_window";
+    public const string CodeInputInjectionFailed = "input_injection_failed";
     public const string CodeTargetMoved = "target_moved";
 
     /// <summary>Write a JSON error envelope to stderr. No-op when <paramref name="json"/> is false.</summary>

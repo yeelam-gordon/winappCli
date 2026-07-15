@@ -117,6 +117,8 @@ internal class FakeUiAutomationService : IUiAutomationService
 /// </summary>
 internal class FakeUiSessionService : IUiSessionService
 {
+    public int ResolveCalls { get; private set; }
+
     public UiSessionInfo SessionResult { get; set; } = new()
     {
         ProcessId = 1234,
@@ -125,7 +127,10 @@ internal class FakeUiSessionService : IUiSessionService
     };
 
     public Task<UiSessionInfo> ResolveSessionAsync(string? app, long? hwnd, CancellationToken ct)
-        => Task.FromResult(SessionResult);
+    {
+        ResolveCalls++;
+        return Task.FromResult(SessionResult);
+    }
 }
 
 /// <summary>
@@ -163,9 +168,17 @@ internal class FakeKeyboardInput : WinApp.Cli.Helpers.IKeyboardInput
     public record SendCall(long Hwnd, IReadOnlyList<WinApp.Cli.Helpers.KeyAction> Actions, WinApp.Cli.Helpers.KeyTransport Transport);
 
     public List<SendCall> SendCalls { get; } = [];
+    public Exception? ExceptionToThrow { get; set; }
 
     public void Send(long hwnd, IReadOnlyList<WinApp.Cli.Helpers.KeyAction> actions, WinApp.Cli.Helpers.KeyTransport transport)
-        => SendCalls.Add(new(hwnd, actions, transport));
+    {
+        if (ExceptionToThrow is not null)
+        {
+            throw ExceptionToThrow;
+        }
+
+        SendCalls.Add(new(hwnd, actions, transport));
+    }
 }
 
 /// <summary>
@@ -197,4 +210,3 @@ internal class FakeForegroundGuard : WinApp.Cli.Helpers.IForegroundGuard
         return false;
     }
 }
-

@@ -8,7 +8,7 @@ namespace WinApp.Cli.Helpers;
 /// <summary>Transport used to deliver synthetic keyboard input.</summary>
 internal enum KeyTransport
 {
-    /// <summary>Posts WM_KEYDOWN/WM_KEYUP/WM_CHAR to a specific window's message queue. Bypasses UIPI.</summary>
+    /// <summary>Posts WM_KEYDOWN/WM_KEYUP/WM_CHAR to a specific window's message queue. Subject to UIPI.</summary>
     PostMessage,
 
     /// <summary>Injects OS-wide input via SendInput. Hits low-level hooks; subject to UIPI.</summary>
@@ -22,7 +22,11 @@ internal abstract record KeyAction;
 /// A key press, optionally with held modifiers (e.g., <c>enter</c>, <c>down</c>, <c>ctrl+shift+t</c>).
 /// Modifiers are pressed before and released after the main key.
 /// </summary>
-internal sealed record KeyChord(IReadOnlyList<ushort> Modifiers, ushort Vk, bool Extended) : KeyAction;
+internal sealed record KeyChord(
+    IReadOnlyList<ushort> Modifiers,
+    ushort Vk,
+    bool Extended,
+    string? SemanticKey = null) : KeyAction;
 
 /// <summary>Literal text typed character by character (e.g., <c>hello</c>).</summary>
 internal sealed record TextInput(string Text) : KeyAction;
@@ -32,7 +36,7 @@ internal sealed record TextInput(string Text) : KeyAction;
 /// <see cref="KeyAction"/>s. Tokens are whitespace separated:
 /// <list type="bullet">
 /// <item>Named keys: <c>down</c>, <c>enter</c>, <c>tab</c>, <c>esc</c>, <c>f5</c> …</item>
-/// <item>Modifier combos: <c>ctrl+shift+t</c>, <c>alt+f4</c></item>
+/// <item>Modifier combos: <c>ctrl+shift+t</c>, <c>alt+f4</c>, <c>rctrl+ralt+del</c></item>
 /// <item>Raw virtual keys: <c>vk=0x42</c> or <c>vk=66</c></item>
 /// <item>Explicit literal text: <c>text=enter</c> types the word "enter" instead of pressing Enter.</item>
 /// <item>Anything else is treated as literal text and typed character by character.</item>
@@ -46,9 +50,17 @@ internal static class KeyStringParser
     private static readonly Dictionary<string, ushort> Modifiers = new(StringComparer.OrdinalIgnoreCase)
     {
         ["ctrl"] = 0x11, ["control"] = 0x11,
+        ["lctrl"] = 0xA2, ["leftctrl"] = 0xA2,
+        ["rctrl"] = 0xA3, ["rightctrl"] = 0xA3,
         ["shift"] = 0x10,
+        ["lshift"] = 0xA0, ["leftshift"] = 0xA0,
+        ["rshift"] = 0xA1, ["rightshift"] = 0xA1,
         ["alt"] = 0x12, ["menu"] = 0x12,
+        ["lalt"] = 0xA4, ["leftalt"] = 0xA4,
+        ["ralt"] = 0xA5, ["rightalt"] = 0xA5,
         ["win"] = 0x5B, ["cmd"] = 0x5B, ["super"] = 0x5B, ["meta"] = 0x5B,
+        ["lwin"] = 0x5B, ["leftwin"] = 0x5B,
+        ["rwin"] = 0x5C, ["rightwin"] = 0x5C,
     };
 
     // Named key -> (virtual-key code, is-extended-key).
@@ -268,7 +280,10 @@ internal static class KeyStringParser
                 $"Unknown key '{mainKey}' in '{token}'. Use a named key (enter, down, f5), a single character, or vk=0xNN.");
         }
 
-        chord = new KeyChord(modifiers, vk, extended);
+        // VkKeyScan is layout-dependent. Retain a character chord's semantic identity so safety checks
+        // still know that the caller wrote (for example) "win+l" if another layout maps it to a different VK.
+        var semanticKey = mainKey.Length == 1 ? mainKey.ToLowerInvariant() : null;
+        chord = new KeyChord(modifiers, vk, extended, semanticKey);
         return true;
     }
 
@@ -331,5 +346,6 @@ internal static class KeyStringParser
         0x2D or 0x2E or                 // Insert Delete
         0x2C or                         // PrintScreen
         0x5B or 0x5C or 0x5D or         // LWin RWin Apps
+        0xA3 or 0xA5 or                  // RCtrl RAlt
         0x90;                           // NumLock
 }

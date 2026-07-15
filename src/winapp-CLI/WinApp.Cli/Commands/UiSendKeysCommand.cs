@@ -36,9 +36,10 @@ internal class UiSendKeysCommand : Command, IShortDescription
 
     public static Option<string> ViaOption { get; } = new("--via")
     {
-        Description = "Transport: post-message (default, HWND-targeted, bypasses UIPI; typed text raises TextChanged " +
+        Description = "Transport: post-message (default, HWND-targeted and subject to UIPI; typed text raises TextChanged " +
                       "but not a per-character KeyDown) or send-input (OS-wide; typed text raises a real per-character " +
-                      "KeyDown + TextChanged). Named keys and combos raise KeyDown on both, but keyboard " +
+                      "KeyDown + TextChanged; also subject to UIPI). Both can target only equal- or lower-integrity processes. " +
+                      "Named keys and combos raise KeyDown on both, but keyboard " +
                       "accelerators/shortcuts (KeyboardAccelerator, e.g. ctrl+t) only fire via send-input.",
         DefaultValueFactory = _ => "post-message"
     };
@@ -58,15 +59,15 @@ internal class UiSendKeysCommand : Command, IShortDescription
                       "No effect on --via post-message (already window-scoped; a warning is emitted if set without send-input). " +
                       "Note: any Win-modified L chord (including win+shift+l) stays blocked even with this flag because " +
                       "Windows lock handling may still invoke LockWorkStation(), which is unrecoverable from automation. " +
-                      "Windows still blocks secure sequences " +
-                      "such as ctrl+alt+del (SAS) from injected input regardless of this flag."
+                      "This command does not call SendSAS: SendInput cannot synthesize ctrl+alt+del (SAS), while software " +
+                      "SAS requires a specially configured service or signed uiAccess app plus Windows policy support."
     };
 
     public UiSendKeysCommand()
         : base("send-keys", "Send synthetic keyboard input to a window. Supports named keys (down, enter, tab), " +
                "modifier combos (ctrl+shift+t), raw virtual keys (vk=0xNN), and literal text. " +
                "Use --verbatim to type the whole argument literally, or --target to focus an element first. " +
-               "Two transports via --via: post-message (default, HWND-targeted, bypasses UIPI) or send-input (OS-wide). " +
+               "Two transports via --via: post-message (default, HWND-targeted) or send-input (OS-wide); both are subject to UIPI. " +
                "For per-keystroke KeyDown on typed text (e.g. a WinUI 3/WPF TextBox), use --via send-input.")
     {
         Arguments.Add(KeysArgument);
@@ -125,18 +126,18 @@ internal class UiSendKeysCommand : Command, IShortDescription
                 return 1;
             }
 
-            // SEC-02: --allow-system-keys only applies to send-input; with post-message the transport is
-            // already window-scoped so system combos are never blocked and the flag has no effect.
+            // SEC-02: --allow-system-keys only applies to send-input; post-message is window-scoped, so
+            // the global-system-combo opt-in has no effect.
             var warnings = new List<string>();
             if (allowSystemKeys && transport != KeyTransport.SendInput)
             {
                 logger.LogWarning(
                     "{Symbol} --allow-system-keys only applies to --via send-input and has no effect with " +
-                    "--via post-message (post-message is already window-scoped and never blocks system combos).",
+                    "--via post-message (post-message is window-scoped, so the global system-combo opt-in is not used).",
                     UiSymbols.Warning);
                 warnings.Add(
                     "--allow-system-keys only applies to --via send-input and has no effect with " +
-                    "--via post-message (post-message is already window-scoped and never blocks system combos).");
+                    "--via post-message (post-message is window-scoped, so the global system-combo opt-in is not used).");
             }
 
             IReadOnlyList<KeyAction> actions;
@@ -152,6 +153,44 @@ internal class UiSendKeysCommand : Command, IShortDescription
                 logger.LogError("{Symbol} {Message}", UiSymbols.Error, ex.Message);
                 UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, ex.Message);
                 return 1;
+            }
+
+            // Reject system-wide hazards before resolving or focusing a window. A forbidden payload must
+            // fail closed without first changing foreground focus, including on locked/secure desktops.
+            IReadOnlyList<string> allowedSystemCombos = [];
+            if (transport == KeyTransport.SendInput)
+            {
+                var neverBypassable = SystemKeyGuard.FindNeverBypassableCombos(actions);
+                if (neverBypassable.Count > 0)
+                {
+                    logger.LogError(
+                        "{Symbol} Refusing to synthesize {Combos} via --via send-input — this stays blocked " +
+                        "even with --allow-system-keys because the chord may lock the workstation (unrecoverable from automation). " +
+                        "--allow-system-keys is for app-registered global hotkeys (e.g. win+r, win+shift+v), not session-locking combos.",
+                        UiSymbols.Error, string.Join(", ", neverBypassable));
+                    UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments,
+                        $"Refusing to synthesize {string.Join(", ", neverBypassable)} via --via send-input. " +
+                        "This combo may lock the workstation (unrecoverable from automation) and stays blocked even with " +
+                        "--allow-system-keys. Use --allow-system-keys only for app-registered global hotkeys (e.g. win+r, win+shift+v).");
+                    return 1;
+                }
+
+                var systemCombos = SystemKeyGuard.FindSystemCombos(actions);
+                if (systemCombos.Count > 0 && !allowSystemKeys)
+                {
+                    logger.LogError(
+                        "{Symbol} Refusing to synthesize system-reserved key(s) via --via send-input: {Combos}. " +
+                        "These act on the OS/shell rather than just the target app. Pass --allow-system-keys to opt in. " +
+                        "Ctrl+Alt+Delete still cannot become SAS through this command.",
+                        UiSymbols.Error, string.Join(", ", systemCombos));
+                    UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments,
+                        $"Refusing to synthesize system-reserved key(s) via --via send-input: {string.Join(", ", systemCombos)}. " +
+                        "These act on the OS/shell rather than just the target app. Pass --allow-system-keys to opt in. " +
+                        "Ctrl+Alt+Delete cannot become SAS through this command.");
+                    return 1;
+                }
+
+                allowedSystemCombos = systemCombos;
             }
 
             try
@@ -174,8 +213,9 @@ internal class UiSendKeysCommand : Command, IShortDescription
                     targetHwnd = element.WindowHandle ?? session.WindowHandle;
                 }
 
-                // Bring the target window to the foreground so input is routed to it.
-                if (targetHwnd != 0)
+                // SendInput is OS-wide, so bring its target forward before the foreground guards.
+                // PostMessage is HWND-routed and must not steal foreground focus just to enqueue messages.
+                if (targetHwnd != 0 && transport == KeyTransport.SendInput)
                 {
                     Windows.Win32.PInvoke.SetForegroundWindow(
                         new Windows.Win32.Foundation.HWND((nint)targetHwnd));
@@ -198,7 +238,7 @@ internal class UiSendKeysCommand : Command, IShortDescription
                         logger.LogError(
                             "{Symbol} --via send-input needs a resolvable target window, but none was found. Pass --window <hwnd>, ensure -a/--app resolves a window, or use --target to focus an element first.",
                             UiSymbols.Error);
-                        UiJsonError.Emit(json, UiJsonError.CodeForegroundNotTarget,
+                        UiJsonError.Emit(json, UiJsonError.CodeNoTargetWindow,
                             "send-input needs a resolvable target window, but none was found — refusing OS-wide keyboard injection without a known target. Pass --window/--app or --target.");
                         return 1;
                     }
@@ -223,60 +263,16 @@ internal class UiSendKeysCommand : Command, IShortDescription
                         UiSymbols.Warning);
                 }
 
-                // send-input is OS-wide, so a system-reserved combo (win+l, alt+f4, ctrl+shift+esc, …)
-                // acts on the OS/shell rather than just the target app. Reject these combos by default,
-                // keep every Win-modified L chord permanently blocked, and require explicit opt-in for
-                // the remaining global shortcuts.
-                if (transport == KeyTransport.SendInput)
+                if (transport == KeyTransport.SendInput && allowedSystemCombos.Count > 0)
                 {
-                    // Any Win-modified L chord is unconditionally blocked even with --allow-system-keys:
-                    // Windows lock handling may still invoke LockWorkStation when additional modifiers are
-                    // present, so fail closed rather than risking an unattended session lock. Return early
-                    // so it does not fall through into the soft-combo / allow path below.
-                    var neverBypassable = SystemKeyGuard.FindNeverBypassableCombos(actions);
-                    if (neverBypassable.Count > 0)
-                    {
-                        logger.LogError(
-                            "{Symbol} Refusing to synthesize {Combos} via --via send-input — this stays blocked " +
-                            "even with --allow-system-keys because the chord may lock the workstation (unrecoverable from automation). " +
-                            "--allow-system-keys is for app-registered global hotkeys (e.g. win+r, win+shift+v), not session-locking combos.",
-                            UiSymbols.Error, string.Join(", ", neverBypassable));
-                        UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments,
-                            $"Refusing to synthesize {string.Join(", ", neverBypassable)} via --via send-input. " +
-                            "This combo may lock the workstation (unrecoverable from automation) and stays blocked even with " +
-                            "--allow-system-keys. Use --allow-system-keys only for app-registered global hotkeys (e.g. win+r, win+shift+v).");
-                        return 1;
-                    }
-
-                    var systemCombos = SystemKeyGuard.FindSystemCombos(actions);
-                    if (systemCombos.Count > 0)
-                    {
-                        if (!allowSystemKeys)
-                        {
-                            logger.LogError(
-                                "{Symbol} Refusing to synthesize system-reserved key(s) via --via send-input: {Combos}. " +
-                                "These act on the OS/shell (e.g. win+l locks the session, alt+f4 closes the window, ctrl+alt+del is intercepted by Windows), not just the target app. " +
-                                "Pass --allow-system-keys to opt in (e.g. to drive a global hotkey).",
-                                UiSymbols.Error, string.Join(", ", systemCombos));
-                            UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments,
-                                $"Refusing to synthesize system-reserved key(s) via --via send-input: {string.Join(", ", systemCombos)}. " +
-                                "These act on the OS/shell rather than just the target app. Pass --allow-system-keys to opt in.");
-                            return 1;
-                        }
-
-                        // Caller explicitly opted in with --allow-system-keys (e.g. to fire a global hotkey such as
-                        // PowerToys' win+shift+v). Record the bypass in the warning log and, for --json, in the
-                        // success envelope so both output modes retain an audit trail. Then fall through and inject.
-                        // (Windows still blocks secure sequences like ctrl+alt+del regardless.)
-                        var systemCombosStr = string.Join(", ", systemCombos);
-                        logger.LogWarning(
-                            "{Symbol} Injecting system-reserved key(s) via --via send-input because --allow-system-keys was set: {Combos}. " +
-                            "These act on the OS/shell beyond the target app.",
-                            UiSymbols.Warning, systemCombosStr);
-                        warnings.Add(
-                            $"Injecting system-reserved key(s) via --via send-input because --allow-system-keys was set: {systemCombosStr}. " +
-                            "These act on the OS/shell beyond the target app.");
-                    }
+                    var systemCombosStr = string.Join(", ", allowedSystemCombos);
+                    logger.LogWarning(
+                        "{Symbol} Injecting system-reserved key(s) via --via send-input because --allow-system-keys was set: {Combos}. " +
+                        "These act on the OS/shell beyond the target app. This command cannot synthesize SAS.",
+                        UiSymbols.Warning, systemCombosStr);
+                    warnings.Add(
+                        $"Injecting system-reserved key(s) via --via send-input because --allow-system-keys was set: {systemCombosStr}. " +
+                        "These act on the OS/shell beyond the target app. This command cannot synthesize SAS.");
                 }
 
                 keyboardInput.Send(targetHwnd, actions, transport);
@@ -306,6 +302,12 @@ internal class UiSendKeysCommand : Command, IShortDescription
                 }
 
                 return 0;
+            }
+            catch (KeyboardInjectionException injectionEx)
+            {
+                logger.LogError("{Symbol} {Message}", UiSymbols.Error, injectionEx.Message);
+                UiJsonError.Emit(json, injectionEx.Code, injectionEx.Message);
+                return 1;
             }
             catch (System.Runtime.InteropServices.COMException comEx)
             {

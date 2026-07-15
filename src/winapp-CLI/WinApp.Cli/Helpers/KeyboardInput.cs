@@ -11,98 +11,53 @@ namespace WinApp.Cli.Helpers;
 /// Synthesizes keyboard input via either PostMessage (HWND-targeted) or SendInput (OS-wide).
 /// </summary>
 /// <remarks>
-/// Known limits:
-/// <list type="bullet">
-/// <item><see cref="KeyTransport.PostMessage"/> posts to a window's message queue and cannot trigger
-/// <c>WH_KEYBOARD_LL</c> global hotkeys (low-level hooks tap upstream of any HWND queue). Apps that read
-/// raw key state via <c>GetAsyncKeyState</c> may not observe held modifiers.</item>
-/// <item><see cref="KeyTransport.SendInput"/> is blocked by UIPI when injecting from an elevated process
-/// into a lower-integrity (e.g., AppContainer / AppX) target.</item>
-/// </list>
+/// Both transports are subject to UIPI and can target only equal- or lower-integrity processes.
+/// PostMessage is window-queue scoped and does not trigger low-level hooks or global hotkeys;
+/// SendInput changes global input state and therefore requires a verified foreground target.
 /// </remarks>
-internal static class KeyboardInput
+internal static partial class KeyboardInput
 {
-    private const ushort VkMenu = 0x12; // ALT
+    private const ushort VkShift = 0x10;
+    private const ushort VkL = 0x4C;
+    private const ushort VkLWin = 0x5B;
+    private const ushort VkRWin = 0x5C;
 
     public static void Send(long hwnd, IReadOnlyList<KeyAction> actions, KeyTransport transport)
     {
+        if (hwnd == 0)
+        {
+            throw new KeyboardInjectionException(
+                UiJsonError.CodeNoTargetWindow,
+                "Keyboard input requires a resolvable target window. Pass --window/--app or --target.");
+        }
+
+        var target = new HWND((nint)hwnd);
+        if (!PInvoke.IsWindow(target))
+        {
+            throw new KeyboardInjectionException(
+                UiJsonError.CodeNoTargetWindow,
+                $"Keyboard input target 0x{hwnd:X} is not a live window.");
+        }
+
+        var keyboardLayout = GetTargetKeyboardLayout(target);
+
         switch (transport)
         {
             case KeyTransport.PostMessage:
-                SendViaPostMessage(new HWND((nint)hwnd), actions);
+                SendViaPostMessage(target, actions, keyboardLayout);
                 break;
             case KeyTransport.SendInput:
-                SendViaSendInput(actions);
+                SendViaSendInput(hwnd, actions, keyboardLayout);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(transport), transport, "Unknown key transport.");
         }
     }
 
-    private static void SendViaPostMessage(HWND hwnd, IReadOnlyList<KeyAction> actions)
-    {
-        if (hwnd.IsNull)
-        {
-            throw new InvalidOperationException(
-                "PostMessage transport requires a target window. Specify --target/-a/-w to resolve one, or use --via send-input.");
-        }
-
-        foreach (var action in actions)
-        {
-            switch (action)
-            {
-                case KeyChord chord:
-                    // ALT combos (without Ctrl) are delivered as WM_SYSKEY* so menus/accelerators fire.
-                    bool sys = chord.Modifiers.Contains(VkMenu);
-
-                    foreach (var mod in chord.Modifiers)
-                    {
-                        Post(hwnd, isSys: false, keyUp: false, mod, IsExtended(mod));
-                    }
-
-                    Post(hwnd, sys, keyUp: false, chord.Vk, chord.Extended);
-                    Post(hwnd, sys, keyUp: true, chord.Vk, chord.Extended);
-
-                    for (int i = chord.Modifiers.Count - 1; i >= 0; i--)
-                    {
-                        Post(hwnd, isSys: false, keyUp: true, chord.Modifiers[i], IsExtended(chord.Modifiers[i]));
-                    }
-                    break;
-
-                case TextInput text:
-                    foreach (var ch in text.Text)
-                    {
-                        PInvoke.PostMessage(hwnd, PInvoke.WM_CHAR, new WPARAM(ch), new LPARAM(1));
-                    }
-                    break;
-            }
-
-            Thread.Sleep(5);
-        }
-    }
-
-    private static void Post(HWND hwnd, bool isSys, bool keyUp, ushort vk, bool extended)
-    {
-        uint msg = isSys
-            ? (keyUp ? PInvoke.WM_SYSKEYUP : PInvoke.WM_SYSKEYDOWN)
-            : (keyUp ? PInvoke.WM_KEYUP : PInvoke.WM_KEYDOWN);
-
-        uint scan = PInvoke.MapVirtualKey(vk, MAP_VIRTUAL_KEY_TYPE.MAPVK_VK_TO_VSC);
-
-        uint lParam = 1u                       // repeat count
-            | (scan << 16)                     // scan code
-            | (extended ? 1u << 24 : 0u)       // extended key
-            | (isSys ? 1u << 29 : 0u);         // context code (ALT down)
-
-        if (keyUp)
-        {
-            lParam |= (1u << 30) | (1u << 31);  // previous-state + transition-state
-        }
-
-        PInvoke.PostMessage(hwnd, msg, new WPARAM(vk), new LPARAM((nint)(int)lParam));
-    }
-
-    private static unsafe void SendViaSendInput(IReadOnlyList<KeyAction> actions)
+    private static unsafe void SendViaSendInput(
+        long targetHwnd,
+        IReadOnlyList<KeyAction> actions,
+        HKL keyboardLayout)
     {
         var inputs = new List<INPUT>();
 
@@ -111,24 +66,26 @@ internal static class KeyboardInput
             switch (action)
             {
                 case KeyChord chord:
-                    foreach (var mod in chord.Modifiers)
+                    foreach (var modifier in chord.Modifiers)
                     {
-                        inputs.Add(KeyEvent(mod, IsExtended(mod), keyUp: false));
+                        inputs.Add(KeyEvent(modifier, IsExtended(modifier), keyUp: false));
                     }
 
-                    inputs.Add(KeyEvent(chord.Vk, chord.Extended, keyUp: false));
-                    inputs.Add(KeyEvent(chord.Vk, chord.Extended, keyUp: true));
+                    var mainVirtualKey = ResolveChordVirtualKey(chord, keyboardLayout);
+                    inputs.Add(KeyEvent(mainVirtualKey, chord.Extended, keyUp: false));
+                    inputs.Add(KeyEvent(mainVirtualKey, chord.Extended, keyUp: true));
 
                     for (int i = chord.Modifiers.Count - 1; i >= 0; i--)
                     {
-                        inputs.Add(KeyEvent(chord.Modifiers[i], IsExtended(chord.Modifiers[i]), keyUp: true));
+                        var modifier = chord.Modifiers[i];
+                        inputs.Add(KeyEvent(modifier, IsExtended(modifier), keyUp: true));
                     }
                     break;
 
                 case TextInput text:
                     foreach (var ch in text.Text)
                     {
-                        AppendCharEvents(inputs, ch);
+                        AppendCharEvents(inputs, ch, keyboardLayout);
                     }
                     break;
             }
@@ -139,77 +96,176 @@ internal static class KeyboardInput
             return;
         }
 
-        var array = inputs.ToArray();
-        fixed (INPUT* pInputs = array)
-        {
-            var sent = PInvoke.SendInput((uint)array.Length, pInputs, sizeof(INPUT));
-            if (sent != (uint)array.Length)
-            {
-                // A zero or short write can strand a key/modifier in the down state (e.g. a Ctrl-down
-                // whose matching up never fired), which corrupts the whole session. Best-effort release
-                // everything we pressed before surfacing the failure.
-                ReleaseHeldKeys(array);
+        var batch = inputs.ToArray();
 
-                throw new InvalidOperationException(sent == 0
-                    ? (PInvoke.GetForegroundWindow().IsNull
-                        // No foreground window → the session is locked or on a secure desktop, where a
-                        // user-session process can't inject. That's not an elevation/UIPI problem.
-                        ? "SendInput failed — no interactive desktop is available (the session is locked " +
-                          "or on a secure desktop). Unlock the session and retry."
-                        : "SendInput failed — the target window may be running at a higher integrity level (elevated) " +
-                          "or be an AppContainer/AppX app blocked by UIPI. Try --via post-message, or run this CLI as administrator.")
-                    : $"SendInput delivered only {sent} of {array.Length} key events — input was partially applied. " +
-                      "Held keys were released; retry the gesture.");
+        // Re-check at the last practical boundary. This narrows, but cannot eliminate, the foreground
+        // TOCTOU window between verification and the SendInput syscall.
+        EnsureFinalForeground(targetHwnd);
+        EnsureNoWinLRisk(batch, actions);
+
+        fixed (INPUT* pointer = batch)
+        {
+            var sent = PInvoke.SendInput((uint)batch.Length, pointer, sizeof(INPUT));
+            if (sent == (uint)batch.Length)
+            {
+                return;
             }
+
+            var releases = BuildReleaseInputs(batch, sent);
+            uint released = 0;
+            if (releases.Length > 0)
+            {
+                fixed (INPUT* releasePointer = releases)
+                {
+                    released = PInvoke.SendInput((uint)releases.Length, releasePointer, sizeof(INPUT));
+                }
+            }
+
+            var cleanup = releases.Length switch
+            {
+                0 => "No key-down event was delivered, so no synthetic key-up was emitted.",
+                _ when released == (uint)releases.Length =>
+                    $"Released all {releases.Length} key(s) still held by the delivered prefix.",
+                _ => $"Key-up cleanup delivered only {released} of {releases.Length} release event(s).",
+            };
+
+            if (PInvoke.GetForegroundWindow().IsNull)
+            {
+                throw new KeyboardInjectionException(
+                    UiJsonError.CodeNoInteractiveDesktop,
+                    $"SendInput delivered {sent} of {batch.Length} key events because no interactive desktop is " +
+                    $"available (the session may be locked or on a secure desktop). {cleanup}");
+            }
+
+            var reason = sent == 0
+                ? "SendInput delivered no events. It can inject only into equal- or lower-integrity targets; " +
+                  "Windows does not identify UIPI blocking with a distinct error."
+                : $"SendInput delivered only {sent} of {batch.Length} key events; input was partially applied.";
+
+            throw new KeyboardInjectionException(
+                UiJsonError.CodeInputInjectionFailed,
+                $"{reason} {cleanup}");
         }
     }
 
-    /// <summary>
-    /// Best-effort release of every key pressed in <paramref name="batch"/> — emits a matching key-up for
-    /// each key-down event, in reverse order, so a partial <see cref="PInvoke.SendInput"/> can't leave a
-    /// modifier or key logically stuck down. Failures here are swallowed (we're already on the error path).
-    /// </summary>
-    private static unsafe void ReleaseHeldKeys(INPUT[] batch)
+    private static void EnsureFinalForeground(long targetHwnd)
     {
-        var ups = new List<INPUT>();
-        for (int i = batch.Length - 1; i >= 0; i--)
-        {
-            if (batch[i].type != INPUT_TYPE.INPUT_KEYBOARD)
-            {
-                continue;
-            }
-
-            var ki = batch[i].Anonymous.ki;
-            if ((ki.dwFlags & KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP) != 0)
-            {
-                continue; // already an up event
-            }
-
-            ups.Add(new INPUT
-            {
-                type = INPUT_TYPE.INPUT_KEYBOARD,
-                Anonymous = { ki = new KEYBDINPUT
-                {
-                    wVk = ki.wVk,
-                    wScan = ki.wScan,
-                    dwFlags = ki.dwFlags | KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP
-                }}
-            });
-        }
-
-        if (ups.Count == 0)
+        if (ForegroundGuard.ForegroundBelongsTo(targetHwnd))
         {
             return;
         }
 
-        var arr = ups.ToArray();
-        fixed (INPUT* p = arr)
+        if (ForegroundGuard.NoInteractiveDesktop())
         {
-            PInvoke.SendInput((uint)arr.Length, p, sizeof(INPUT));
+            throw new KeyboardInjectionException(
+                UiJsonError.CodeNoInteractiveDesktop,
+                "Refusing SendInput because no interactive desktop is available. Unlock the session and retry.");
+        }
+
+        throw new KeyboardInjectionException(
+            UiJsonError.CodeForegroundNotTarget,
+            "Refusing SendInput because the requested target is no longer the foreground window.");
+    }
+
+    private static void EnsureNoWinLRisk(INPUT[] batch, IReadOnlyList<KeyAction> actions)
+    {
+        bool leftWinDown = IsKeyDown(VkLWin);
+        bool rightWinDown = IsKeyDown(VkRWin);
+        bool lDown = IsKeyDown(VkL);
+
+        bool semanticRisk = (leftWinDown || rightWinDown) && SystemKeyGuard.ContainsSemanticL(actions);
+        bool transitionRisk = SystemKeyGuard.WouldCreateWinL(
+            GetVirtualKeyTransitions(batch),
+            leftWinDown,
+            rightWinDown,
+            lDown);
+
+        if (semanticRisk || transitionRisk)
+        {
+            throw new KeyboardInjectionException(
+                UiJsonError.CodeInvalidArguments,
+                "Refusing SendInput because the current keyboard state or requested batch could form Win+L. " +
+                "Release both Windows keys and L, then retry; Win+L is never bypassable.");
         }
     }
 
-    private static INPUT KeyEvent(ushort vk, bool extended, bool keyUp)
+    private static IEnumerable<SystemKeyGuard.VirtualKeyTransition> GetVirtualKeyTransitions(INPUT[] batch)
+    {
+        foreach (var input in batch)
+        {
+            if (input.type != INPUT_TYPE.INPUT_KEYBOARD || input.Anonymous.ki.wVk == 0)
+            {
+                continue;
+            }
+
+            yield return new SystemKeyGuard.VirtualKeyTransition(
+                (ushort)input.Anonymous.ki.wVk,
+                (input.Anonymous.ki.dwFlags & KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP) != 0);
+        }
+    }
+
+    private static bool IsKeyDown(ushort virtualKey)
+        => (PInvoke.GetAsyncKeyState(virtualKey) & 0x8000) != 0;
+
+    /// <summary>
+    /// Builds key-up events only for keys still held after replaying the prefix Windows reports as
+    /// delivered. A zero-length prefix therefore never releases a physical key the CLI did not inject.
+    /// </summary>
+    internal static INPUT[] BuildReleaseInputs(INPUT[] attemptedBatch, uint deliveredCount)
+    {
+        var held = new List<KEYBDINPUT>();
+        int count = (int)Math.Min(deliveredCount, (uint)attemptedBatch.Length);
+
+        for (int i = 0; i < count; i++)
+        {
+            var input = attemptedBatch[i];
+            if (input.type != INPUT_TYPE.INPUT_KEYBOARD)
+            {
+                continue;
+            }
+
+            var key = input.Anonymous.ki;
+            if ((key.dwFlags & KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP) == 0)
+            {
+                held.Add(key);
+                continue;
+            }
+
+            int matchingDown = held.FindLastIndex(candidate => SameKey(candidate, key));
+            if (matchingDown >= 0)
+            {
+                held.RemoveAt(matchingDown);
+            }
+        }
+
+        var releases = new INPUT[held.Count];
+        for (int i = 0; i < held.Count; i++)
+        {
+            var key = held[held.Count - 1 - i];
+            key.dwFlags |= KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP;
+            releases[i] = new INPUT
+            {
+                type = INPUT_TYPE.INPUT_KEYBOARD,
+                Anonymous = { ki = key }
+            };
+        }
+
+        return releases;
+    }
+
+    private static bool SameKey(KEYBDINPUT left, KEYBDINPUT right)
+    {
+        const KEYBD_EVENT_FLAGS identityFlags =
+            KEYBD_EVENT_FLAGS.KEYEVENTF_EXTENDEDKEY |
+            KEYBD_EVENT_FLAGS.KEYEVENTF_SCANCODE |
+            KEYBD_EVENT_FLAGS.KEYEVENTF_UNICODE;
+
+        return left.wVk == right.wVk &&
+               left.wScan == right.wScan &&
+               (left.dwFlags & identityFlags) == (right.dwFlags & identityFlags);
+    }
+
+    internal static INPUT KeyEvent(ushort virtualKey, bool extended, bool keyUp)
     {
         var flags = (KEYBD_EVENT_FLAGS)0;
         if (keyUp) { flags |= KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP; }
@@ -218,7 +274,7 @@ internal static class KeyboardInput
         return new INPUT
         {
             type = INPUT_TYPE.INPUT_KEYBOARD,
-            Anonymous = { ki = new KEYBDINPUT { wVk = (VIRTUAL_KEY)vk, dwFlags = flags } }
+            Anonymous = { ki = new KEYBDINPUT { wVk = (VIRTUAL_KEY)virtualKey, dwFlags = flags } }
         };
     }
 
@@ -234,37 +290,53 @@ internal static class KeyboardInput
         };
     }
 
-    /// <summary>
-    /// Appends real per-character key events for SendInput. Maps the character to a virtual key (plus Shift)
-    /// via the active keyboard layout so the target sees a genuine WM_KEYDOWN (KeyDown event with the correct
-    /// virtual key) and the OS composes the matching WM_CHAR (TextChanged) — i.e. per-keystroke fidelity.
-    /// Characters not reachable on the current layout, or requiring Ctrl/AltGr, fall back to a Unicode packet
-    /// so the exact character still lands.
-    /// </summary>
-    private static void AppendCharEvents(List<INPUT> inputs, char ch)
+    private static void AppendCharEvents(List<INPUT> inputs, char ch, HKL keyboardLayout)
     {
-        short scan = PInvoke.VkKeyScan(ch);
-        int lo = scan & 0xFF;
-        int hi = (scan >> 8) & 0xFF;
+        short scan = PInvoke.VkKeyScanEx(ch, keyboardLayout);
+        int low = scan & 0xFF;
+        int high = (scan >> 8) & 0xFF;
 
-        bool mappable = scan != -1 && lo != 0xFF;
-        bool needsCtrlOrAlt = (hi & 0x02) != 0 || (hi & 0x04) != 0; // Ctrl / Alt (AltGr) — layout-specific
+        bool mappable = scan != -1 && low != 0xFF;
+        bool needsControlOrAlt = (high & 0x02) != 0 || (high & 0x04) != 0;
 
-        if (!mappable || needsCtrlOrAlt)
+        if (!mappable || needsControlOrAlt)
         {
             inputs.Add(UnicodeEvent(ch, keyUp: false));
             inputs.Add(UnicodeEvent(ch, keyUp: true));
             return;
         }
 
-        var vk = (ushort)lo;
-        bool needsShift = (hi & 0x01) != 0;
+        var virtualKey = (ushort)low;
+        bool needsShift = (high & 0x01) != 0;
 
-        if (needsShift) { inputs.Add(KeyEvent(0x10, extended: false, keyUp: false)); } // Shift down
-        inputs.Add(KeyEvent(vk, extended: false, keyUp: false));
-        inputs.Add(KeyEvent(vk, extended: false, keyUp: true));
-        if (needsShift) { inputs.Add(KeyEvent(0x10, extended: false, keyUp: true)); }  // Shift up
+        if (needsShift) { inputs.Add(KeyEvent(VkShift, extended: false, keyUp: false)); }
+        inputs.Add(KeyEvent(virtualKey, extended: false, keyUp: false));
+        inputs.Add(KeyEvent(virtualKey, extended: false, keyUp: true));
+        if (needsShift) { inputs.Add(KeyEvent(VkShift, extended: false, keyUp: true)); }
     }
 
-    private static bool IsExtended(ushort vk) => vk is 0x5B or 0x5C or 0x5D;
+    private static ushort ResolveChordVirtualKey(KeyChord chord, HKL keyboardLayout)
+    {
+        if (chord.SemanticKey is { Length: 1 })
+        {
+            short mapped = PInvoke.VkKeyScanEx(chord.SemanticKey[0], keyboardLayout);
+            int low = mapped & 0xFF;
+            if (mapped != -1 && low != 0xFF)
+            {
+                return (ushort)low;
+            }
+        }
+
+        return chord.Vk;
+    }
+
+    private static unsafe HKL GetTargetKeyboardLayout(HWND hwnd)
+    {
+        uint processId = 0;
+        uint threadId = PInvoke.GetWindowThreadProcessId(hwnd, &processId);
+        return PInvoke.GetKeyboardLayout(threadId);
+    }
+
+    private static bool IsExtended(ushort virtualKey)
+        => virtualKey is 0x5B or 0x5C or 0x5D or 0xA3 or 0xA5;
 }

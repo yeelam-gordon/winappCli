@@ -30,6 +30,9 @@ public class SystemKeyGuardTests
     [DataRow("alt+esc", "alt+esc")]
     [DataRow("alt+f4", "alt+f4")]
     [DataRow("alt+printscreen", "alt+printscreen")]
+    [DataRow("lalt+f4", "alt+f4")]
+    [DataRow("ralt+tab", "alt+tab")]
+    [DataRow("rctrl+lalt+del", "ctrl+alt+del")]
     public void KnownSystemCombos_AreReportedByName(string keys, string expected)
     {
         var combos = SystemKeyGuard.FindSystemCombos(KeyStringParser.Parse(keys));
@@ -117,6 +120,9 @@ public class SystemKeyGuardTests
     [DataRow("win+shift+l")]
     [DataRow("win+ctrl+l")]
     [DataRow("win+alt+l")]
+    [DataRow("rwin+rshift+l")]
+    [DataRow("lwin+rctrl+l")]
+    [DataRow("rwin+lalt+l")]
     public void NeverBypassable_WinModifiedL_IsDetected(string keys)
     {
         // Fail closed for every Win-modified L chord because Windows lock handling may still recognize
@@ -137,6 +143,121 @@ public class SystemKeyGuardTests
 
         Assert.AreEqual(1, hits.Count);
         Assert.AreEqual("win+l", hits[0]);
+    }
+
+    [TestMethod]
+    public void NeverBypassable_SemanticL_IsDetectedWhenLayoutMapsDifferentVk()
+    {
+        KeyAction[] actions =
+        [
+            new KeyChord([0x5B], Vk: 0x4E, Extended: false, SemanticKey: "L")
+        ];
+
+        var hits = SystemKeyGuard.FindNeverBypassableCombos(actions);
+
+        Assert.AreEqual(1, hits.Count);
+        Assert.AreEqual("win+l", hits[0]);
+    }
+
+    [TestMethod]
+    public void NeverBypassable_RawVkL_IsDetectedWithoutSemanticKey()
+    {
+        KeyAction[] actions =
+        [
+            new KeyChord([0x5C], Vk: 0x4C, Extended: false)
+        ];
+
+        var hits = SystemKeyGuard.FindNeverBypassableCombos(actions);
+
+        Assert.AreEqual(1, hits.Count);
+        Assert.AreEqual("win+l", hits[0]);
+    }
+
+    [TestMethod]
+    public void NeverBypassable_LeftAndRightModifiers_CannotMaskEitherWinKey()
+    {
+        ushort[] winKeys = [0x5B, 0x5C];
+        ushort[] extraModifiers = [0x10, 0x11, 0x12, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5];
+
+        foreach (var winKey in winKeys)
+        {
+            foreach (var extraModifier in extraModifiers)
+            {
+                KeyAction[] actions =
+                [
+                    new KeyChord([winKey, extraModifier], Vk: 0x4E, Extended: false, SemanticKey: "l")
+                ];
+
+                Assert.AreEqual(
+                    1,
+                    SystemKeyGuard.FindNeverBypassableCombos(actions).Count,
+                    $"Win key 0x{winKey:X2} plus modifier 0x{extraModifier:X2} must remain blocked.");
+            }
+        }
+    }
+
+    [TestMethod]
+    public void WouldCreateWinL_DetectsAmbientLeftOrRightWin()
+    {
+        var lPress = new[] { new SystemKeyGuard.VirtualKeyTransition(0x4C, IsKeyUp: false) };
+
+        Assert.IsTrue(SystemKeyGuard.WouldCreateWinL(lPress, leftWinDown: true, rightWinDown: false, lDown: false));
+        Assert.IsTrue(SystemKeyGuard.WouldCreateWinL(lPress, leftWinDown: false, rightWinDown: true, lDown: false));
+    }
+
+    [TestMethod]
+    public void WouldCreateWinL_DetectsAmbientLAndRequestedWin()
+    {
+        var rightWinPress = new[] { new SystemKeyGuard.VirtualKeyTransition(0x5C, IsKeyUp: false) };
+
+        Assert.IsTrue(SystemKeyGuard.WouldCreateWinL(
+            rightWinPress,
+            leftWinDown: false,
+            rightWinDown: false,
+            lDown: true));
+    }
+
+    [TestMethod]
+    public void WouldCreateWinL_DetectsRequestedRawTransitionPair()
+    {
+        SystemKeyGuard.VirtualKeyTransition[] transitions =
+        [
+            new(0x5B, IsKeyUp: false),
+            new(0x4C, IsKeyUp: false),
+        ];
+
+        Assert.IsTrue(SystemKeyGuard.WouldCreateWinL(
+            transitions,
+            leftWinDown: false,
+            rightWinDown: false,
+            lDown: false));
+    }
+
+    [TestMethod]
+    public void WouldCreateWinL_DoesNotFlagSequentialNonOverlappingKeys()
+    {
+        SystemKeyGuard.VirtualKeyTransition[] transitions =
+        [
+            new(0x5B, IsKeyUp: false),
+            new(0x5B, IsKeyUp: true),
+            new(0x4C, IsKeyUp: false),
+            new(0x4C, IsKeyUp: true),
+        ];
+
+        Assert.IsFalse(SystemKeyGuard.WouldCreateWinL(
+            transitions,
+            leftWinDown: false,
+            rightWinDown: false,
+            lDown: false));
+    }
+
+    [TestMethod]
+    public void ContainsSemanticL_CoversTextAndLayoutMappedChord()
+    {
+        Assert.IsTrue(SystemKeyGuard.ContainsSemanticL([new TextInput("hello")]));
+        Assert.IsTrue(SystemKeyGuard.ContainsSemanticL(
+            [new KeyChord([], Vk: 0x4E, Extended: false, SemanticKey: "l")]));
+        Assert.IsFalse(SystemKeyGuard.ContainsSemanticL([new TextInput("queue")]));
     }
 
     [TestMethod]

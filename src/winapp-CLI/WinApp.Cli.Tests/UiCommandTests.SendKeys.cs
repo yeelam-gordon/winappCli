@@ -278,17 +278,20 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
-    public async Task SendKeys_ViaPostMessage_NoTarget_StillSends()
+    public async Task SendKeys_ViaPostMessage_NoTarget_ReturnsDeterministicError()
     {
-        // post-message posts straight to the target HWND's message queue and is not OS-wide, so it does
-        // not require the foreground gate or a resolvable window the way send-input does (M9 is scoped to
-        // send-input). A zero handle still posts (the OS routes a 0 hwnd to the focused window).
+        _fakeKeyboard.ExceptionToThrow = new WinApp.Cli.Helpers.KeyboardInjectionException(
+            WinApp.Cli.Helpers.UiJsonError.CodeNoTargetWindow,
+            "Keyboard input requires a resolvable target window.");
         var command = GetRequiredService<UiSendKeysCommand>();
-        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["enter", "-a", "TestApp", "--via", "post-message"]);
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command,
+            ["enter", "-a", "TestApp", "--via", "post-message", "--json"]);
 
-        Assert.AreEqual(0, exitCode);
-        Assert.AreEqual(1, _fakeKeyboard.SendCalls.Count);
+        Assert.AreEqual(1, exitCode);
+        Assert.AreEqual(0, _fakeKeyboard.SendCalls.Count);
         Assert.AreEqual(0, _fakeForeground.Calls.Count, "post-message does not consult the foreground guard");
+        StringAssert.Contains(ConsoleStdErr.ToString(), "resolvable target window");
     }
 
     [TestMethod]
@@ -356,6 +359,25 @@ public partial class UiCommandTests
 
         Assert.AreEqual(1, exitCode);
         Assert.AreEqual(0, _fakeKeyboard.SendCalls.Count, "win+l must never reach the keyboard transport");
+        Assert.AreEqual(0, _fakeSession.ResolveCalls, "hard safety rejection must happen before session resolution or focus");
+        Assert.AreEqual(0, _fakeForeground.Calls.Count, "hard safety rejection must happen before foreground work");
+    }
+
+    [TestMethod]
+    public async Task SendKeys_KeyboardInjectionFailure_UsesStableJsonCode()
+    {
+        _fakeSession.SessionResult.WindowHandle = 4242;
+        _fakeKeyboard.ExceptionToThrow = new WinApp.Cli.Helpers.KeyboardInjectionException(
+            WinApp.Cli.Helpers.UiJsonError.CodeInputInjectionFailed,
+            "PostMessage failed with Win32 error 5.");
+
+        var command = GetRequiredService<UiSendKeysCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command,
+            ["enter", "-a", "TestApp", "--via", "post-message", "--json"]);
+
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(ConsoleStdErr.ToString(), "Win32 error 5");
     }
 
     // COR-01 — SEC-01: a benign win+<key> combo IS allowed with --allow-system-keys

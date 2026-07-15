@@ -3232,7 +3232,7 @@
           }
         },
         "send-keys": {
-          "description": "Send synthetic keyboard input to a window. Supports named keys (down, enter, tab), modifier combos (ctrl+shift+t), raw virtual keys (vk=0xNN), and literal text. Use --verbatim to type the whole argument literally, or --target to focus an element first. Two transports via --via: post-message (default, HWND-targeted, bypasses UIPI) or send-input (OS-wide). For per-keystroke KeyDown on typed text (e.g. a WinUI 3/WPF TextBox), use --via send-input.",
+          "description": "Send synthetic keyboard input to a window. Supports named keys (down, enter, tab), modifier combos (ctrl+shift+t), raw virtual keys (vk=0xNN), and literal text. Use --verbatim to type the whole argument literally, or --target to focus an element first. Two transports via --via: post-message (default, HWND-targeted) or send-input (OS-wide); both are subject to UIPI. For per-keystroke KeyDown on typed text (e.g. a WinUI 3/WPF TextBox), use --via send-input.",
           "hidden": false,
           "arguments": {
             "keys": {
@@ -3249,7 +3249,7 @@
           },
           "options": {
             "--allow-system-keys": {
-              "description": "Allow synthesizing system-/shell-reserved combos (win+<key>, alt+f4, alt+tab, ctrl+esc, …) via --via send-input, which are refused by default because they act on the OS/shell beyond the target app. Opt in to drive global hotkeys (e.g. PowerToys' win+shift+v, win+r). No effect on --via post-message (already window-scoped; a warning is emitted if set without send-input). Note: any Win-modified L chord (including win+shift+l) stays blocked even with this flag because Windows lock handling may still invoke LockWorkStation(), which is unrecoverable from automation. Windows still blocks secure sequences such as ctrl+alt+del (SAS) from injected input regardless of this flag.",
+              "description": "Allow synthesizing system-/shell-reserved combos (win+<key>, alt+f4, alt+tab, ctrl+esc, …) via --via send-input, which are refused by default because they act on the OS/shell beyond the target app. Opt in to drive global hotkeys (e.g. PowerToys' win+shift+v, win+r). No effect on --via post-message (already window-scoped; a warning is emitted if set without send-input). Note: any Win-modified L chord (including win+shift+l) stays blocked even with this flag because Windows lock handling may still invoke LockWorkStation(), which is unrecoverable from automation. This command does not call SendSAS: SendInput cannot synthesize ctrl+alt+del (SAS), while software SAS requires a specially configured service or signed uiAccess app plus Windows policy support.",
               "hidden": false,
               "valueType": "System.Boolean",
               "hasDefaultValue": true,
@@ -3347,7 +3347,7 @@
               "recursive": false
             },
             "--via": {
-              "description": "Transport: post-message (default, HWND-targeted, bypasses UIPI; typed text raises TextChanged but not a per-character KeyDown) or send-input (OS-wide; typed text raises a real per-character KeyDown + TextChanged). Named keys and combos raise KeyDown on both, but keyboard accelerators/shortcuts (KeyboardAccelerator, e.g. ctrl+t) only fire via send-input.",
+              "description": "Transport: post-message (default, HWND-targeted and subject to UIPI; typed text raises TextChanged but not a per-character KeyDown) or send-input (OS-wide; typed text raises a real per-character KeyDown + TextChanged; also subject to UIPI). Both can target only equal- or lower-integrity processes. Named keys and combos raise KeyDown on both, but keyboard accelerators/shortcuts (KeyboardAccelerator, e.g. ctrl+t) only fire via send-input.",
               "hidden": false,
               "valueType": "System.String",
               "hasDefaultValue": true,

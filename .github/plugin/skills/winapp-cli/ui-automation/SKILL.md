@@ -115,7 +115,7 @@ winapp ui hover btn-info-a1b2 -a myapp --dwell-time 1200; winapp ui screenshot -
 ```
 
 ### Send keyboard input
-Synthesize keystrokes — the keyboard counterpart to `click`. Use for arrow/Tab/Enter navigation, shortcuts, and per-keystroke typing (vs `set-value`'s atomic write). Tokens are whitespace-separated: named keys (`enter`, `down`, `tab`, `esc`, `f5`), modifier combos (`ctrl+shift+t`), literal text (`hello`), and raw virtual keys (`vk=0xNN`).
+Synthesize keystrokes — the keyboard counterpart to `click`. Use for arrow/Tab/Enter navigation, shortcuts, and per-keystroke typing (vs `set-value`'s atomic write). Tokens are whitespace-separated: named keys (`enter`, `down`, `tab`, `esc`, `f5`), modifier combos (`ctrl+shift+t`; sided aliases such as `rctrl`, `ralt`, and `rwin` are supported), literal text (`hello`), and raw virtual keys (`vk=0xNN`).
 ```powershell
 # Keyboard navigation then commit
 winapp ui send-keys "down down enter" -a myapp
@@ -132,16 +132,17 @@ winapp ui send-keys "ctrl+a delete" -a myapp
 # Focus a field, then type text into it
 winapp ui send-keys "Hello world" --target txt-name-a1b2 -a myapp
 
-# Transport: --via post-message (default, HWND-targeted, bypasses UIPI) or send-input (OS-wide)
+# Transport: --via post-message (default, HWND-targeted) or send-input (OS-wide); both obey UIPI
 winapp ui send-keys "enter" -a myapp --via send-input
 
 # Fire a global hotkey: win+... is refused by default (acts on the shell); opt in with --allow-system-keys
 winapp ui send-keys "win+shift+v" -a myapp --via send-input --allow-system-keys
 ```
-- Default `post-message` is HWND-targeted and works across integrity levels, but can't fire `WH_KEYBOARD_LL` global hotkeys; for classic Win32/WinForms child-window controls, target the control with `-w`/`--target`.
+- Default `post-message` is HWND-targeted but still subject to UIPI (equal/lower integrity only). It checks each post and reports `input_injection_failed`; posting is not transactional, so a target can observe a prefix before a later failure. It can't fire `WH_KEYBOARD_LL` global hotkeys; for classic Win32/WinForms child-window controls, target the control with `-w`/`--target`.
 - A token that collides with a key/modifier name (e.g. `enter`, `down`, `ctrl+a`) is pressed as that key. Prefix it with `text=` to type it as literal text instead — `text=enter` types the word "enter"; chain `text=` tokens to type a literal phrase like `text=down text=down text=enter`. Backslash escapes inside a `text=` value type whitespace the tokenizer would otherwise collapse: `\s`→space, `\t`→tab, `\n`→newline, `\r`→CR, `\\`→backslash (e.g. `text=a\s\sb` → "a  b"). When the *whole* argument is literal text, pass `--verbatim` instead of escaping each token: it types the entire keys argument as-is (no key/combo/`vk=`/`text=` parsing) and preserves exact whitespace — `send-keys "down down enter" --verbatim` types the words. (`--verbatim` does not decode backslash escapes; use a `text=` token for control characters.)
-- `send-input` is fully real input but goes to the foreground window and is UIPI-blocked when injecting from elevated → AppContainer/AppX. It **rejects system-reserved combos** (`win+l`, `alt+f4`, `ctrl+shift+esc`, `ctrl+alt+del`, `alt+tab`, …) because those act on the OS/shell, not just the target — pass **`--allow-system-keys`** to opt in (e.g. to fire a global hotkey such as PowerToys' `win+shift+v` or `win+r`), or use `--via post-message` (window-scoped) to send one straight to the window. **Every Win-modified `L` chord stays blocked even with `--allow-system-keys`, including `win+shift+l`, `win+ctrl+l`, and `win+alt+l`**. Windows lock handling may still recognize these variants and invoke `LockWorkStation()` (unrecoverable from automation), so the guard fails closed. Windows still blocks secure sequences like `ctrl+alt+del` (SAS) from injected input regardless of the flag. Successful bypasses are logged at Warning level; under `--json`, the success envelope records the audit message in its `warnings` array. On a locked/secure desktop `send-input` fails fast with `no_interactive_desktop`.
-- Per-keystroke events: named keys/combos fire a real `KeyDown` on both transports. For literal typed text, `--via send-input` maps each char to its VK (+Shift) so each character fires a real `KeyDown` + OS-composed `WM_CHAR` (`TextChanged`) — use it when downstream logic keys off `KeyDown` (e.g. WinUI 3/WPF `TextBox`); bring the target window to the foreground first. `--via post-message` posts `WM_CHAR` (raises `TextChanged`, lands correct text across integrity levels) but does not fire a per-character `KeyDown`.
+- `send-input` is real global input, goes to the foreground window, and is subject to UIPI in the correct direction: it can inject only into equal- or lower-integrity targets. It rechecks foreground immediately before injection, fails with `no_interactive_desktop` on locked/secure/noninteractive sessions, and releases only keys held by a partially delivered prefix. It rejects system-reserved combos by default; `--allow-system-keys` opts in to recoverable global hotkeys. **Win+L always stays blocked** across left/right Win, extra left/right modifiers, raw VK, aliases/case, and keyboard-layout mappings; the final boundary also rejects combinations with an already-held Win/L key. Concurrent physical input after the check remains a race.
+- `SendInput` cannot synthesize Ctrl+Alt+Delete. Software SAS requires the separate `SendSAS` API from a specially configured service or signed/protected `uiAccess` app with policy support; this command never calls it.
+- Per-keystroke events: named keys/combos fire `KeyDown` on both transports. `send-input` maps character keys with the target window thread's layout; unmappable or Ctrl/AltGr-required text uses Unicode packets, which preserve text but not identical physical-key semantics under every layout/IME. `post-message` posts `WM_CHAR` but does not fire a per-character `KeyDown`.
 
 ### Drag (reorder, resize, sliders, drag-and-drop)
 Press the mouse button at one point, move to another, then release with `drag <from> <to>`, where each endpoint is an element selector (uses its center) or app `x,y` coordinates from `ui inspect`. Uses `SendInput` with intermediate moves so apps see a realistic `WM_MOUSEMOVE` stream.
@@ -468,7 +469,7 @@ Move the mouse to an element's center to trigger hover effects (tooltips, flyout
 
 ### `winapp ui send-keys`
 
-Send synthetic keyboard input to a window. Supports named keys (down, enter, tab), modifier combos (ctrl+shift+t), raw virtual keys (vk=0xNN), and literal text. Use --verbatim to type the whole argument literally, or --target to focus an element first. Two transports via --via: post-message (default, HWND-targeted, bypasses UIPI) or send-input (OS-wide). For per-keystroke KeyDown on typed text (e.g. a WinUI 3/WPF TextBox), use --via send-input.
+Send synthetic keyboard input to a window. Supports named keys (down, enter, tab), modifier combos (ctrl+shift+t), raw virtual keys (vk=0xNN), and literal text. Use --verbatim to type the whole argument literally, or --target to focus an element first. Two transports via --via: post-message (default, HWND-targeted) or send-input (OS-wide); both are subject to UIPI. For per-keystroke KeyDown on typed text (e.g. a WinUI 3/WPF TextBox), use --via send-input.
 
 #### Arguments
 <!-- auto-generated from cli-schema.json -->
@@ -480,12 +481,12 @@ Send synthetic keyboard input to a window. Supports named keys (down, enter, tab
 <!-- auto-generated from cli-schema.json -->
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--allow-system-keys` | Allow synthesizing system-/shell-reserved combos (win+<key>, alt+f4, alt+tab, ctrl+esc, …) via --via send-input, which are refused by default because they act on the OS/shell beyond the target app. Opt in to drive global hotkeys (e.g. PowerToys' win+shift+v, win+r). No effect on --via post-message (already window-scoped; a warning is emitted if set without send-input). Note: any Win-modified L chord (including win+shift+l) stays blocked even with this flag because Windows lock handling may still invoke LockWorkStation(), which is unrecoverable from automation. Windows still blocks secure sequences such as ctrl+alt+del (SAS) from injected input regardless of this flag. | (none) |
+| `--allow-system-keys` | Allow synthesizing system-/shell-reserved combos (win+<key>, alt+f4, alt+tab, ctrl+esc, …) via --via send-input, which are refused by default because they act on the OS/shell beyond the target app. Opt in to drive global hotkeys (e.g. PowerToys' win+shift+v, win+r). No effect on --via post-message (already window-scoped; a warning is emitted if set without send-input). Note: any Win-modified L chord (including win+shift+l) stays blocked even with this flag because Windows lock handling may still invoke LockWorkStation(), which is unrecoverable from automation. This command does not call SendSAS: SendInput cannot synthesize ctrl+alt+del (SAS), while software SAS requires a specially configured service or signed uiAccess app plus Windows policy support. | (none) |
 | `--app` | Target app (process name, window title, or PID). Lists windows if ambiguous. | (none) |
 | `--json` | Format output as JSON | (none) |
 | `--target` | Optional selector (slug or text) to focus before sending keys. | (none) |
 | `--verbatim` | Type the entire keys argument as literal text — no named-key, combo, or vk= interpretation, and exact whitespace preserved. The whole-argument form of the per-token text= escape: --verbatim "down down enter" types the words instead of pressing Down, Down, Enter. | (none) |
-| `--via` | Transport: post-message (default, HWND-targeted, bypasses UIPI; typed text raises TextChanged but not a per-character KeyDown) or send-input (OS-wide; typed text raises a real per-character KeyDown + TextChanged). Named keys and combos raise KeyDown on both, but keyboard accelerators/shortcuts (KeyboardAccelerator, e.g. ctrl+t) only fire via send-input. | `post-message` |
+| `--via` | Transport: post-message (default, HWND-targeted and subject to UIPI; typed text raises TextChanged but not a per-character KeyDown) or send-input (OS-wide; typed text raises a real per-character KeyDown + TextChanged; also subject to UIPI). Both can target only equal- or lower-integrity processes. Named keys and combos raise KeyDown on both, but keyboard accelerators/shortcuts (KeyboardAccelerator, e.g. ctrl+t) only fire via send-input. | `post-message` |
 | `--window` | Target window by HWND (stable handle from list output). Takes precedence over --app. | (none) |
 
 ### `winapp ui set-value`

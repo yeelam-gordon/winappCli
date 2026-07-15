@@ -46,6 +46,7 @@ public class KeyStringParserTests
         var chord = (KeyChord)actions[0];
         CollectionAssert.AreEqual(new ushort[] { 0x11, 0x10 }, chord.Modifiers.ToArray()); // CONTROL, SHIFT
         Assert.AreEqual(0x41, chord.Vk); // 'A'
+        Assert.AreEqual("a", chord.SemanticKey);
     }
 
     [TestMethod]
@@ -208,6 +209,22 @@ public class KeyStringParserTests
     {
         var chord = (KeyChord)KeyStringParser.Parse($"{alias}+a")[0];
         CollectionAssert.AreEqual(new ushort[] { 0x5B }, chord.Modifiers.ToArray()); // VK_LWIN
+    }
+
+    [TestMethod]
+    [DataRow("lshift", (ushort)0xA0)]
+    [DataRow("rshift", (ushort)0xA1)]
+    [DataRow("lctrl", (ushort)0xA2)]
+    [DataRow("rctrl", (ushort)0xA3)]
+    [DataRow("lalt", (ushort)0xA4)]
+    [DataRow("ralt", (ushort)0xA5)]
+    [DataRow("lwin", (ushort)0x5B)]
+    [DataRow("rwin", (ushort)0x5C)]
+    public void Parse_SidedModifierAliases_PreserveRequestedVirtualKey(string alias, ushort expected)
+    {
+        var chord = (KeyChord)KeyStringParser.Parse($"{alias}+a")[0];
+        Assert.AreEqual(1, chord.Modifiers.Count);
+        Assert.AreEqual(expected, chord.Modifiers[0]);
     }
 
     [TestMethod]
@@ -522,4 +539,3 @@ public class KeyStringParserTests
         Assert.ThrowsExactly<FormatException>(() => KeyStringParser.ParseVerbatim(keys));
     }
 }
-
