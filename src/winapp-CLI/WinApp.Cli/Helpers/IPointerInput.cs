@@ -3,7 +3,10 @@
 
 namespace WinApp.Cli.Helpers;
 
-/// <summary>A single point in app/screen pixel space (the same space <c>ui inspect</c> reports).</summary>
+/// <summary>
+/// A signed point in physical virtual-screen pixel space (the same space <c>ui inspect</c> reports).
+/// Coordinates may be negative on monitors left of or above the primary display.
+/// </summary>
 internal readonly record struct PointerPoint(int X, int Y);
 
 /// <summary>

@@ -2766,7 +2766,7 @@
           }
         },
         "pen": {
-          "description": "Inject synthetic pen/stylus input using the Windows synthetic-pointer API. Taps or draws ink strokes with configurable pressure, tilt and eraser mode, at an element's center or explicit app x,y coordinates. Requires an unlocked, interactive desktop with the target window foregroundable (Windows 10 1809+).",
+          "description": "Inject synthetic pen/stylus input using the Windows synthetic-pointer API. Taps or draws ink strokes with configurable pressure, tilt and eraser mode, at an element's center or explicit physical screen x,y coordinates. Requires an unlocked, interactive desktop with the target window foregroundable (Windows 10 1809+).",
           "hidden": false,
           "arguments": {
             "selector": {
@@ -2798,7 +2798,7 @@
               "recursive": false
             },
             "--at": {
-              "description": "Pen contact point as app coordinates x,y (as reported by 'ui inspect'). Defaults to the selector's element center. Ignored when --path is given.",
+              "description": "Pen contact point as signed physical screen coordinates x,y (as reported by 'ui inspect'; values may be negative on secondary monitors). Defaults to the selector's element center. Ignored when --path is given.",
               "hidden": false,
               "valueType": "System.String",
               "hasDefaultValue": false,
@@ -2823,7 +2823,7 @@
               "recursive": false
             },
             "--eraser": {
-              "description": "Use the eraser end of the pen instead of the tip.",
+              "description": "Activate the pen eraser affordance instead of the normal tip.",
               "hidden": false,
               "valueType": "System.Boolean",
               "hasDefaultValue": true,
@@ -2849,7 +2849,7 @@
               "recursive": false
             },
             "--path": {
-              "description": "Ink stroke path as a whitespace-separated list of x,y pairs, e.g. \"10,10 20,30 40,50\".",
+              "description": "Ink stroke path as whitespace-separated signed physical screen x,y pairs, e.g. \"10,10 20,30 40,50\".",
               "hidden": false,
               "valueType": "System.String",
               "hasDefaultValue": false,
@@ -2861,7 +2861,7 @@
               "recursive": false
             },
             "--pressure": {
-              "description": "Pen pressure from 0.0 to 1.0 (default: 0.5).",
+              "description": "Pen pressure from 0.0 to 1.0 using '.' as the decimal separator (default: 0.5).",
               "hidden": false,
               "valueType": "System.Single",
               "hasDefaultValue": true,
@@ -3733,7 +3733,7 @@
           }
         },
         "touch": {
-          "description": "Inject synthetic touch input using the Windows touch-injection API. Supports tap, double-tap, long-press, swipe, pinch and stretch gestures at an element's center or explicit app x,y coordinates. Requires an unlocked, interactive desktop with the target window foregroundable.",
+          "description": "Inject synthetic touch input using the Windows touch-injection API. Supports tap, double-tap, long-press, swipe, pinch and stretch gestures at an element's center or explicit physical screen x,y coordinates. Requires an unlocked, interactive desktop with the target window foregroundable.",
           "hidden": false,
           "arguments": {
             "selector": {
@@ -3765,7 +3765,7 @@
               "recursive": false
             },
             "--at": {
-              "description": "Explicit start point as app coordinates x,y (as reported by 'ui inspect'). Defaults to the selector's element center.",
+              "description": "Explicit start point as signed physical screen coordinates x,y (as reported by 'ui inspect'; values may be negative on secondary monitors). Defaults to the selector's element center.",
               "hidden": false,
               "valueType": "System.String",
               "hasDefaultValue": false,
@@ -3887,7 +3887,7 @@
               "recursive": false
             },
             "--to-point": {
-              "description": "End point x,y for a swipe (app coordinates). Takes precedence over --direction.",
+              "description": "End point x,y for a swipe (signed physical screen coordinates). Takes precedence over --direction.",
               "hidden": false,
               "valueType": "System.String",
               "hasDefaultValue": false,

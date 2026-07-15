@@ -870,17 +870,17 @@ export interface UiPenOptions extends CommonOptions {
   selector?: string;
   /** Target app (process name, window title, or PID). Lists windows if ambiguous. */
   app?: string;
-  /** Pen contact point as app coordinates x,y (as reported by 'ui inspect'). Defaults to the selector's element center. Ignored when --path is given. */
+  /** Pen contact point as signed physical screen coordinates x,y (as reported by 'ui inspect'; values may be negative on secondary monitors). Defaults to the selector's element center. Ignored when --path is given. */
   at?: string;
   /** Total glide time in milliseconds distributed across the stroke path segments (default: ~10 ms per segment). */
   durationMs?: number;
-  /** Use the eraser end of the pen instead of the tip. */
+  /** Activate the pen eraser affordance instead of the normal tip. */
   eraser?: boolean;
   /** Format output as JSON */
   json?: boolean;
-  /** Ink stroke path as a whitespace-separated list of x,y pairs, e.g. "10,10 20,30 40,50". */
+  /** Ink stroke path as whitespace-separated signed physical screen x,y pairs, e.g. "10,10 20,30 40,50". */
   path?: string;
-  /** Pen pressure from 0.0 to 1.0 (default: 0.5). */
+  /** Pen pressure from 0.0 to 1.0 using '.' as the decimal separator (default: 0.5). */
   pressure?: number;
   /** Pen tilt along the x-axis in degrees (-90 to 90, default: 0). */
   tiltX?: number;
@@ -891,7 +891,7 @@ export interface UiPenOptions extends CommonOptions {
 }
 
 /**
- * Inject synthetic pen/stylus input using the Windows synthetic-pointer API. Taps or draws ink strokes with configurable pressure, tilt and eraser mode, at an element's center or explicit app x,y coordinates. Requires an unlocked, interactive desktop with the target window foregroundable (Windows 10 1809+).
+ * Inject synthetic pen/stylus input using the Windows synthetic-pointer API. Taps or draws ink strokes with configurable pressure, tilt and eraser mode, at an element's center or explicit physical screen x,y coordinates. Requires an unlocked, interactive desktop with the target window foregroundable (Windows 10 1809+).
  */
 export async function uiPen(options: UiPenOptions = {}): Promise<WinappResult> {
   const args: string[] = ['ui', 'pen'];
@@ -1137,7 +1137,7 @@ export interface UiTouchOptions extends CommonOptions {
   selector?: string;
   /** Target app (process name, window title, or PID). Lists windows if ambiguous. */
   app?: string;
-  /** Explicit start point as app coordinates x,y (as reported by 'ui inspect'). Defaults to the selector's element center. */
+  /** Explicit start point as signed physical screen coordinates x,y (as reported by 'ui inspect'; values may be negative on secondary monitors). Defaults to the selector's element center. */
   at?: string;
   /** Swipe direction: right (default), left, up, or down. Combined with --distance to compute the end point when --to-point is not given. */
   direction?: string;
@@ -1153,14 +1153,14 @@ export interface UiTouchOptions extends CommonOptions {
   holdMs?: number;
   /** Format output as JSON */
   json?: boolean;
-  /** End point x,y for a swipe (app coordinates). Takes precedence over --direction. */
+  /** End point x,y for a swipe (signed physical screen coordinates). Takes precedence over --direction. */
   toPoint?: string;
   /** Target window by HWND (stable handle from list output). Takes precedence over --app. */
   window?: number;
 }
 
 /**
- * Inject synthetic touch input using the Windows touch-injection API. Supports tap, double-tap, long-press, swipe, pinch and stretch gestures at an element's center or explicit app x,y coordinates. Requires an unlocked, interactive desktop with the target window foregroundable.
+ * Inject synthetic touch input using the Windows touch-injection API. Supports tap, double-tap, long-press, swipe, pinch and stretch gestures at an element's center or explicit physical screen x,y coordinates. Requires an unlocked, interactive desktop with the target window foregroundable.
  */
 export async function uiTouch(options: UiTouchOptions = {}): Promise<WinappResult> {
   const args: string[] = ['ui', 'touch'];

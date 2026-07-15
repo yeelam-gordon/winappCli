@@ -19,9 +19,8 @@ internal static class PointerGesturePlanner
     private const int PinchCenterGapPx = 4;
 
     /// <summary>
-    /// Maximum simultaneous touch contacts the pointer-injection subsystem supports
-    /// (<c>MAX_TOUCH_COUNT</c> / the count registered with <c>InitializeTouchInjection</c>).
-    /// <c>ui touch --fingers</c> is rejected above this.
+    /// Maximum simultaneous touch contacts supported by this CLI and registered with both injection
+    /// paths. <c>ui touch --fingers</c> is rejected above this compatibility limit.
     /// </summary>
     public const int MaxContacts = 10;
 
@@ -44,7 +43,8 @@ internal static class PointerGesturePlanner
     }
 
     /// <summary>
-    /// Parses a single <c>x,y</c> integer pair (app coordinates as reported by <c>ui inspect</c>).
+    /// Parses a single signed <c>x,y</c> integer pair in physical virtual-screen pixels, as reported by
+    /// <c>ui inspect</c>. Coordinates can be negative on monitors left of or above the primary display.
     /// </summary>
     public static bool TryParsePoint(string? value, out PointerPoint point)
     {
@@ -119,7 +119,10 @@ internal static class PointerGesturePlanner
                 for (int i = 0; i < count; i++)
                 {
                     int dy = i * FingerSpacingPx;
-                    contactPaths.Add([new PointerPoint(start.X, start.Y + dy), new PointerPoint(to.X, to.Y + dy)]);
+                    contactPaths.Add([
+                        new PointerPoint(start.X, checked(start.Y + dy)),
+                        new PointerPoint(to.X, checked(to.Y + dy))
+                    ]);
                 }
                 break;
             }
@@ -131,10 +134,10 @@ internal static class PointerGesturePlanner
 
                 // Two opposing fingers along the x-axis. Pinch converges toward the center; stretch
                 // diverges away from it.
-                var leftApart = new PointerPoint(start.X - half, start.Y);
-                var rightApart = new PointerPoint(start.X + half, start.Y);
-                var leftNear = new PointerPoint(start.X - PinchCenterGapPx, start.Y);
-                var rightNear = new PointerPoint(start.X + PinchCenterGapPx, start.Y);
+                var leftApart = new PointerPoint(checked(start.X - half), start.Y);
+                var rightApart = new PointerPoint(checked(start.X + half), start.Y);
+                var leftNear = new PointerPoint(checked(start.X - PinchCenterGapPx), start.Y);
+                var rightNear = new PointerPoint(checked(start.X + PinchCenterGapPx), start.Y);
 
                 if (gesture == TouchGesture.Pinch)
                 {
@@ -157,7 +160,7 @@ internal static class PointerGesturePlanner
                 int count = Math.Max(1, fingers);
                 for (int i = 0; i < count; i++)
                 {
-                    contactPaths.Add([new PointerPoint(start.X + i * FingerSpacingPx, start.Y)]);
+                    contactPaths.Add([new PointerPoint(checked(start.X + i * FingerSpacingPx), start.Y)]);
                 }
                 break;
             }
@@ -180,10 +183,10 @@ internal static class PointerGesturePlanner
     {
         return (direction ?? "right").ToLowerInvariant() switch
         {
-            "left"  => new PointerPoint(start.X - distance, start.Y),
-            "up"    => new PointerPoint(start.X, start.Y - distance),
-            "down"  => new PointerPoint(start.X, start.Y + distance),
-            _       => new PointerPoint(start.X + distance, start.Y), // "right" + default
+            "left"  => new PointerPoint(checked(start.X - distance), start.Y),
+            "up"    => new PointerPoint(start.X, checked(start.Y - distance)),
+            "down"  => new PointerPoint(start.X, checked(start.Y + distance)),
+            _       => new PointerPoint(checked(start.X + distance), start.Y), // "right" + default
         };
     }
 }

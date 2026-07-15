@@ -4,6 +4,7 @@
 using System.CommandLine;
 using System.CommandLine.Invocation;
 using System.CommandLine.Parsing;
+using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
@@ -19,18 +20,21 @@ internal class UiPenCommand : Command, IShortDescription
 
     public static Option<string?> AtOption { get; } = new("--at")
     {
-        Description = "Pen contact point as app coordinates x,y (as reported by 'ui inspect'). " +
-                      "Defaults to the selector's element center. Ignored when --path is given."
+        Description = "Pen contact point as signed physical screen coordinates x,y (as reported by " +
+                      "'ui inspect'; values may be negative on secondary monitors). Defaults to the " +
+                      "selector's element center. Ignored when --path is given."
     };
 
     public static Option<string?> PathOption { get; } = new("--path")
     {
-        Description = "Ink stroke path as a whitespace-separated list of x,y pairs, e.g. \"10,10 20,30 40,50\"."
+        Description = "Ink stroke path as whitespace-separated signed physical screen x,y pairs, " +
+                      "e.g. \"10,10 20,30 40,50\"."
     };
 
     public static Option<float> PressureOption { get; } = new("--pressure")
     {
-        Description = "Pen pressure from 0.0 to 1.0 (default: 0.5).",
+        Description = "Pen pressure from 0.0 to 1.0 using '.' as the decimal separator (default: 0.5).",
+        CustomParser = ParsePressure,
         DefaultValueFactory = _ => 0.5f
     };
 
@@ -48,7 +52,7 @@ internal class UiPenCommand : Command, IShortDescription
 
     public static Option<bool> EraserOption { get; } = new("--eraser")
     {
-        Description = "Use the eraser end of the pen instead of the tip."
+        Description = "Activate the pen eraser affordance instead of the normal tip."
     };
 
     public static Option<int> DurationOption { get; } = new("--duration-ms")
@@ -60,7 +64,7 @@ internal class UiPenCommand : Command, IShortDescription
     public UiPenCommand()
         : base("pen", "Inject synthetic pen/stylus input using the Windows synthetic-pointer API. " +
                "Taps or draws ink strokes with configurable pressure, tilt and eraser mode, at an element's " +
-               "center or explicit app x,y coordinates. Requires an unlocked, interactive desktop with the " +
+               "center or explicit physical screen x,y coordinates. Requires an unlocked, interactive desktop with the " +
                "target window foregroundable (Windows 10 1809+).")
     {
         Arguments.Add(SharedUiOptions.SelectorArgument);
@@ -74,6 +78,21 @@ internal class UiPenCommand : Command, IShortDescription
         Options.Add(EraserOption);
         Options.Add(DurationOption);
         Options.Add(WinAppRootCommand.JsonOption);
+    }
+
+    private static float ParsePressure(ArgumentResult result)
+    {
+        var token = result.Tokens.Count == 1 ? result.Tokens[0].Value : null;
+        if (token is not null
+            && float.TryParse(token, NumberStyles.Float, CultureInfo.InvariantCulture, out var pressure)
+            && float.IsFinite(pressure))
+        {
+            return pressure;
+        }
+
+        result.AddError(
+            $"--pressure must be a finite number using '.' as the decimal separator. Got '{token ?? string.Empty}'.");
+        return float.NaN;
     }
 
     public class Handler(

@@ -7,7 +7,7 @@
 
 ## Prerequisites
 - For UIA mode (any app): No setup needed — works with any running Windows app
-- For input-injecting verbs (`click`, `hover`, `drag`, `touch`, `pen`, `scroll --wheel`, `send-keys --via send-input`): an **unlocked, interactive desktop** with the target window foregroundable. On a locked/secure desktop they fail fast with `no_interactive_desktop`. The UIA-pattern verbs (`inspect`, `search`, `get-*`, `wait-for`, `set-value`, `invoke`, `scroll --direction/--to`, `screenshot`) are headless/locked-session friendly — prefer them in CI.
+- For input-injecting verbs (`click`, `hover`, `drag`, `touch`, `pen`, `scroll --wheel`, `send-keys --via send-input`): the **same active, unlocked interactive desktop** with the target window foregroundable. Session 0/services, cross-session targets, disconnected/noninteractive remote sessions, and locked/sign-in/UAC secure desktops are unsupported. Higher-integrity targets can require matching elevation. The UIA-pattern verbs (`inspect`, `search`, `get-*`, `wait-for`, `set-value`, `invoke`, `scroll --direction/--to`, `screenshot`) are headless/locked-session friendly — prefer them in CI.
 
 ## Common patterns
 
@@ -153,9 +153,9 @@ winapp ui drag itm-card-9f8e itm-trash-0001 -a myapp --right
 - A selector drags from/to the element's center; `x,y` are app coordinates in the same space `ui inspect`/`search` report. Element endpoints are re-resolved just before the drag and fail with `target_moved` if still animating; on a locked/secure desktop the drag fails with `no_interactive_desktop`.
 
 ### Touch gestures (tap, swipe, pinch, stretch, long-press)
-Inject synthetic touch. The contact anchor is an element selector (its center) or an explicit `--at x,y` app coordinate. Prefers the modern synthetic-pointer device and falls back to the legacy touch-injection API.
+Inject synthetic touch. The contact anchor is an element selector (its center) or explicit signed physical screen coordinates via `--at x,y`; values can be negative on monitors left of or above the primary display. Prefers the modern synthetic-pointer device and falls back to the legacy touch-injection API.
 ```powershell
-# Tap an element center; or tap explicit app coordinates
+# Tap an element center; or tap explicit physical screen coordinates
 winapp ui touch btn-ok-1a2b -a myapp
 winapp ui touch -a myapp --at 320,240
 
@@ -167,9 +167,10 @@ winapp ui touch img-map-9f8e -a myapp --gesture pinch --distance 200
 winapp ui touch img-map-9f8e -a myapp --gesture stretch --distance 200
 ```
 - Gestures: `tap` (default), `double-tap`, `long-press`, `swipe`, `pinch`, `stretch`. Long-press defaults to a 500 ms hold when `--hold-ms` is omitted. For swipe, use `--to-point` or combine `--direction` with `--distance`; `--duration-ms` controls glide time. `--fingers` accepts 1–10 (pinch/stretch always 2). Refuses without a non-zero foregrounded target (`no_target`/`foreground_not_target`/`no_interactive_desktop`); every coordinate is bounds-checked against the target window and rejected with `invalid_arguments` if outside. If injected touch is unsupported on the device, the command surfaces the real Win32 error rather than a false success.
+- Portability: modern touch and all pen injection require Windows 10 1809+; touch can use its legacy fallback when available. x64 and ARM64 NativeAOT builds use the same signed physical-pixel coordinates (not DIPs), so derive points from `ui inspect` on the target monitor. Keep display topology stable. Timing options are scheduling targets and can run late under load. Mouse handedness does not remap touch/pen coordinates, but app/Windows gesture settings can affect recognition. On a mid-gesture failure, winapp best-effort cancels at the last accepted point; the non-zero exit still means delivery is unconfirmed. In JSON automation, key on stable `error.code` and numeric `Win32 error N`, not the localized Win32 message text.
 
 ### Pen / stylus (taps and ink strokes)
-Inject synthetic pen input (Windows 10 1809+). Target an element center, an explicit `--at`, or a full `--path` ink stroke, with pressure/tilt/eraser control.
+Inject synthetic pen input (Windows 10 1809+). Target an element center, explicit signed physical screen coordinates via `--at`, or a full `--path` ink stroke, with pressure/tilt/eraser control.
 ```powershell
 # Pen tap at element center; firm tap at explicit coords
 winapp ui pen canvas-1a2b -a myapp
@@ -179,7 +180,7 @@ winapp ui pen -a myapp --at 320,240 --pressure 0.8
 winapp ui pen -a myapp --path "100,100 150,120 210,140 260,120" --duration-ms 800
 winapp ui pen -a myapp --path "100,100 260,100" --eraser
 ```
-- `--pressure` 0.0–1.0, `--tilt-x`/`--tilt-y` ±90°, `--eraser` for the eraser end. `--duration-ms` sets total stroke travel time; omitting it uses about 10 ms per path segment. Same injection safety as `touch`: requires a non-zero foregrounded target window and bounds-checks every ink point (out-of-bounds → `invalid_arguments`, nothing injected).
+- `--pressure` 0.0–1.0 using `.` as the locale-independent decimal separator, `--tilt-x`/`--tilt-y` ±90°, `--eraser` to activate the eraser affordance. `--duration-ms` sets total stroke travel time; omitting it uses about 10 ms per path segment. Same injection safety and portability constraints as `touch`: requires a non-zero foregrounded target window and bounds-checks every ink point (out-of-bounds → `invalid_arguments`, nothing injected).
 
 ### Read element state
 ```powershell

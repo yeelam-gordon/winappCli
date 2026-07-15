@@ -210,6 +210,33 @@ public class PointerGesturePlannerTests
         Assert.IsTrue(oob.Value.X >= 800, "The detected OOB point must be at or past the right edge");
     }
 
+    [TestMethod]
+    public void FirstOutOfBounds_NegativeVirtualScreenRect_AcceptsPointsInsideSecondaryMonitor()
+    {
+        var rect = new PointerRect(-1920, -200, 0, 1080);
+        var points = new[]
+        {
+            new PointerPoint(-1920, -200),
+            new PointerPoint(-1500, 300),
+            new PointerPoint(-1, 1079),
+        };
+
+        Assert.IsNull(PointerGesturePlanner.FirstOutOfBounds(rect, points),
+            "Signed coordinates inside a monitor left of or above the primary display must be accepted");
+    }
+
+    [TestMethod]
+    public void PlanTouch_GeneratedCoordinateOverflow_ThrowsInsteadOfWrapping()
+    {
+        Assert.ThrowsExactly<OverflowException>(() => PointerGesturePlanner.PlanTouch(
+            TouchGesture.Swipe,
+            new PointerPoint(int.MaxValue, 100),
+            end: null,
+            distance: 1,
+            fingers: 1,
+            direction: "right"));
+    }
+
     // -------------------------------------------------------------------------
     // Double-tap path structure (repetition is in PointerInput.RunTouchGesture)
     // -------------------------------------------------------------------------

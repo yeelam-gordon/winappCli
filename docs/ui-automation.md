@@ -286,10 +286,10 @@ winapp ui drag itm-card-9f8e pane-left-2c1a -a myapp --dwell-ms 350      # settl
 > Like `send-keys --via send-input`, `drag` injects OS-wide at screen coordinates after bringing the target to the foreground. If focus can't be brought to the target (e.g. focus-stealing prevention from a background process), the command **fails (`foreground_not_target`)** rather than dragging on the wrong window — focus or click the window first. On a locked/secure desktop it fails with **`no_interactive_desktop`**. Each element endpoint is **re-resolved immediately before the drag**; if it's still moving/resizing (an animating target), the command fails with **`target_moved`** instead of dragging to a stale point. (Bare `x,y` endpoints can't be re-verified, so they're used as-is.)
 
 ### touch
-Inject synthetic **touch** gestures using the Windows pointer-injection API. The contact anchor is either an **element selector** (uses the element's center) or an explicit **app coordinate `x,y`** via `--at` (same space `winapp ui inspect` reports). Use it for tap/press interactions and multi-touch gestures that mouse simulation can't express.
+Inject synthetic **touch** gestures using the Windows pointer-injection API. The contact anchor is either an **element selector** (uses the element's center) or explicit signed **physical screen coordinates `x,y`** via `--at` (the same virtual-screen space `winapp ui inspect` reports). Coordinates can be negative on monitors left of or above the primary display. Use it for tap/press interactions and multi-touch gestures that mouse simulation can't express.
 ```bash
 winapp ui touch btn-ok-1a2b -a myapp                                   # tap at the element center
-winapp ui touch -a myapp --at 320,240                                  # tap at explicit app coords
+winapp ui touch -a myapp --at 320,240                                  # tap at explicit physical screen coords
 winapp ui touch tile-photo-7b3c -a myapp --gesture long-press --hold-ms 600
 winapp ui touch -a myapp --at 100,300 --gesture swipe --to-point 400,300
 winapp ui touch img-map-9f8e -a myapp --gesture pinch --distance 200    # pinch-to-zoom out (2 fingers)
@@ -298,8 +298,8 @@ winapp ui touch img-map-9f8e -a myapp --gesture stretch --distance 200  # stretc
 
 **Options:**
 - `--gesture <g>` — `tap` (default), `double-tap`, `long-press`, `swipe`, `pinch`, `stretch`.
-- `--at <x,y>` — Explicit start point (app coordinates). Defaults to the selector's element center.
-- `--to-point <x,y>` — End point for a `swipe`. Takes precedence over `--direction`.
+- `--at <x,y>` — Explicit start point (signed physical screen coordinates). Defaults to the selector's element center.
+- `--to-point <x,y>` — End point for a `swipe` in signed physical screen coordinates. Takes precedence over `--direction`.
 - `--direction <right|left|up|down>` — Swipe direction (default: `right`). Combined with `--distance` to compute the end point when `--to-point` is not given.
 - `--distance <px>` — Finger spread for `pinch`/`stretch`, or swipe distance in pixels.
 - `--hold-ms <ms>` — Hold contacts down before lifting (long-press hold time; defaults to 500 ms for `long-press` when not set).
@@ -309,6 +309,14 @@ winapp ui touch img-map-9f8e -a myapp --gesture stretch --distance 200  # stretc
 > **Injection safety.** `touch` refuses to inject unless a **non-zero target window handle** resolves and that window holds the foreground — it fails with **`no_target`** when no window can be resolved, **`foreground_not_target`** if focus couldn't be transferred, or **`no_interactive_desktop`** on a locked/secure desktop. Every coordinate (element center, explicit `--at`/`--to-point`, and generated waypoints) is **bounds-checked against the target window rectangle**; a point outside the window is rejected with **`invalid_arguments`** and nothing is injected. `--fingers` above 10 is rejected up front.
 >
 > **Hardware note.** Touch prefers the modern synthetic-pointer device (`CreateSyntheticPointerDevice(PT_TOUCH)`) and falls back to the legacy `InitializeTouchInjection`/`InjectTouchInput` API. If injection is unsupported on the current device/session, the command surfaces the **actual Win32 error code** (e.g. "unsupported") rather than reporting a false success — treat a non-zero exit as "touch not delivered".
+>
+> **Portability and environment.** The preferred touch path and all pen injection require Windows 10 1809+; touch can use its legacy fallback when the running CLI/OS supports it. The x64 and ARM64 NativeAOT binaries use the same signed physical-pixel coordinate contract. Distances are physical pixels, not DIPs, so derive points from `ui inspect` on the target monitor when DPI/scaling differs. Keep the display topology stable during a gesture.
+>
+> Touch and pen inject only into the **same active, unlocked interactive desktop**. Session 0/services, cross-session targets, locked/sign-in/UAC secure desktops, and disconnected/noninteractive remote sessions are unsupported. A higher-integrity target can require winapp to run at matching elevation; the UAC secure desktop remains unsupported at any elevation. Mouse handedness does not remap touch/pen coordinates, while the target app and Windows gesture recognizer can still apply their own pen/touch settings.
+>
+> `--hold-ms` and `--duration-ms` are scheduling targets, not real-time guarantees: system load can delay frames or collapse overdue waits. For automation, branch on stable JSON `error.code` values and the numeric `Win32 error N`; the OS-provided Win32 message suffix can vary by display language.
+>
+> If a frame fails after contact begins, winapp sends a best-effort canceled UP at the last accepted point (and destroys a synthetic device when used). The command still exits non-zero: do not assume the target action completed, and retry only after verifying UI state.
 
 ### pen
 Inject synthetic **pen/stylus** input — taps and ink strokes — using the Windows synthetic-pointer API (`CreateSyntheticPointerDevice(PT_PEN)`; Windows 10 1809+). Target an element center, an explicit `--at` point, or a full `--path` ink stroke.
@@ -321,14 +329,16 @@ winapp ui pen -a myapp --at 200,200 --tilt-x 30 --tilt-y -15           # tilted 
 ```
 
 **Options:**
-- `--at <x,y>` — Pen contact point (app coordinates). Defaults to the selector's element center. Ignored when `--path` is given.
-- `--path "<x,y x,y …>"` — Ink stroke path as whitespace-separated `x,y` pairs (a one-point path is a tap).
-- `--pressure <0.0–1.0>` — Pen pressure (default 0.5).
+- `--at <x,y>` — Pen contact point (signed physical screen coordinates). Defaults to the selector's element center. Ignored when `--path` is given.
+- `--path "<x,y x,y …>"` — Ink stroke path as whitespace-separated signed physical screen `x,y` pairs (a one-point path is a tap).
+- `--pressure <0.0–1.0>` — Pen pressure using `.` as the locale-independent decimal separator (default 0.5).
 - `--tilt-x <deg>` / `--tilt-y <deg>` — Pen tilt angles, −90 to 90 (default 0).
-- `--eraser` — Use the eraser end of the pen instead of the tip.
+- `--eraser` — Activate the pen eraser affordance instead of the normal tip.
 - `--duration-ms <ms>` — Total stroke travel time in milliseconds distributed as interpolated UPDATE frames across the path (default: ~10 ms per path segment). Use this to control how fast the pen visibly moves from start to end.
 
 > **Injection safety.** Like `touch`, `pen` refuses to inject without a **non-zero, foregrounded target window** (`no_target` / `foreground_not_target` / `no_interactive_desktop`) and **bounds-checks every ink point** against the target window rectangle, rejecting out-of-bounds coordinates with **`invalid_arguments`** before any input is injected. Invalid `--pressure` (outside 0.0–1.0) or tilt (outside ±90°) are rejected up front.
+>
+> The touch section's physical-pixel, multi-monitor, timing, session, integrity, architecture, and locale constraints apply equally to pen. Live delivery still depends on the target app accepting synthetic pen input.
 
 ### hover
 Move the mouse to an element's center to trigger hover effects (tooltips, flyouts, visual states). Uses `SendInput` for realistic mouse movement with a small wiggle, then waits for a configurable dwell time.

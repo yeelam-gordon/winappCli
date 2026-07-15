@@ -21,7 +21,10 @@ namespace WinApp.Cli.Helpers;
 /// </summary>
 internal static class PointerInput
 {
-    /// <summary>Maximum simultaneous touch contacts we register with the injection subsystem.</summary>
+    /// <summary>
+    /// Maximum simultaneous touch contacts supported by this CLI. This intentionally matches the
+    /// ten-contact configuration used for both the synthetic and legacy injection paths.
+    /// </summary>
     private const uint MaxContacts = 10;
 
     /// <summary>Pen pressure range used by the pointer APIs (0..1024).</summary>
@@ -218,11 +221,13 @@ internal static class PointerInput
     {
         int count = contactPaths.Count;
         var contacts = new POINTER_TOUCH_INFO[count];
+        var lastSentPoints = new PointerPoint[count];
 
         // --- Press down ---
         for (int i = 0; i < count; i++)
         {
             var start = contactPaths[i][0];
+            lastSentPoints[i] = start;
             contacts[i] = MakeContact(
                 (uint)i, start.X, start.Y,
                 POINTER_FLAGS.POINTER_FLAG_DOWN | POINTER_FLAGS.POINTER_FLAG_INRANGE | POINTER_FLAGS.POINTER_FLAG_INCONTACT,
@@ -290,6 +295,12 @@ internal static class PointerInput
                                 primary: i == 0);
                         }
                         send(contacts);
+                        for (int i = 0; i < count; i++)
+                        {
+                            lastSentPoints[i] = new PointerPoint(
+                                contacts[i].pointerInfo.ptPixelLocation.X,
+                                contacts[i].pointerInfo.ptPixelLocation.Y);
+                        }
                     }, sleepFn, nowFn);
                 }
                 else
@@ -308,6 +319,12 @@ internal static class PointerInput
                                 primary: i == 0);
                         }
                         send(contacts);
+                        for (int i = 0; i < count; i++)
+                        {
+                            lastSentPoints[i] = new PointerPoint(
+                                contacts[i].pointerInfo.ptPixelLocation.X,
+                                contacts[i].pointerInfo.ptPixelLocation.Y);
+                        }
                     }
                 }
             }
@@ -316,7 +333,7 @@ internal static class PointerInput
             //     may be stuck and the command exits non-zero with a structured error. ---
             for (int i = 0; i < count; i++)
             {
-                var last = contactPaths[i][^1];
+                var last = lastSentPoints[i];
                 contacts[i] = MakeContact((uint)i, last.X, last.Y, POINTER_FLAGS.POINTER_FLAG_UP, primary: i == 0);
             }
             send(contacts);
@@ -324,16 +341,20 @@ internal static class PointerInput
         }
         finally
         {
-            // Best-effort lift when unwinding from an earlier exception (hold/glide frame failed).
-            // Swallowing here avoids masking the original, more-informative exception.
+            // Best-effort cancellation when unwinding from an earlier exception. The touch API
+            // requires an UP to reuse the most recently accepted location; jumping directly to the
+            // planned endpoint can reject the cleanup frame and leave the contact active.
             if (!released)
             {
                 try
                 {
                     for (int i = 0; i < count; i++)
                     {
-                        var last = contactPaths[i][^1];
-                        contacts[i] = MakeContact((uint)i, last.X, last.Y, POINTER_FLAGS.POINTER_FLAG_UP, primary: i == 0);
+                        var last = lastSentPoints[i];
+                        contacts[i] = MakeContact(
+                            (uint)i, last.X, last.Y,
+                            POINTER_FLAGS.POINTER_FLAG_UP | POINTER_FLAGS.POINTER_FLAG_CANCELED,
+                            primary: i == 0);
                     }
                     send(contacts);
                 }
@@ -376,8 +397,8 @@ internal static class PointerInput
                     int err = Marshal.GetLastPInvokeError();
                     throw new InvalidOperationException(
                         $"InjectTouchInput failed (Win32 error {err}: {Win32Message(err)}) — touch injection " +
-                        "failed or is unsupported on this desktop. The target may be elevated (run this CLI " +
-                        "as administrator), the desktop may be locked, or injected touch may not be supported here.");
+                        "failed or is unsupported on this desktop. Run winapp at matching elevation with the " +
+                        "target on the same unlocked interactive desktop.");
                 }
             }
         }
@@ -405,8 +426,8 @@ internal static class PointerInput
                     int err = Marshal.GetLastPInvokeError();
                     throw new InvalidOperationException(
                         $"InjectSyntheticPointerInput (touch) failed (Win32 error {err}: {Win32Message(err)}) — " +
-                        "touch injection failed on this desktop. The target may be elevated (run this CLI as " +
-                        "administrator), or the desktop may be locked.");
+                        "touch injection failed. Run winapp at matching elevation with the target on the same " +
+                        "unlocked interactive desktop.");
                 }
             }
         }
@@ -478,6 +499,7 @@ internal static class PointerInput
         var first = path[0];
         send(first.X, first.Y, contactPressure,
             POINTER_FLAGS.POINTER_FLAG_DOWN | POINTER_FLAGS.POINTER_FLAG_INRANGE | POINTER_FLAGS.POINTER_FLAG_INCONTACT);
+        var lastSent = first;
 
         bool released = false;
         try
@@ -504,10 +526,11 @@ internal static class PointerInput
                         double t = step / (double)GlideSteps;
                         var from = path[segIdx];
                         var to   = path[segIdx + 1];
-                        int x = from.X + (int)Math.Round((to.X - from.X) * t);
-                        int y = from.Y + (int)Math.Round((to.Y - from.Y) * t);
+                        int x = (int)Math.Round(from.X + (((double)to.X - from.X) * t));
+                        int y = (int)Math.Round(from.Y + (((double)to.Y - from.Y) * t));
                         send(x, y, contactPressure,
                             POINTER_FLAGS.POINTER_FLAG_UPDATE | POINTER_FLAGS.POINTER_FLAG_INRANGE | POINTER_FLAGS.POINTER_FLAG_INCONTACT);
+                        lastSent = new PointerPoint(x, y);
                     }, sleepFn, nowFn);
                 }
                 else
@@ -518,24 +541,27 @@ internal static class PointerInput
                         var pt = path[i];
                         send(pt.X, pt.Y, contactPressure,
                             POINTER_FLAGS.POINTER_FLAG_UPDATE | POINTER_FLAGS.POINTER_FLAG_INRANGE | POINTER_FLAGS.POINTER_FLAG_INCONTACT);
+                        lastSent = pt;
                         Thread.Sleep(10);
                     }
                 }
             }
             // --- Lift on the normal path: let failure propagate so the caller knows the pen
             //     may be stuck and the command exits non-zero with a structured error. ---
-            var last = path[^1];
-            send(last.X, last.Y, 0, POINTER_FLAGS.POINTER_FLAG_UP);
+            send(lastSent.X, lastSent.Y, 0, POINTER_FLAGS.POINTER_FLAG_UP);
             released = true;
         }
         finally
         {
-            // Best-effort lift when unwinding from an earlier exception (glide frame failed).
+            // Best-effort cancellation at the last accepted location when a glide frame fails.
             // Swallowing here avoids masking the original, more-informative exception.
             if (!released)
             {
-                var last = path[^1];
-                try { send(last.X, last.Y, 0, POINTER_FLAGS.POINTER_FLAG_UP); }
+                try
+                {
+                    send(lastSent.X, lastSent.Y, 0,
+                        POINTER_FLAGS.POINTER_FLAG_UP | POINTER_FLAGS.POINTER_FLAG_CANCELED);
+                }
                 catch (InvalidOperationException) { }
             }
         }
@@ -573,7 +599,7 @@ internal static class PointerInput
                 int err = Marshal.GetLastPInvokeError();
                 throw new InvalidOperationException(
                     $"InjectSyntheticPointerInput (pen) failed (Win32 error {err}: {Win32Message(err)}) — the " +
-                    "target may be elevated (run this CLI as administrator) or the desktop is locked.");
+                    "target must be on the same unlocked interactive desktop; run winapp at matching elevation.");
             }
         }
     }
@@ -588,8 +614,8 @@ internal static class PointerInput
         // Treat the path as a single straight segment from first to last waypoint.
         var a = path[0];
         var b = path[^1];
-        int x = a.X + (int)Math.Round((b.X - a.X) * t);
-        int y = a.Y + (int)Math.Round((b.Y - a.Y) * t);
+        int x = (int)Math.Round(a.X + (((double)b.X - a.X) * t));
+        int y = (int)Math.Round(a.Y + (((double)b.Y - a.Y) * t));
         return (x, y);
     }
 

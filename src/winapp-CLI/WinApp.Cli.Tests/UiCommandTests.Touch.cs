@@ -244,6 +244,70 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    public async Task Touch_FingersAtMax_Accepted()
+    {
+        _fakeSession.SessionResult.WindowHandle = 6999;
+
+        var command = GetRequiredService<UiTouchCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+            ["-a", "TestApp", "--at", "100,100", "--fingers", "10", "--json"]);
+
+        Assert.AreEqual(0, exitCode);
+        Assert.AreEqual(1, _fakePointer.TouchCalls.Count);
+        Assert.AreEqual(10, _fakePointer.TouchCalls[0].ContactPaths.Count);
+    }
+
+    [TestMethod]
+    public async Task Touch_NegativeSecondaryMonitorCoordinates_Accepted()
+    {
+        _fakeSession.SessionResult.WindowHandle = 6998;
+        _fakeUia.WindowRect = new PointerRect(-1920, -200, 0, 1080);
+
+        var command = GetRequiredService<UiTouchCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+            ["-a", "TestApp", "--gesture", "swipe", "--at", "-1500,100",
+             "--direction", "left", "--distance", "100", "--json"]);
+
+        Assert.AreEqual(0, exitCode);
+        Assert.AreEqual(1, _fakePointer.TouchCalls.Count);
+        Assert.AreEqual(new PointerPoint(-1500, 100), _fakePointer.TouchCalls[0].ContactPaths[0][0]);
+        Assert.AreEqual(new PointerPoint(-1600, 100), _fakePointer.TouchCalls[0].ContactPaths[0][^1]);
+    }
+
+    [TestMethod]
+    public async Task Touch_GeneratedCoordinateOverflow_RejectedDeterministically()
+    {
+        _fakeSession.SessionResult.WindowHandle = 6997;
+
+        var command = GetRequiredService<UiTouchCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+            ["-a", "TestApp", "--gesture", "swipe", "--at", $"{int.MaxValue},100",
+             "--direction", "right", "--distance", "1", "--json"]);
+
+        Assert.AreEqual(1, exitCode);
+        Assert.AreEqual(0, _fakePointer.TouchCalls.Count);
+        StringAssert.Contains(ConsoleStdErr.ToString(), UiJsonError.CodeInvalidArguments);
+        StringAssert.Contains(ConsoleStdErr.ToString(), "screen-coordinate range");
+    }
+
+    [TestMethod]
+    public async Task Touch_ExplicitGeometryOverflow_NoApp_EmitsInvalidArguments_NotMissingApp()
+    {
+        var command = GetRequiredService<UiTouchCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+            ["--gesture", "swipe", "--at", $"{int.MaxValue},100",
+             "--direction", "right", "--distance", "1", "--json"]);
+
+        Assert.AreEqual(1, exitCode);
+        Assert.AreEqual(0, _fakePointer.TouchCalls.Count);
+        var stderr = ConsoleStdErr.ToString();
+        StringAssert.Contains(stderr, UiJsonError.CodeInvalidArguments);
+        StringAssert.Contains(stderr, "screen-coordinate range");
+        Assert.IsFalse(stderr.Contains(UiJsonError.CodeMissingApp, StringComparison.Ordinal),
+            $"App-independent geometry overflow must be reported before missing_app; got stderr: {stderr}");
+    }
+
+    [TestMethod]
     public async Task Touch_ExplicitPointOutsideWindow_Rejected_NoInjection()
     {
         _fakeSession.SessionResult.WindowHandle = 7000;

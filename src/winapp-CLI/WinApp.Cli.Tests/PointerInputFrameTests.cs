@@ -423,6 +423,35 @@ public class PointerInputFrameTests
     }
 
     [TestMethod]
+    public void InjectTouchStroke_SchedulerAlreadyBehind_SkipsSleepAndStillReachesEndpoint()
+    {
+        long fakeNow = 500;
+        var sleeps = new List<int>();
+        var updates = new List<int>();
+        void fakeSleep(int ms) { sleeps.Add(ms); fakeNow += ms; }
+
+        PointerInput.TouchSender recorder = contacts =>
+        {
+            if (contacts[0].pointerInfo.pointerFlags.HasFlag(POINTER_FLAGS.POINTER_FLAG_UPDATE))
+            {
+                updates.Add(contacts[0].pointerInfo.ptPixelLocation.X);
+            }
+        };
+
+        var paths = new List<IReadOnlyList<PointerPoint>>
+        {
+            new List<PointerPoint> { new PointerPoint(0, 0), new PointerPoint(100, 0) }
+        };
+
+        PointerInput.InjectTouchStroke(paths, holdMs: 0, durationMs: 200, recorder, fakeSleep, () => fakeNow);
+
+        Assert.AreEqual(0, sleeps.Count,
+            "When scheduler load has already consumed the duration, the glide must not add more delay");
+        Assert.AreEqual(20, updates.Count, "All UPDATE frames must still be emitted under scheduler overrun");
+        Assert.AreEqual(100, updates[^1], "The final UPDATE must still reach the endpoint");
+    }
+
+    [TestMethod]
     public void InjectTouchStroke_WithDurationMs_NoTrailingDwellAfterEndpoint()
     {
         // Ordered-event log (mirrors the pen no-dwell test): a sleep between endpoint UPDATE and UP
@@ -653,6 +682,50 @@ public class PointerInputFrameTests
     }
 
     [TestMethod]
+    public void InjectTouchStroke_GlideFrameThrows_CancelsAtLastAcceptedLocation()
+    {
+        var glideEx = new InvalidOperationException("second glide frame failed");
+        int successfulUpdates = 0;
+        (int X, int Y, POINTER_FLAGS Flags)? cleanup = null;
+
+        PointerInput.TouchSender sender = contacts =>
+        {
+            var contact = contacts[0];
+            var flags = contact.pointerInfo.pointerFlags;
+            if (flags.HasFlag(POINTER_FLAGS.POINTER_FLAG_UPDATE))
+            {
+                if (successfulUpdates++ > 0)
+                {
+                    throw glideEx;
+                }
+            }
+            else if (flags.HasFlag(POINTER_FLAGS.POINTER_FLAG_UP))
+            {
+                cleanup = (
+                    contact.pointerInfo.ptPixelLocation.X,
+                    contact.pointerInfo.ptPixelLocation.Y,
+                    flags);
+            }
+        };
+
+        var paths = new List<IReadOnlyList<PointerPoint>>
+        {
+            new List<PointerPoint> { new PointerPoint(0, 0), new PointerPoint(100, 0) }
+        };
+
+        var caught = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            PointerInput.InjectTouchStroke(paths, holdMs: 0, durationMs: 0, sender));
+
+        Assert.AreSame(glideEx, caught);
+        Assert.IsNotNull(cleanup, "A best-effort cancellation frame must be sent after a failed glide frame");
+        Assert.AreEqual(5, cleanup.Value.X,
+            "Cleanup must use the first successfully accepted UPDATE location, not jump to the endpoint");
+        Assert.AreEqual(0, cleanup.Value.Y);
+        Assert.IsTrue(cleanup.Value.Flags.HasFlag(POINTER_FLAGS.POINTER_FLAG_CANCELED),
+            "Unwind cleanup must mark the pointer as canceled");
+    }
+
+    [TestMethod]
     public void InjectPenStroke_UpFrameFailsOnNormalPath_ExceptionSurfaced()
     {
         // Sender succeeds for DOWN (and any UPDATE glide) but throws on the UP frame.
@@ -712,6 +785,53 @@ public class PointerInputFrameTests
 
         Assert.AreSame(glideEx, caught,
             "The glide exception must propagate; the UP exception in the finally must be swallowed");
+    }
+
+    [TestMethod]
+    public void InjectPenStroke_GlideFrameThrows_CancelsAtLastAcceptedLocation()
+    {
+        var glideEx = new InvalidOperationException("second pen glide frame failed");
+        int successfulUpdates = 0;
+        (int X, int Y, POINTER_FLAGS Flags)? cleanup = null;
+        long fakeNow = 0;
+
+        PointerInput.PenFrameSender sender = (x, y, pressure, flags) =>
+        {
+            if (flags.HasFlag(POINTER_FLAGS.POINTER_FLAG_UPDATE))
+            {
+                if (successfulUpdates++ > 0)
+                {
+                    throw glideEx;
+                }
+            }
+            else if (flags.HasFlag(POINTER_FLAGS.POINTER_FLAG_UP))
+            {
+                cleanup = (x, y, flags);
+            }
+        };
+
+        var path = new List<PointerPoint>
+        {
+            new PointerPoint(0, 0),
+            new PointerPoint(100, 0),
+        };
+
+        var caught = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            PointerInput.InjectPenStroke(
+                path,
+                contactPressure: 512,
+                durationMs: 200,
+                sender,
+                ms => fakeNow += ms,
+                () => fakeNow));
+
+        Assert.AreSame(glideEx, caught);
+        Assert.IsNotNull(cleanup, "A best-effort pen cancellation frame must be sent after a failed glide frame");
+        Assert.AreEqual(5, cleanup.Value.X,
+            "Pen cleanup must use the last successfully accepted UPDATE location, not jump to the endpoint");
+        Assert.AreEqual(0, cleanup.Value.Y);
+        Assert.IsTrue(cleanup.Value.Flags.HasFlag(POINTER_FLAGS.POINTER_FLAG_CANCELED),
+            "Pen unwind cleanup must mark the pointer as canceled");
     }
 
     // -------------------------------------------------------------------------

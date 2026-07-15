@@ -4,6 +4,7 @@
 using WinApp.Cli.Commands;
 using WinApp.Cli.Helpers;
 using WinApp.Cli.Models;
+using System.Globalization;
 
 namespace WinApp.Cli.Tests;
 
@@ -222,6 +223,22 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    public async Task Pen_NegativeSecondaryMonitorPath_Accepted()
+    {
+        _fakeSession.SessionResult.WindowHandle = 6599;
+        _fakeUia.WindowRect = new PointerRect(-1920, -200, 0, 1080);
+
+        var command = GetRequiredService<UiPenCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+            ["-a", "TestApp", "--path", "-1700,100 -1500,200", "--json"]);
+
+        Assert.AreEqual(0, exitCode);
+        Assert.AreEqual(1, _fakePointer.PenCalls.Count);
+        Assert.AreEqual(new PointerPoint(-1700, 100), _fakePointer.PenCalls[0].Path[0]);
+        Assert.AreEqual(new PointerPoint(-1500, 200), _fakePointer.PenCalls[0].Path[1]);
+    }
+
+    [TestMethod]
     public async Task Pen_ZeroTargetHwnd_Rejected_NoInjection()
     {
         _fakeSession.SessionResult.WindowHandle = 0;
@@ -283,6 +300,33 @@ public partial class UiCommandTests
             "Success JSON must carry the effective tiltX");
         Assert.AreEqual(-15, result.GetProperty("tiltY").GetInt32(),
             "Success JSON must carry the effective tiltY");
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task Pen_PressureDotDecimal_ParsesInvariantlyUnderFrenchCulture()
+    {
+        var originalCulture = CultureInfo.CurrentCulture;
+        var originalUiCulture = CultureInfo.CurrentUICulture;
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("fr-FR");
+            CultureInfo.CurrentUICulture = CultureInfo.GetCultureInfo("fr-FR");
+            _fakeSession.SessionResult.WindowHandle = 5599;
+
+            var command = GetRequiredService<UiPenCommand>();
+            var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+                ["-a", "TestApp", "--at", "100,100", "--pressure", "0.8", "--json"]);
+
+            Assert.AreEqual(0, exitCode,
+                "The documented dot-decimal pressure syntax must not depend on the machine locale");
+            Assert.AreEqual(0.8f, _fakePointer.PenCalls[0].Pressure, 0.001f);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+            CultureInfo.CurrentUICulture = originalUiCulture;
+        }
     }
 
     // -------------------------------------------------------------------------

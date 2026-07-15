@@ -3,9 +3,9 @@
   <application xmlns="urn:schemas-microsoft-com:asm.v3">
     <windowsSettings>
       <longPathAware xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">true</longPathAware>
-      <!-- Per-monitor DPI awareness v2 — required for accurate GetWindowRect
-           coordinates in the ui screenshot command. Falls back to per-monitor v1
-           on older Windows versions via the dpiAware element. -->
+      <!-- Per-monitor DPI awareness v2 — required so UIA bounds, GetWindowRect, screenshots,
+           and coordinate-based input all use the same physical-pixel space. Falls back to
+           per-monitor v1 on older Windows versions via the dpiAware element. -->
       <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2</dpiAwareness>
       <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
     </windowsSettings>

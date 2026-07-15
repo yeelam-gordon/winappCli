@@ -35,13 +35,14 @@ internal class UiTouchCommand : Command, IShortDescription
 
     public static Option<string?> AtOption { get; } = new("--at")
     {
-        Description = "Explicit start point as app coordinates x,y (as reported by 'ui inspect'). " +
-                      "Defaults to the selector's element center."
+        Description = "Explicit start point as signed physical screen coordinates x,y (as reported by " +
+                      "'ui inspect'; values may be negative on secondary monitors). Defaults to the " +
+                      "selector's element center."
     };
 
     public static Option<string?> ToPointOption { get; } = new("--to-point")
     {
-        Description = "End point x,y for a swipe (app coordinates). Takes precedence over --direction."
+        Description = "End point x,y for a swipe (signed physical screen coordinates). Takes precedence over --direction."
     };
 
     public static Option<int> DistanceOption { get; } = new("--distance")
@@ -78,7 +79,7 @@ internal class UiTouchCommand : Command, IShortDescription
     public UiTouchCommand()
         : base("touch", "Inject synthetic touch input using the Windows touch-injection API. " +
                "Supports tap, double-tap, long-press, swipe, pinch and stretch gestures at an element's " +
-               "center or explicit app x,y coordinates. Requires an unlocked, interactive desktop with the " +
+               "center or explicit physical screen x,y coordinates. Requires an unlocked, interactive desktop with the " +
                "target window foregroundable.")
     {
         Arguments.Add(SharedUiOptions.SelectorArgument);
@@ -118,6 +119,17 @@ internal class UiTouchCommand : Command, IShortDescription
             var holdMs = parseResult.GetValue(HoldOption);
             var durationMs = parseResult.GetValue(DurationOption);
             var fingers = parseResult.GetValue(FingersOption);
+
+            int ReportGeometryOverflow()
+            {
+                const string message =
+                    "The requested touch geometry exceeds the signed 32-bit screen-coordinate range. " +
+                    "Use coordinates and distances reported by 'ui inspect' for the current virtual desktop.";
+                logger.LogError("{Symbol} {Message}", UiSymbols.Error, message);
+                UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, message,
+                    errorOut: parseResult.InvocationConfiguration.Error);
+                return 1;
+            }
 
             // All app-independent semantic validation runs BEFORE the missing-app check so that
             // malformed argument values return invalid_arguments, not missing_app (M4 root-cause fix).
@@ -224,6 +236,22 @@ internal class UiTouchCommand : Command, IShortDescription
                 return 1;
             }
 
+            // Explicit-coordinate geometry is app-independent, so plan it before the missing-app
+            // check. Selector-centered geometry cannot be planned until UIA resolves the element.
+            (List<IReadOnlyList<PointerPoint>> ContactPaths, List<PointerPoint> Points, int Fingers)? explicitPlan = null;
+            if (at is not null)
+            {
+                try
+                {
+                    explicitPlan = PointerGesturePlanner.PlanTouch(
+                        gesture, at.Value, to, distance, fingers, direction);
+                }
+                catch (OverflowException)
+                {
+                    return ReportGeometryOverflow();
+                }
+            }
+
             // Missing-app check runs after all argument validation so invalid arg values return
             // invalid_arguments rather than missing_app.
             if (string.IsNullOrWhiteSpace(app) && window is null)
@@ -308,8 +336,27 @@ internal class UiTouchCommand : Command, IShortDescription
                     return 1;
                 }
 
-                var (contactPaths, points, effectiveFingers) =
-                    PointerGesturePlanner.PlanTouch(gesture, start, to, distance, fingers, direction);
+                List<IReadOnlyList<PointerPoint>> contactPaths;
+                List<PointerPoint> points;
+                int effectiveFingers;
+                if (explicitPlan is { } plan)
+                {
+                    contactPaths = plan.ContactPaths;
+                    points = plan.Points;
+                    effectiveFingers = plan.Fingers;
+                }
+                else
+                {
+                    try
+                    {
+                        (contactPaths, points, effectiveFingers) =
+                            PointerGesturePlanner.PlanTouch(gesture, start, to, distance, fingers, direction);
+                    }
+                    catch (OverflowException)
+                    {
+                        return ReportGeometryOverflow();
+                    }
+                }
 
                 // Every planned point (selector center, explicit --at/--to-point, and generated
                 // waypoints) must fall inside the target window — reject out-of-bounds coordinates
