@@ -432,7 +432,8 @@ winapp ui audit -a myapp --area contrast --level aaa --json -o audit.json
 - Levels are `basic`/`aa` (WCAG AA contrast thresholds) and `thorough`/`aaa` (deeper heuristic checks and WCAG AAA contrast thresholds).
 - The `screen-reader` area statically checks UIA name, role, and focus readiness. It does not drive assistive technology or navigate application states.
 - Contrast uses window pixel sampling. Large-text classification estimates rendered size from DPI-normalized element bounds; it does not read the actual font.
-- No discovered UIA elements or an unavailable requested contrast capture is an incomplete audit, so the command reports a failure and exits non-zero. Summary `pass` counts are successful rule checks, not elements.
+- Human output and JSON `summary.contrast` expose `attempted`, `measured`, and `unmeasured` eligible-text counts. Unmeasured candidates produce warnings. If candidates exist but none can be measured, the audit adds an aggregate failure and exits non-zero, even when window capture itself succeeded.
+- Having no eligible visible text candidates is reported explicitly and is not itself a failure. Discovering no UIA elements at all remains an incomplete audit and exits non-zero. Summary `pass` counts are successful rule checks, not elements.
 
 This command is a current-view linting aid, not WCAG or accessibility certification. Supplement it with manual testing and maintained tools such as [Accessibility Insights for Windows](https://accessibilityinsights.io/docs/windows/overview/) or [Axe.Windows](https://github.com/microsoft/axe-windows) for comprehensive rule coverage.
 

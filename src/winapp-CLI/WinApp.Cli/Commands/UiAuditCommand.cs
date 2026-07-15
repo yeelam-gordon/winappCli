@@ -121,17 +121,20 @@ internal class UiAuditCommand : Command, IShortDescription
                 var session = await sessionService.ResolveSessionAsync(app, window, cancellationToken);
                 var elements = await uiAutomation.InspectAsync(session, selector, AuditDepth, cancellationToken);
                 var elementCount = elements.Count(el => el.Type != "---");
+                var contrastCandidateCount = needsContrast
+                    ? elements.Count(UiAuditEngine.IsContrastCandidate)
+                    : 0;
 
                 // Build the contrast provider by capturing the window once, then sampling each
                 // text element's bounding rectangle. Capture failures are reported below.
                 Func<UiElement, double?>? contrastProvider = null;
-                var contrastMeasured = false;
-                if (needsContrast && elementCount > 0)
+                var contrastCaptureAvailable = false;
+                if (contrastCandidateCount > 0)
                 {
                     var ratios = await TryComputeContrastAsync(session, elements, cancellationToken);
                     if (ratios is not null)
                     {
-                        contrastMeasured = true;
+                        contrastCaptureAvailable = true;
                         contrastProvider = el => ratios.TryGetValue(el, out var r) ? r : null;
                     }
                 }
@@ -154,10 +157,13 @@ internal class UiAuditCommand : Command, IShortDescription
                         "No UI Automation elements were discovered, so the current view could not be audited. " +
                         "Verify that the target window is visible and runs at the same elevation.");
                 }
-                else if (needsContrast && !contrastMeasured)
+                else if (result.Summary.Contrast is { Attempted: > 0, Measured: 0 } contrast)
                 {
+                    var reason = contrastCaptureAvailable
+                        ? $"None of the {contrast.Attempted} eligible text candidates produced a reliable contrast ratio"
+                        : "Window capture was unavailable, so no eligible text candidates could be measured";
                     AddAuditFailure(result, UiAuditEngine.CheckContrast,
-                        "Contrast could not be measured because window capture was unavailable; the audit is incomplete.");
+                        $"Contrast could not be measured: {reason}; the contrast audit is incomplete.");
                 }
 
                 var exitCode = result.Summary.Fail > 0 ? 1 : 0;
@@ -216,7 +222,7 @@ internal class UiAuditCommand : Command, IShortDescription
                 var ratios = new Dictionary<UiElement, double?>(ReferenceEqualityComparer.Instance);
                 foreach (var el in elements)
                 {
-                    if (el.Type == "---" || el.Width <= 0 || el.Height <= 0)
+                    if (!UiAuditEngine.IsContrastCandidate(el))
                     {
                         continue;
                     }
@@ -318,6 +324,22 @@ internal class UiAuditCommand : Command, IShortDescription
             var scopeText = string.Join(", ", scope);
             Line($"[grey]Areas: {scopeText} · Level: {level}[/]",
                  $"Areas: {scopeText} · Level: {level}");
+
+            if (result.Summary.Contrast is { } contrast)
+            {
+                if (contrast.Attempted == 0)
+                {
+                    Line("[grey]Contrast coverage: no eligible visible text candidates.[/]",
+                         "Contrast coverage: no eligible visible text candidates.");
+                }
+                else
+                {
+                    var coverage = $"{contrast.Attempted} attempted, {contrast.Measured} measured, {contrast.Unmeasured} unmeasured";
+                    var color = contrast.Unmeasured == 0 ? "green" : contrast.Measured == 0 ? "red" : "yellow";
+                    Line($"[{color}]Contrast coverage: {coverage}.[/]",
+                         $"Contrast coverage: {coverage}.");
+                }
+            }
 
             markup.AppendLine();
             plain.AppendLine();

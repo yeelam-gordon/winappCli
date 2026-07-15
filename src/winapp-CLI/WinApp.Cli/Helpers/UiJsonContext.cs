@@ -41,6 +41,7 @@ namespace WinApp.Cli.Helpers;
 [JsonSerializable(typeof(WindowInfo[]))]
 [JsonSerializable(typeof(UiAuditResult))]
 [JsonSerializable(typeof(UiAuditSummary))]
+[JsonSerializable(typeof(UiAuditContrastSummary))]
 [JsonSerializable(typeof(UiAuditIssue))]
 [JsonSerializable(typeof(UiAuditIssue[]))]
 [JsonSourceGenerationOptions(
@@ -270,6 +271,19 @@ internal sealed class UiAuditSummary
     public int Warn { get; set; }
     /// <summary>Number of fail-severity issues (drives the non-zero CI exit code).</summary>
     public int Fail { get; set; }
+    /// <summary>Contrast measurement coverage, present only when the contrast area runs.</summary>
+    public UiAuditContrastSummary? Contrast { get; set; }
+}
+
+/// <summary>Coverage accounting for eligible visible text considered by the contrast area.</summary>
+internal sealed class UiAuditContrastSummary
+{
+    /// <summary>Number of eligible text candidates for which measurement was attempted.</summary>
+    public int Attempted { get; set; }
+    /// <summary>Number of candidates that produced a reliable contrast ratio.</summary>
+    public int Measured { get; set; }
+    /// <summary>Number of candidates that could not be reliably measured.</summary>
+    public int Unmeasured { get; set; }
 }
 
 /// <summary>A single accessibility/contrast finding.</summary>

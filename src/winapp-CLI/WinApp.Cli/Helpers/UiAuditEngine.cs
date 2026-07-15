@@ -140,7 +140,7 @@ internal static class UiAuditEngine
     /// <summary>
     /// Run the enabled rules over <paramref name="elements"/>. <paramref name="contrastProvider"/>
     /// returns the measured contrast ratio for a text element, or <c>null</c> when it could not be
-    /// measured (in which case the contrast rule is skipped for that element).
+    /// measured.
     /// </summary>
     public static UiAuditResult Run(
         IReadOnlyList<UiElement> elements,
@@ -149,6 +149,10 @@ internal static class UiAuditEngine
     {
         var issues = new List<UiAuditIssue>();
         var pass = 0;
+        var checkContrast = options.Checks.Contains(CheckContrast);
+        var contrastAttempted = 0;
+        var contrastMeasured = 0;
+        var contrastUnmeasured = 0;
 
         foreach (var el in elements)
         {
@@ -296,12 +300,24 @@ internal static class UiAuditEngine
                 }
             }
 
-            // contrast: text elements must meet the WCAG ratio for their size.
-            if (options.Checks.Contains(CheckContrast) && visible && contrastProvider is not null && IsTextElement(el))
+            // contrast: eligible visible text elements must either be measured or explicitly
+            // reported as unmeasured. This prevents an incomplete contrast run from looking clean.
+            if (checkContrast && IsContrastCandidate(el))
             {
-                var ratio = contrastProvider(el);
-                if (ratio is { } r)
+                contrastAttempted++;
+                var ratio = contrastProvider?.Invoke(el);
+                if (ratio is not { } r)
                 {
+                    contrastUnmeasured++;
+                    var reason = contrastProvider is null
+                        ? "window capture was unavailable"
+                        : "its pixels were outside the capture or unsuitable for reliable analysis";
+                    issues.Add(Issue(CheckContrast, SeverityWarn, el,
+                        $"{Describe(el)} contrast was not measured because {reason}."));
+                }
+                else
+                {
+                    contrastMeasured++;
                     var dpiScale = options.DpiScale > 0 ? options.DpiScale : 1.0;
                     var isLarge = el.Height / dpiScale >= LargeTextHeightAt96Dpi;
                     var threshold = isLarge ? options.LargeContrast : options.NormalContrast;
@@ -329,7 +345,20 @@ internal static class UiAuditEngine
 
         return new UiAuditResult
         {
-            Summary = new UiAuditSummary { Pass = pass, Warn = warn, Fail = fail },
+            Summary = new UiAuditSummary
+            {
+                Pass = pass,
+                Warn = warn,
+                Fail = fail,
+                Contrast = checkContrast
+                    ? new UiAuditContrastSummary
+                    {
+                        Attempted = contrastAttempted,
+                        Measured = contrastMeasured,
+                        Unmeasured = contrastUnmeasured,
+                    }
+                    : null,
+            },
             Issues = issues.ToArray(),
         };
     }
@@ -373,8 +402,12 @@ internal static class UiAuditEngine
         }
     }
 
-    private static bool IsTextElement(UiElement el)
-        => TextTypes.Contains(el.Type) && !string.IsNullOrWhiteSpace(el.Name) && el.Width > 0 && el.Height > 0;
+    internal static bool IsContrastCandidate(UiElement el)
+        => !el.IsOffscreen
+        && TextTypes.Contains(el.Type)
+        && !string.IsNullOrWhiteSpace(el.Name)
+        && el.Width > 0
+        && el.Height > 0;
 
     private static bool HasUnknownRole(string type)
         => string.IsNullOrWhiteSpace(type)

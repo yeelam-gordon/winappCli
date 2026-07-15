@@ -104,6 +104,78 @@ public partial class UiCommandTests
         Assert.AreEqual(1, exitCode);
         StringAssert.Contains(TestAnsiConsole.Output, "\"fail\": 1");
         StringAssert.Contains(TestAnsiConsole.Output, "Contrast could not be measured");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"attempted\": 1");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"measured\": 0");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"unmeasured\": 1");
+    }
+
+    [TestMethod]
+    public async Task Audit_ContrastSuccessfulCaptureWithNoMeasurableRatios_FailsClosed()
+    {
+        _fakeSession.SessionResult = new UiSessionInfo
+        {
+            ProcessId = 1234,
+            ProcessName = "TestApp",
+            WindowTitle = "Test Window",
+            WindowHandle = 100,
+        };
+
+        const int w = 20, h = 20;
+        var buf = new byte[w * h * 4];
+        for (var i = 0; i < w * h; i++)
+        {
+            buf[i * 4 + 0] = 255;
+            buf[i * 4 + 1] = 255;
+            buf[i * 4 + 2] = 255;
+            buf[i * 4 + 3] = 255;
+        }
+        _fakeUia.WindowCaptureResult = (buf, w, h, 0, 0);
+        _fakeUia.InspectResult =
+        [
+            new UiElement
+            {
+                Id = "e0", Type = "Text", Name = "Uniform", Width = w, Height = h,
+                WindowHandle = 100, Selector = "uniform",
+            },
+        ];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command, ["-a", "TestApp", "--area", "contrast", "--json"]);
+
+        var output = TestAnsiConsole.Output;
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(output, "\"fail\": 1");
+        StringAssert.Contains(output, "\"warn\": 1");
+        StringAssert.Contains(output, "\"attempted\": 1");
+        StringAssert.Contains(output, "\"measured\": 0");
+        StringAssert.Contains(output, "\"unmeasured\": 1");
+        StringAssert.Contains(output, "\"selector\": \"uniform\"");
+        StringAssert.Contains(output, "None of the 1 eligible text candidates produced a reliable contrast ratio");
+    }
+
+    [TestMethod]
+    public async Task Audit_ContrastWithNoEligibleTextCandidates_IsComplete()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement { Id = "e0", Type = "Window", Name = "App", IsEnabled = true },
+            new UiElement { Id = "e1", Type = "Button", Name = "OK", Width = 100, Height = 30 },
+        ];
+        _fakeUia.WindowCaptureException = new InvalidOperationException("capture should not be needed");
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command, ["-a", "TestApp", "--area", "contrast"]);
+        var jsonExitCode = await ParseAndInvokeWithCaptureAsync(
+            command, ["-a", "TestApp", "--area", "contrast", "--json"]);
+
+        Assert.AreEqual(0, exitCode);
+        Assert.AreEqual(0, jsonExitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "Contrast coverage: no eligible visible text candidates.");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"attempted\": 0");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"measured\": 0");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"unmeasured\": 0");
     }
 
     [TestMethod]
@@ -219,6 +291,7 @@ public partial class UiCommandTests
 
         Assert.AreEqual(1, exitCode);
         StringAssert.Contains(TestAnsiConsole.Output, "Contrast could not be measured");
+        StringAssert.Contains(TestAnsiConsole.Output, "Contrast coverage: 1 attempted, 0 measured, 1 unmeasured.");
         StringAssert.Contains(TestAnsiConsole.Output, "0 checks passed");
     }
 
@@ -270,9 +343,8 @@ public partial class UiCommandTests
     public async Task Audit_Contrast_OutOfWindowElement_IsNotMeasured()
     {
         // The captured buffer belongs to the session's root window (HWND 100). An element on a
-        // different HWND (a popup, 200) must be marked "not measured" rather than sampled against
-        // the wrong pixels — so it produces no contrast failure even though the buffer is low
-        // contrast. The in-window element IS scored (and fails).
+        // different HWND (a popup, 200) must be reported as unmeasured rather than sampled against
+        // the wrong pixels. The in-window element IS scored (and fails).
         _fakeSession.SessionResult = new UiSessionInfo
         {
             ProcessId = 1234,
@@ -306,9 +378,12 @@ public partial class UiCommandTests
         var output = TestAnsiConsole.Output;
         Assert.AreEqual(1, exitCode, "the in-window low-contrast text should fail");
         StringAssert.Contains(output, "\"fail\": 1");
+        StringAssert.Contains(output, "\"warn\": 1");
         StringAssert.Contains(output, "\"selector\": \"in-win\"");
-        // The out-of-window popup element must NOT appear as a contrast finding.
-        StringAssert.DoesNotMatch(output, new System.Text.RegularExpressions.Regex("\"selector\":\\s*\"popup\""));
+        StringAssert.Contains(output, "\"selector\": \"popup\"");
+        StringAssert.Contains(output, "\"attempted\": 2");
+        StringAssert.Contains(output, "\"measured\": 1");
+        StringAssert.Contains(output, "\"unmeasured\": 1");
     }
 
     // A 20x20 buffer whose glyph pixels are mid-grey (#696969, ~5.5:1 on white) — above the AA

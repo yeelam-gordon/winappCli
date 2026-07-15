@@ -20,13 +20,13 @@ public class UiAuditOrchestratorTests
     ]);
 
     private static UiAuditContext Context(IReadOnlyList<UiElement> elements, string profile = AuditProfile.Basic,
-        Func<UiElement, double?>? contrast = null) => new()
+        Func<UiElement, double?>? contrast = null, double dpiScale = 1.0) => new()
     {
         Elements = elements,
         Profile = profile,
         NormalContrast = 4.5,
         LargeContrast = 3.0,
-        DpiScale = 1.0,
+        DpiScale = dpiScale,
         WcagLevel = "AA",
         ContrastProvider = contrast,
     };
@@ -171,5 +171,28 @@ public class UiAuditOrchestratorTests
 
         Assert.AreEqual(1, result.Summary.Fail);
         Assert.AreEqual(UiAuditEngine.CheckContrast, result.Issues.Single().RuleId);
+        Assert.AreEqual(1, result.Summary.Contrast!.Attempted);
+        Assert.AreEqual(1, result.Summary.Contrast.Measured);
+        Assert.AreEqual(0, result.Summary.Contrast.Unmeasured);
+    }
+
+    [TestMethod]
+    public void ContrastArea_ForwardsDpiScaleToRuleEngine()
+    {
+        // At 150% DPI, a 24-physical-pixel box normalizes to 16px and must use the normal-text
+        // threshold (4.5). Dropping DpiScale at the area-engine bridge incorrectly treats it as
+        // large text and lets this 3.2 ratio pass the relaxed 3.0 threshold.
+        var elements = new[]
+        {
+            new UiElement { Id = "e0", Type = "Text", Name = "Body", Width = 150, Height = 24 },
+        };
+        var orchestrator = DefaultOrchestrator();
+
+        var result = orchestrator.Run(
+            [AuditArea.Contrast],
+            Context(elements, contrast: _ => 3.2, dpiScale: 1.5));
+
+        Assert.AreEqual(1, result.Summary.Fail,
+            "the area engine must preserve the target window's DPI scale");
     }
 }

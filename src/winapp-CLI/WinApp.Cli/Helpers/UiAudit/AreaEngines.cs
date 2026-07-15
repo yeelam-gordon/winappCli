@@ -36,6 +36,7 @@ internal abstract class CheckBackedAreaEngine : IUiAuditAreaEngine
             Profile = context.Profile,
             NormalContrast = context.NormalContrast,
             LargeContrast = context.LargeContrast,
+            DpiScale = context.DpiScale,
             WcagLevel = context.WcagLevel,
         };
 

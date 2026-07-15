@@ -32,6 +32,7 @@ internal sealed class UiAuditOrchestrator
     {
         var issues = new List<UiAuditIssue>();
         var pass = 0;
+        UiAuditContrastSummary? contrast = null;
 
         foreach (var area in areas)
         {
@@ -43,6 +44,13 @@ internal sealed class UiAuditOrchestrator
             var result = engine.Evaluate(context);
             issues.AddRange(result.Issues);
             pass += result.Summary.Pass;
+            if (result.Summary.Contrast is { } areaContrast)
+            {
+                contrast ??= new UiAuditContrastSummary();
+                contrast.Attempted += areaContrast.Attempted;
+                contrast.Measured += areaContrast.Measured;
+                contrast.Unmeasured += areaContrast.Unmeasured;
+            }
         }
 
         // Cross-area de-duplication: when several areas surface the SAME underlying defect for the
@@ -58,7 +66,13 @@ internal sealed class UiAuditOrchestrator
 
         return new UiAuditResult
         {
-            Summary = new UiAuditSummary { Pass = pass, Warn = warn, Fail = fail },
+            Summary = new UiAuditSummary
+            {
+                Pass = pass,
+                Warn = warn,
+                Fail = fail,
+                Contrast = contrast,
+            },
             Issues = deduped.ToArray(),
         };
     }

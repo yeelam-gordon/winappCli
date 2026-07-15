@@ -302,6 +302,27 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
+    public void Contrast_UnmeasuredCandidate_IsWarnedAndCounted()
+    {
+        var text = new UiElement
+        {
+            Id = "e0", Type = "Text", Name = "Body", Width = 100, Height = 16, Selector = "body",
+        };
+
+        var result = UiAuditEngine.Run(
+            [text],
+            Opts(UiAuditEngine.CheckContrast),
+            _ => null);
+
+        Assert.AreEqual(1, result.Summary.Warn);
+        Assert.AreEqual(UiAuditEngine.SeverityWarn, result.Issues.Single().Severity);
+        Assert.AreEqual("body", result.Issues.Single().Selector);
+        Assert.AreEqual(1, result.Summary.Contrast!.Attempted);
+        Assert.AreEqual(0, result.Summary.Contrast.Measured);
+        Assert.AreEqual(1, result.Summary.Contrast.Unmeasured);
+    }
+
+    [TestMethod]
     public void TabOrder_BackwardJump_ProducesWarning()
     {
         var elements = new[]
