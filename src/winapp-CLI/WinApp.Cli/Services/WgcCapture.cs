@@ -40,13 +40,20 @@ internal static partial class WgcCapture
         }
     }
 
-    public static async Task<(byte[] Pixels, int Width, int Height)> CaptureAsync(HWND hwnd, ILogger logger, CancellationToken ct)
+
+    public static async Task<(byte[] Pixels, int Width, int Height)> CaptureAsync(
+        HWND hwnd,
+        ILogger logger,
+        long? maxPixelCount,
+        CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (!GraphicsCaptureSession.IsSupported())
         {
             throw new PlatformNotSupportedException("Windows.Graphics.Capture is not supported on this system.");
         }
 
+        ct.ThrowIfCancellationRequested();
         PInvoke.D3D11CreateDevice(
             pAdapter: null,
             D3DCommon.D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE,
@@ -60,13 +67,21 @@ internal static partial class WgcCapture
 
         try
         {
+            ct.ThrowIfCancellationRequested();
             var winrtDevice = CreateDirect3DDevice(device);
             var item = CreateItemForWindow(hwnd);
+            ct.ThrowIfCancellationRequested();
+            var itemSize = item.Size;
+            _ = UiCaptureBounds.GetRequiredByteLength(
+                itemSize.Width,
+                itemSize.Height,
+                maxPixelCount,
+                "WGC capture item");
             using var pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
                 winrtDevice,
                 DirectXPixelFormat.B8G8R8A8UIntNormalized,
                 numberOfBuffers: 2,
-                item.Size);
+                itemSize);
             using var session = pool.CreateCaptureSession(item);
             session.IsCursorCaptureEnabled = false;
 
@@ -104,9 +119,9 @@ internal static partial class WgcCapture
             {
                 linkedCts.Token.ThrowIfCancellationRequested();
                 using var frame = await tcs.Task.WaitAsync(linkedCts.Token).ConfigureAwait(false);
-                var result = CopyFrame(device, context, frame);
+                var result = CopyFrame(device, context, frame, maxPixelCount, linkedCts.Token);
                 framesSeen++;
-                if (!IsBlankCapture(result.Pixels) || framesSeen >= 5)
+                if (!IsBlankCapture(result.Pixels, linkedCts.Token) || framesSeen >= 5)
                 {
                     if (framesSeen > 1)
                     {
@@ -204,18 +219,24 @@ internal static partial class WgcCapture
     private static unsafe (byte[] Pixels, int Width, int Height) CopyFrame(
         D3D.ID3D11Device device,
         D3D.ID3D11DeviceContext context,
-        Direct3D11CaptureFrame frame)
+        Direct3D11CaptureFrame frame,
+        long? maxPixelCount,
+        CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var capturedTexture = GetTexture(frame.Surface);
         try
         {
+            ct.ThrowIfCancellationRequested();
             var size = frame.ContentSize;
             var width = size.Width;
             var height = size.Height;
-            if (width <= 0 || height <= 0)
-            {
-                throw new InvalidOperationException("WGC returned an empty frame.");
-            }
+            var byteLength = UiCaptureBounds.GetRequiredByteLength(
+                width,
+                height,
+                maxPixelCount,
+                "WGC frame");
+            ct.ThrowIfCancellationRequested();
 
             var desc = new D3D.D3D11_TEXTURE2D_DESC
             {
@@ -234,16 +255,19 @@ internal static partial class WgcCapture
             device.CreateTexture2D(in desc, pInitialData: null, out var stagingTexture);
             try
             {
+                ct.ThrowIfCancellationRequested();
                 context.CopyResource(stagingTexture, capturedTexture);
+                ct.ThrowIfCancellationRequested();
                 context.Map(stagingTexture, 0, D3D.D3D11_MAP.D3D11_MAP_READ, 0, out var mapped);
                 try
                 {
-                    var pixels = new byte[checked(width * height * 4)];
+                    var pixels = new byte[byteLength];
                     fixed (byte* destination = pixels)
                     {
                         var rowBytes = width * 4;
                         for (var row = 0; row < height; row++)
                         {
+                            ct.ThrowIfCancellationRequested();
                             Buffer.MemoryCopy(
                                 (byte*)mapped.pData + (row * mapped.RowPitch),
                                 destination + (row * rowBytes),
@@ -305,13 +329,18 @@ internal static partial class WgcCapture
         }
     }
 
-    private static bool IsBlankCapture(byte[] pixels)
+    private static bool IsBlankCapture(byte[] pixels, CancellationToken ct)
     {
         // Check if all pixels are zero (black/unrendered frame). Int-sized chunks for speed.
         var span = MemoryMarshal.Cast<byte, long>(pixels.AsSpan());
-        foreach (var chunk in span)
+        for (var i = 0; i < span.Length; i++)
         {
-            if (chunk != 0)
+            if ((i & 0xFFF) == 0)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            if (span[i] != 0)
             {
                 return false;
             }
@@ -356,4 +385,3 @@ internal static partial class WgcCapture
         }
     }
 }
-

@@ -37,11 +37,13 @@ internal sealed partial class UiAutomationService : IUiAutomationService
         return EnumerateWindows((pid, title) => pid == targetPid);
     }
 
-    private static List<(nint Hwnd, int Pid, string Title)> EnumerateWindows(Func<int, string, bool> filter)
+    internal static List<(nint Hwnd, int Pid, string Title)> EnumerateWindows(
+        Func<int, string, bool> filter,
+        UiTraversalState? traversal = null)
     {
         var results = new List<(nint, int, string)>();
         var hwnd = Windows.Win32.Foundation.HWND.Null;
-        while (true)
+        while (traversal?.Checkpoint() ?? true)
         {
             hwnd = Windows.Win32.PInvoke.FindWindowEx(
                 Windows.Win32.Foundation.HWND.Null, hwnd, null, (string?)null);
@@ -155,20 +157,23 @@ internal sealed partial class UiAutomationService : IUiAutomationService
         }
 
         var elements = new List<UiElement>();
-        WalkTree(startElement, depth, 0, "", elements, ref nextElementId, traversal);
-
-        // Set WindowHandle on all elements from main window
-        foreach (var el in elements)
-        {
-            el.WindowHandle = session.WindowHandle;
-        }
+        WalkTree(
+            startElement,
+            depth,
+            0,
+            "",
+            elements,
+            ref nextElementId,
+            traversal,
+            session.WindowHandle,
+            session.WindowHandle);
 
         // Also walk popup/owned windows (when inspecting full tree, not scoped to element,
         // and the user did not explicitly target a single HWND — see issue #472).
         if (!traversal.IsStopped && string.IsNullOrEmpty(elementId) && !session.IsExplicitWindow)
         {
             var mainHwnd = (nint)session.WindowHandle;
-            var allWindows = GetAllAppWindows(session);
+            var allWindows = GetAllAppWindows(session, traversal);
 
             // Filter out windows whose UIA root is already in the main tree (e.g., modal dialogs)
             var independentWindows = new List<(nint Hwnd, int Pid, string Title)>();
@@ -231,13 +236,18 @@ internal sealed partial class UiAutomationService : IUiAutomationService
                 });
 
                 var popupElements = new List<UiElement>();
-                if (!WalkTree(windowRoot, depth, 0, "", popupElements, ref nextElementId, traversal))
+                if (!WalkTree(
+                        windowRoot,
+                        depth,
+                        0,
+                        "",
+                        popupElements,
+                        ref nextElementId,
+                        traversal,
+                        (long)hwnd,
+                        (long)hwnd))
                 {
                     break;
-                }
-                foreach (var el in popupElements)
-                {
-                    el.WindowHandle = hwnd;
                 }
                 elements.AddRange(popupElements);
             }
@@ -1465,17 +1475,30 @@ return Task.FromResult<UiElement?>(null);
     /// Get all windows associated with an app: same-PID windows + cross-process owned windows.
     /// Excludes internal system windows (PseudoConsoleWindow, IME, etc.).
     /// </summary>
-    private List<(nint Hwnd, int Pid, string Title)> GetAllAppWindows(UiSessionInfo session)
+    private List<(nint Hwnd, int Pid, string Title)> GetAllAppWindows(
+        UiSessionInfo session,
+        UiTraversalState? traversal = null)
     {
-        var windows = FindWindowsByPid(session.ProcessId);
+        var windows = EnumerateWindows((pid, _) => pid == session.ProcessId, traversal);
 
         // Remove internal system windows from same-PID results
-        windows.RemoveAll(w => IsInternalWindow(UiSessionService.GetWindowClassName(w.Hwnd)));
+        for (var i = windows.Count - 1; i >= 0; i--)
+        {
+            if (!(traversal?.Checkpoint() ?? true))
+            {
+                return windows;
+            }
+
+            if (IsInternalWindow(UiSessionService.GetWindowClassName(windows[i].Hwnd)))
+            {
+                windows.RemoveAt(i);
+            }
+        }
 
         // Find cross-process owned windows (file pickers, system dialogs)
         var appHwnds = new HashSet<nint>(windows.Select(w => w.Hwnd));
         var hwnd = Windows.Win32.Foundation.HWND.Null;
-        while (true)
+        while (traversal?.Checkpoint() ?? true)
         {
             hwnd = Windows.Win32.PInvoke.FindWindowEx(
                 Windows.Win32.Foundation.HWND.Null, hwnd, null, (string?)null);
@@ -1875,6 +1898,8 @@ return Task.FromResult<UiElement?>(null);
         List<UiElement> results,
         ref int nextElementId,
         UiTraversalState traversal,
+        long sourceWindowHandle,
+        long inheritedNativeWindowHandle,
         string? parentSelector = null,
         List<string>? ancestorTypes = null)
     {
@@ -1884,6 +1909,10 @@ return Task.FromResult<UiElement?>(null);
         }
 
         var uiElement = ToUiElement(element, path, ref nextElementId);
+        var nativeWindowHandle = ApplyWindowHandleContext(
+            uiElement,
+            sourceWindowHandle,
+            inheritedNativeWindowHandle);
         uiElement.Depth = currentDepth;
         uiElement.ParentSelector = parentSelector;
         if (ancestorTypes is { Count: > 0 })
@@ -1988,6 +2017,8 @@ return Task.FromResult<UiElement?>(null);
                     results,
                     ref nextElementId,
                     traversal,
+                    sourceWindowHandle,
+                    nativeWindowHandle,
                     childParentSelector,
                     childAncestors))
             {
@@ -2140,6 +2171,7 @@ return Task.FromResult<UiElement?>(null);
             ScrollDir = scrollDir,
             Selector = selector,
             IsInvokable = isInvokable,
+            NativeWindowHandle = SafeGetNativeWindowHandle(element),
         };
     }
 
@@ -2259,7 +2291,36 @@ return Task.FromResult<UiElement?>(null);
         }
     }
 
-    private static string GetControlTypeName(UIA_CONTROLTYPE_ID controlType) => controlType switch
+    private static long? SafeGetNativeWindowHandle(IUIAutomationElement element)
+    {
+        try
+        {
+            var handle = (long)(nint)element.get_CurrentNativeWindowHandle();
+            return handle == 0 ? null : handle;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static long ApplyWindowHandleContext(
+        UiElement element,
+        long sourceWindowHandle,
+        long? inheritedNativeWindowHandle = null)
+    {
+        element.WindowHandle = sourceWindowHandle;
+        if (element.NativeWindowHandle is null or 0)
+        {
+            element.NativeWindowHandle = inheritedNativeWindowHandle is not null and not 0
+                ? inheritedNativeWindowHandle
+                : sourceWindowHandle;
+        }
+
+        return element.NativeWindowHandle.Value;
+    }
+
+    internal static string GetControlTypeName(UIA_CONTROLTYPE_ID controlType) => controlType switch
     {
         UIA_CONTROLTYPE_ID.UIA_ButtonControlTypeId => "Button",
         UIA_CONTROLTYPE_ID.UIA_CalendarControlTypeId => "Calendar",
@@ -2291,6 +2352,7 @@ return Task.FromResult<UiElement?>(null);
         UIA_CONTROLTYPE_ID.UIA_DataGridControlTypeId => "DataGrid",
         UIA_CONTROLTYPE_ID.UIA_DataItemControlTypeId => "DataItem",
         UIA_CONTROLTYPE_ID.UIA_DocumentControlTypeId => "Document",
+        UIA_CONTROLTYPE_ID.UIA_CustomControlTypeId => "Custom",
         UIA_CONTROLTYPE_ID.UIA_SplitButtonControlTypeId => "SplitButton",
         UIA_CONTROLTYPE_ID.UIA_WindowControlTypeId => "Window",
         UIA_CONTROLTYPE_ID.UIA_PaneControlTypeId => "Pane",
@@ -2329,6 +2391,7 @@ return Task.FromResult<UiElement?>(null);
         "TreeItem" => (int)UIA_CONTROLTYPE_ID.UIA_TreeItemControlTypeId,
         "Group" => (int)UIA_CONTROLTYPE_ID.UIA_GroupControlTypeId,
         "DataGrid" => (int)UIA_CONTROLTYPE_ID.UIA_DataGridControlTypeId,
+        "Custom" => (int)UIA_CONTROLTYPE_ID.UIA_CustomControlTypeId,
         "Window" => (int)UIA_CONTROLTYPE_ID.UIA_WindowControlTypeId,
         "Pane" => (int)UIA_CONTROLTYPE_ID.UIA_PaneControlTypeId,
         "Table" => (int)UIA_CONTROLTYPE_ID.UIA_TableControlTypeId,

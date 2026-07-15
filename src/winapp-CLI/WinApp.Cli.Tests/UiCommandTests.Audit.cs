@@ -159,6 +159,28 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    public async Task Audit_ContrastVisibleTextWithInvalidBounds_FailsClosed()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement
+            {
+                Id = "e0", Type = "Text", Name = "Hello", Width = 0, Height = 16, Selector = "hello",
+            },
+        ];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command, ["-a", "TestApp", "--area", "contrast", "--json"]);
+
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "\"selector\": \"hello\"");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"attempted\": 1");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"measured\": 0");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"unmeasured\": 1");
+    }
+
+    [TestMethod]
     public async Task Audit_ContrastSuccessfulCaptureWithNoMeasurableRatios_FailsClosed()
     {
         _fakeSession.SessionResult = new UiSessionInfo
@@ -522,11 +544,11 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
-    public async Task Audit_Contrast_OutOfWindowElement_IsNotMeasured()
+    public async Task Audit_Contrast_HostedNativeHwnd_IsNotMeasuredAgainstRoot()
     {
-        // The captured buffer belongs to the session's root window (HWND 100). An element on a
-        // different HWND (a popup, 200) must be reported as unmeasured rather than sampled against
-        // the wrong pixels. The in-window element IS scored (and fails).
+        // Both elements came from the root inspection (source HWND 100), but the provider reports
+        // that one is hosted by HWND 200. It must be unmeasured rather than sampled against the
+        // root buffer. The in-window element IS scored (and fails).
         _fakeSession.SessionResult = new UiSessionInfo
         {
             ProcessId = 1234,
@@ -550,8 +572,8 @@ public partial class UiCommandTests
 
         _fakeUia.InspectResult =
         [
-            new UiElement { Id = "e0", Type = "Text", Name = "InWin", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 100, Selector = "in-win" },
-            new UiElement { Id = "e1", Type = "Text", Name = "Popup", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 200, Selector = "popup" },
+            new UiElement { Id = "e0", Type = "Text", Name = "InWin", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 100, NativeWindowHandle = 100, Selector = "in-win" },
+            new UiElement { Id = "e1", Type = "Text", Name = "Hosted", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 100, NativeWindowHandle = 200, Selector = "hosted" },
         ];
 
         var command = GetRequiredService<UiAuditCommand>();
@@ -562,7 +584,7 @@ public partial class UiCommandTests
         StringAssert.Contains(output, "\"fail\": 2");
         StringAssert.Contains(output, "\"warn\": 0");
         StringAssert.Contains(output, "\"selector\": \"in-win\"");
-        StringAssert.Contains(output, "\"selector\": \"popup\"");
+        StringAssert.Contains(output, "\"selector\": \"hosted\"");
         StringAssert.Contains(output, "\"attempted\": 2");
         StringAssert.Contains(output, "\"measured\": 1");
         StringAssert.Contains(output, "\"unmeasured\": 1");

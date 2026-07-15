@@ -32,6 +32,7 @@ internal class UiAuditCommand : Command, IShortDescription
     // Bounds total contrast work across the full audit, even when a provider exposes thousands
     // of textual elements. Each candidate receives an equal deterministic share.
     private const int AuditMaxContrastSamples = 4_194_304;
+    internal static readonly TimeSpan AuditMaxContrastDuration = TimeSpan.FromSeconds(10);
 
     static UiAuditCommand()
     {
@@ -260,7 +261,11 @@ internal class UiAuditCommand : Command, IShortDescription
         {
             try
             {
-                var (pixels, width, height, originX, originY) = await uiAutomation.CaptureWindowAsync(session, ct);
+                using var boundedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+                boundedCts.CancelAfter(AuditMaxContrastDuration);
+                var boundedToken = boundedCts.Token;
+                var (pixels, width, height, originX, originY) =
+                    await uiAutomation.CaptureWindowAsync(session, boundedToken);
                 var ratios = new Dictionary<UiElement, double?>(ReferenceEqualityComparer.Instance);
                 var samplesPerCandidate = Math.Max(
                     1,
@@ -270,7 +275,7 @@ internal class UiAuditCommand : Command, IShortDescription
 
                 foreach (var el in elements)
                 {
-                    ct.ThrowIfCancellationRequested();
+                    boundedToken.ThrowIfCancellationRequested();
                     if (!contrastCandidates.Contains(el))
                     {
                         continue;
@@ -280,7 +285,8 @@ internal class UiAuditCommand : Command, IShortDescription
                     // Elements that belong to a different HWND (e.g. popups / secondary windows)
                     // must NOT be sampled against it — mark them "not measured" (null) instead of
                     // reading the wrong pixels.
-                    if (el.WindowHandle is { } elHwnd && elHwnd != 0 && elHwnd != session.WindowHandle)
+                    var nativeHwnd = el.NativeWindowHandle ?? el.WindowHandle;
+                    if (nativeHwnd is { } elHwnd && elHwnd != 0 && elHwnd != session.WindowHandle)
                     {
                         ratios[el] = null;
                         continue;
@@ -291,6 +297,11 @@ internal class UiAuditCommand : Command, IShortDescription
                         (int)Math.Round(el.Y - originY),
                         (int)Math.Round(el.Width),
                         (int)Math.Round(el.Height));
+                    if (rect.Width <= 0 || rect.Height <= 0)
+                    {
+                        ratios[el] = null;
+                        continue;
+                    }
 
                     // Bounds guard: only sample elements whose rect lies within the captured
                     // buffer. Anything outside the captured origin+size is a different surface —
@@ -309,7 +320,7 @@ internal class UiAuditCommand : Command, IShortDescription
                         height,
                         rect,
                         samplesPerCandidate,
-                        ct);
+                        boundedToken);
                 }
                 return ratios;
             }
@@ -319,7 +330,10 @@ internal class UiAuditCommand : Command, IShortDescription
             }
             catch (Exception ex)
             {
-                logger.LogDebug(ex, "Contrast capture failed; marking the audit incomplete");
+                logger.LogDebug(
+                    ex,
+                    "Contrast capture or analysis failed within the {DurationSeconds}-second budget; marking the audit incomplete",
+                    (int)AuditMaxContrastDuration.TotalSeconds);
                 return null;
             }
         }

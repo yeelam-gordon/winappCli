@@ -16,7 +16,12 @@ internal sealed partial class UiAutomationService
     {
         _logger.LogDebug("Taking screenshot of process {Pid} (captureScreen={CaptureScreen}, focus={Focus})", session.ProcessId, captureScreen, focus);
 
-        var capture = await CaptureWindowRawAsync(session, captureScreen, focus, ct).ConfigureAwait(false);
+        var capture = await CaptureWindowRawAsync(
+            session,
+            captureScreen,
+            focus,
+            UiWindowCaptureOptions.Screenshot,
+            ct).ConfigureAwait(false);
 
         // If a selector was provided, crop to the element's bounding rectangle
         if (!string.IsNullOrEmpty(elementId))
@@ -34,20 +39,32 @@ internal sealed partial class UiAutomationService
     public async Task<(byte[] Pixels, int Width, int Height, int OriginX, int OriginY)> CaptureWindowAsync(UiSessionInfo session, CancellationToken ct)
     {
         _logger.LogDebug("Capturing full window pixels of process {Pid} for contrast analysis", session.ProcessId);
-        var capture = await CaptureWindowRawAsync(session, captureScreen: false, focus: false, ct).ConfigureAwait(false);
+        var capture = await CaptureWindowRawAsync(
+            session,
+            captureScreen: false,
+            focus: false,
+            UiWindowCaptureOptions.ContrastAudit,
+            ct).ConfigureAwait(false);
         return (capture.Pixels, capture.Width, capture.Height, capture.OriginLeft, capture.OriginTop);
     }
 
     private readonly record struct WindowCaptureResult(
         byte[] Pixels, int Width, int Height, int OriginLeft, int OriginTop, IUIAutomationElement Root);
 
-    private async Task<WindowCaptureResult> CaptureWindowRawAsync(UiSessionInfo session, bool captureScreen, bool focus, CancellationToken ct)
+    private async Task<WindowCaptureResult> CaptureWindowRawAsync(
+        UiSessionInfo session,
+        bool captureScreen,
+        bool focus,
+        UiWindowCaptureOptions options,
+        CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var root = GetRootElement(session);
         if (root is null)
         {
             throw new InvalidOperationException($"No UIA window found for {session.ProcessName} (PID {session.ProcessId}).");
         }
+        ct.ThrowIfCancellationRequested();
 
         // Get the actual window title from UIA (not session cache, which may be stale)
         var rootName = SafeGetBstr(() => root.get_CurrentName());
@@ -73,10 +90,11 @@ internal sealed partial class UiAutomationService
         if (Windows.Win32.PInvoke.IsIconic(hwnd))
         {
             Windows.Win32.PInvoke.ShowWindow(hwnd, Windows.Win32.UI.WindowsAndMessaging.SHOW_WINDOW_CMD.SW_RESTORE);
-            Thread.Sleep(300);
+            await Task.Delay(300, ct).ConfigureAwait(false);
         }
 
         // Get window dimensions
+        ct.ThrowIfCancellationRequested();
         Windows.Win32.PInvoke.GetWindowRect(hwnd, out var rect);
         var width = rect.right - rect.left;
         var height = rect.bottom - rect.top;
@@ -85,6 +103,11 @@ internal sealed partial class UiAutomationService
         {
             throw new InvalidOperationException("Window has zero size. Is it minimized?");
         }
+        _ = UiCaptureBounds.GetRequiredByteLength(
+            width,
+            height,
+            options.MaxPixelCount,
+            "Window capture");
 
         byte[] pixelData;
         var cropOriginLeft = rect.left;
@@ -108,7 +131,11 @@ internal sealed partial class UiAutomationService
             try
             {
                 var visibleRect = GetVisibleWindowRect(hwnd, rect);
-                var result = await WgcCapture.CaptureAsync(hwnd, _logger, ct).ConfigureAwait(false);
+                var result = await WgcCapture.CaptureAsync(
+                    hwnd,
+                    _logger,
+                    options.MaxPixelCount,
+                    ct).ConfigureAwait(false);
                 pixelData = result.Pixels;
                 width = result.Width;
                 height = result.Height;
@@ -121,13 +148,26 @@ internal sealed partial class UiAutomationService
             }
             catch (Exception ex)
             {
+                if (!options.AllowPrintWindowFallback)
+                {
+                    throw new InvalidOperationException(
+                        "Bounded contrast capture failed; PrintWindow fallback is disabled because it cannot be cooperatively cancelled.",
+                        ex);
+                }
+
                 _logger.LogDebug(ex, "WGC capture failed; falling back to PrintWindow");
-                pixelData = CaptureFromWindowWithBlankRetry(hwnd, width, height);
+                pixelData = await CaptureFromWindowWithBlankRetryAsync(hwnd, width, height, ct).ConfigureAwait(false);
             }
         }
         else
         {
-            pixelData = CaptureFromWindowWithBlankRetry(hwnd, width, height);
+            if (!options.AllowPrintWindowFallback)
+            {
+                throw new PlatformNotSupportedException(
+                    "Bounded contrast capture requires Windows.Graphics.Capture; PrintWindow fallback is disabled because it cannot be cooperatively cancelled.");
+            }
+
+            pixelData = await CaptureFromWindowWithBlankRetryAsync(hwnd, width, height, ct).ConfigureAwait(false);
         }
 
         return new WindowCaptureResult(pixelData, width, height, cropOriginLeft, cropOriginTop, root);
@@ -148,14 +188,19 @@ internal sealed partial class UiAutomationService
         return hr.Succeeded ? visibleRect : fallbackRect;
     }
 
-    private byte[] CaptureFromWindowWithBlankRetry(Windows.Win32.Foundation.HWND hwnd, int width, int height)
+    private async Task<byte[]> CaptureFromWindowWithBlankRetryAsync(
+        Windows.Win32.Foundation.HWND hwnd,
+        int width,
+        int height,
+        CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var pixels = CaptureFromWindow(hwnd, width, height);
-        if (IsBlankCapture(pixels))
+        if (IsBlankCapture(pixels, ct))
         {
             _logger.LogDebug("PrintWindow returned blank frame; foregrounding and retrying");
             Windows.Win32.PInvoke.SetForegroundWindow(hwnd);
-            Thread.Sleep(200);
+            await Task.Delay(200, ct).ConfigureAwait(false);
             pixels = CaptureFromWindow(hwnd, width, height);
         }
         return pixels;
@@ -249,7 +294,11 @@ internal sealed partial class UiAutomationService
             }
         };
 
-        var pixelData = new byte[checked(width * height * 4)];
+        var pixelData = new byte[UiCaptureBounds.GetRequiredByteLength(
+            width,
+            height,
+            maxPixelCount: null,
+            "GDI capture")];
         fixed (byte* pPixels = pixelData)
         {
             Windows.Win32.PInvoke.GetDIBits(hdc, hBitmap, 0, (uint)height, pPixels, &bmi,
@@ -259,14 +308,19 @@ internal sealed partial class UiAutomationService
         return pixelData;
     }
 
-    private static bool IsBlankCapture(byte[] pixels)
+    private static bool IsBlankCapture(byte[] pixels, CancellationToken ct)
     {
         // Check if all pixels are zero (black/unrendered frame).
         // Use int-sized chunks for speed on large buffers.
         var span = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, long>(pixels.AsSpan());
-        foreach (var chunk in span)
+        for (var i = 0; i < span.Length; i++)
         {
-            if (chunk != 0)
+            if ((i & 0xFFF) == 0)
+            {
+                ct.ThrowIfCancellationRequested();
+            }
+
+            if (span[i] != 0)
             {
                 return false;
             }

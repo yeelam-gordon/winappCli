@@ -1,7 +1,9 @@
 // Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 // Licensed under the MIT License.
 
+using WinApp.Cli.Models;
 using WinApp.Cli.Services;
+using Windows.Win32.UI.Accessibility;
 
 namespace WinApp.Cli.Tests;
 
@@ -82,5 +84,49 @@ public class UiTraversalStateTests
         Assert.AreEqual(UiInspectionIssueCodes.DiagnosticLimit, issues[1].Code);
         StringAssert.Contains(issues[1].Message, "2 additional");
         Assert.AreEqual("z", issues[2].Code);
+    }
+
+    [TestMethod]
+    public void CustomControlType_UsesProviderFacingName()
+    {
+        Assert.AreEqual(
+            "Custom",
+            UiAutomationService.GetControlTypeName(UIA_CONTROLTYPE_ID.UIA_CustomControlTypeId));
+    }
+
+    [TestMethod]
+    public void WindowHandleContext_PreservesHostedChildBoundary()
+    {
+        var hostedParent = new UiElement { WindowHandle = 333, NativeWindowHandle = 222 };
+        var providerOnlyChild = new UiElement();
+        var rootWithoutNativeHandle = new UiElement { NativeWindowHandle = 0 };
+
+        var hostedBoundary = UiAutomationService.ApplyWindowHandleContext(hostedParent, 111);
+        UiAutomationService.ApplyWindowHandleContext(providerOnlyChild, 111, hostedBoundary);
+        UiAutomationService.ApplyWindowHandleContext(rootWithoutNativeHandle, 111);
+
+        Assert.AreEqual(111, hostedParent.WindowHandle);
+        Assert.AreEqual(222, hostedParent.NativeWindowHandle);
+        Assert.AreEqual(111, providerOnlyChild.WindowHandle);
+        Assert.AreEqual(222, providerOnlyChild.NativeWindowHandle);
+        Assert.AreEqual(111, rootWithoutNativeHandle.WindowHandle);
+        Assert.AreEqual(111, rootWithoutNativeHandle.NativeWindowHandle);
+    }
+
+    [TestMethod]
+    public void WindowEnumeration_ChecksTraversalBudgetBeforeNativeWork()
+    {
+        var state = new UiTraversalState(
+            new UiInspectionOptions
+            {
+                MaxDuration = TimeSpan.Zero,
+                CaptureDiagnostics = true,
+            },
+            CancellationToken.None);
+
+        var windows = UiAutomationService.EnumerateWindows((_, _) => true, state);
+
+        Assert.AreEqual(0, windows.Count);
+        Assert.AreEqual(UiInspectionIssueCodes.TimeLimit, state.GetIssues().Single().Code);
     }
 }

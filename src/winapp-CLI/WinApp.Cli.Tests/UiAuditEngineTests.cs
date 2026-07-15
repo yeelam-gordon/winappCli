@@ -394,6 +394,32 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
+    public void Contrast_VisibleProviderTextWithInvalidBounds_FailsClosed()
+    {
+        var text = new UiElement
+        {
+            Id = "e0",
+            Type = "Text",
+            Name = "Body",
+            Width = 0,
+            Height = 16,
+            Selector = "body",
+        };
+
+        var candidates = UiAuditEngine.GetContrastCandidates([text]);
+        var result = UiAuditEngine.Run(
+            [text],
+            Opts(UiAuditEngine.CheckContrast),
+            _ => null);
+
+        Assert.IsTrue(candidates.Contains(text));
+        Assert.AreEqual(1, result.Summary.Fail);
+        Assert.AreEqual(1, result.Summary.Contrast!.Attempted);
+        Assert.AreEqual(0, result.Summary.Contrast.Measured);
+        Assert.AreEqual(1, result.Summary.Contrast.Unmeasured);
+    }
+
+    [TestMethod]
     public void TabOrder_BackwardJump_ProducesWarning()
     {
         var elements = new[]

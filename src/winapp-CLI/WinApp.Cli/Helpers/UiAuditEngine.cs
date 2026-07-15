@@ -450,9 +450,7 @@ internal static class UiAuditEngine
     {
         if (el.Type == "---"
             || el.IsOffscreen
-            || IsNonClientChrome(el)
-            || el.Width <= 0
-            || el.Height <= 0)
+            || IsNonClientChrome(el))
         {
             return false;
         }
