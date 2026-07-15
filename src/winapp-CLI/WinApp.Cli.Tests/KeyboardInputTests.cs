@@ -78,4 +78,42 @@ public class KeyboardInputTests
 
         Assert.AreEqual(0, KeyboardInput.BuildReleaseInputs(attempted, deliveredCount: 4).Length);
     }
+
+    [TestMethod]
+    public void ShortWrite_CompletePairPrefix_ReportsNoHeldKeysAndInsertedCount()
+    {
+        var attempted = new[]
+        {
+            KeyboardInput.KeyEvent(0x41, extended: false, keyUp: false),
+            KeyboardInput.KeyEvent(0x41, extended: false, keyUp: true),
+            KeyboardInput.KeyEvent(0x42, extended: false, keyUp: false),
+            KeyboardInput.KeyEvent(0x42, extended: false, keyUp: true),
+        };
+
+        const uint deliveredCount = 2;
+        var releases = KeyboardInput.BuildReleaseInputs(attempted, deliveredCount);
+        var diagnostic = KeyboardInput.DescribeSendInputCleanup(
+            deliveredCount,
+            (uint)attempted.Length,
+            releases.Length,
+            releasedCount: 0);
+
+        Assert.AreEqual(0, releases.Length);
+        Assert.AreEqual(
+            "The delivered prefix inserted 2 of 4 key events and left no injected keys held down. " +
+            "Those events were already applied; do not blindly retry the full gesture.",
+            diagnostic);
+    }
+
+    [TestMethod]
+    public void ShortWrite_ZeroInsertedEvents_ReportsFullRetrySafe()
+    {
+        Assert.AreEqual(
+            "No key events were inserted, so no synthetic key-up was needed; retrying the full gesture is safe.",
+            KeyboardInput.DescribeSendInputCleanup(
+                deliveredCount: 0,
+                attemptedCount: 4,
+                releaseCount: 0,
+                releasedCount: 0));
+    }
 }

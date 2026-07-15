@@ -210,3 +210,10 @@ internal class FakeForegroundGuard : WinApp.Cli.Helpers.IForegroundGuard
         return false;
     }
 }
+
+internal class FakeFrameworkHintService : WinApp.Cli.Helpers.IFrameworkHintService
+{
+    public bool IsLikelyXamlResult { get; set; }
+
+    public bool IsLikelyXaml(long hwnd) => IsLikelyXamlResult;
+}

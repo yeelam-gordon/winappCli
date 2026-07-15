@@ -121,13 +121,11 @@ internal static partial class KeyboardInput
                 }
             }
 
-            var cleanup = releases.Length switch
-            {
-                0 => "No key-down event was delivered, so no synthetic key-up was emitted.",
-                _ when released == (uint)releases.Length =>
-                    $"Released all {releases.Length} key(s) still held by the delivered prefix.",
-                _ => $"Key-up cleanup delivered only {released} of {releases.Length} release event(s).",
-            };
+            var cleanup = DescribeSendInputCleanup(
+                sent,
+                (uint)batch.Length,
+                releases.Length,
+                released);
 
             if (PInvoke.GetForegroundWindow().IsNull)
             {
@@ -251,6 +249,25 @@ internal static partial class KeyboardInput
         }
 
         return releases;
+    }
+
+    internal static string DescribeSendInputCleanup(
+        uint deliveredCount,
+        uint attemptedCount,
+        int releaseCount,
+        uint releasedCount)
+    {
+        if (releaseCount == 0)
+        {
+            return deliveredCount == 0
+                ? "No key events were inserted, so no synthetic key-up was needed; retrying the full gesture is safe."
+                : $"The delivered prefix inserted {deliveredCount} of {attemptedCount} key events and left no " +
+                  "injected keys held down. Those events were already applied; do not blindly retry the full gesture.";
+        }
+
+        return releasedCount == (uint)releaseCount
+            ? $"Released all {releaseCount} key(s) still held by the delivered prefix."
+            : $"Key-up cleanup delivered only {releasedCount} of {releaseCount} release event(s).";
     }
 
     private static bool SameKey(KEYBDINPUT left, KEYBDINPUT right)

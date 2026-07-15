@@ -5,6 +5,16 @@ using WinApp.Cli.Services;
 
 namespace WinApp.Cli.Helpers;
 
+internal interface IFrameworkHintService
+{
+    bool IsLikelyXaml(long hwnd);
+}
+
+internal sealed class FrameworkHintService : IFrameworkHintService
+{
+    public bool IsLikelyXaml(long hwnd) => FrameworkHint.IsLikelyXaml(hwnd);
+}
+
 /// <summary>
 /// Cheap, best-effort UI-framework detection from a window's class name. Used to scope framework-
 /// specific advice (e.g. the WM_CHAR / post-message warning) to the frameworks it actually applies to,

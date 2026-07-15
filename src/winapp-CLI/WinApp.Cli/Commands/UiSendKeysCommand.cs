@@ -86,9 +86,14 @@ internal class UiSendKeysCommand : Command, IShortDescription
         ISelectorService selectorService,
         IKeyboardInput keyboardInput,
         IForegroundGuard foregroundGuard,
+        IFrameworkHintService frameworkHint,
         IAnsiConsole ansiConsole,
         ILogger<UiSendKeysCommand> logger) : AsynchronousCommandLineAction
     {
+        private const string PostMessageXamlTextWarning =
+            "Literal text via --via post-message may not be delivered to WinUI 3 / XAML apps " +
+            "(WM_CHAR is dropped by the input pipeline). Use --via send-input if the text does not appear.";
+
         public override async Task<int> InvokeAsync(ParseResult parseResult, CancellationToken cancellationToken = default)
         {
             var json = parseResult.GetValue(WinAppRootCommand.JsonOption);
@@ -256,11 +261,10 @@ internal class UiSendKeysCommand : Command, IShortDescription
                 if (ShouldWarnPostMessageTextDropped(
                         transport == KeyTransport.PostMessage,
                         actions.Any(a => a is TextInput),
-                        FrameworkHint.IsLikelyXaml(targetHwnd)))
+                        frameworkHint.IsLikelyXaml(targetHwnd)))
                 {
-                    logger.LogWarning(
-                        "{Symbol} Literal text via --via post-message may not be delivered to WinUI 3 / XAML apps (WM_CHAR is dropped by the input pipeline). Use --via send-input if the text does not appear.",
-                        UiSymbols.Warning);
+                    logger.LogWarning("{Symbol} {Warning}", UiSymbols.Warning, PostMessageXamlTextWarning);
+                    warnings.Add(PostMessageXamlTextWarning);
                 }
 
                 if (transport == KeyTransport.SendInput && allowedSystemCombos.Count > 0)

@@ -26,6 +26,26 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    public async Task SendKeys_XamlPostMessageText_Json_IncludesExactWarning()
+    {
+        _fakeFrameworkHint.IsLikelyXamlResult = true;
+
+        var command = GetRequiredService<UiSendKeysCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command,
+            ["hello", "-a", "TestApp", "--via", "post-message", "--json"]);
+
+        Assert.AreEqual(0, exitCode);
+        var result = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(TestAnsiConsole.Output);
+        var warnings = result.GetProperty("warnings");
+        Assert.AreEqual(1, warnings.GetArrayLength());
+        Assert.AreEqual(
+            "Literal text via --via post-message may not be delivered to WinUI 3 / XAML apps " +
+            "(WM_CHAR is dropped by the input pipeline). Use --via send-input if the text does not appear.",
+            warnings[0].GetString());
+    }
+
+    [TestMethod]
     public async Task SendKeys_DefaultTransport_IsPostMessage()
     {
         var command = GetRequiredService<UiSendKeysCommand>();
