@@ -20,9 +20,6 @@ internal sealed class UiAuditOrchestrator
         _engines = engines.ToDictionary(e => e.Area, StringComparer.OrdinalIgnoreCase);
     }
 
-    /// <summary>Areas that have a registered engine.</summary>
-    public IReadOnlyCollection<string> AvailableAreas => _engines.Keys;
-
     /// <summary>Whether any of <paramref name="areas"/> needs a contrast pixel capture.</summary>
     public bool AnyRequiresContrastCapture(IEnumerable<string> areas)
         => areas.Any(a => _engines.TryGetValue(a, out var e) && e.RequiresContrastCapture);

@@ -93,29 +93,15 @@ internal sealed class ContrastAreaEngine : CheckBackedAreaEngine
 }
 
 /// <summary>
-/// Screen-reader affordances. Reserved extension point: a future engine will drive a screen-reader
-/// bridge / UIA text patterns to validate announced content. Returns no findings today.
+/// Static screen-reader readiness proxy over the current UIA tree. This does not drive or observe
+/// assistive technology.
 /// </summary>
 internal sealed class ScreenReaderAreaEngine : CheckBackedAreaEngine
 {
     public override string Area => AuditArea.ScreenReader;
 
-    // Static readiness proxy: checks what a screen reader would be able to perceive from the
-    // current UIA tree (name, role clarity, focus reachability). Dynamic event/live-region
-    // validation stays in the reserved `events` area for a later pass.
+    // Checks what a screen reader should be able to perceive from the current UIA tree:
+    // name, role clarity, and focus reachability.
     protected override IReadOnlyList<string> ResolveChecks(string profile)
         => [UiAuditEngine.CheckScreenReader];
-}
-
-/// <summary>
-/// UIA event / interaction behavior. Reserved extension point: a future engine will subscribe to
-/// UIA events (focus, invoke, property-changed) while exercising the UI. Returns no findings today.
-/// </summary>
-internal sealed class EventsAreaEngine : CheckBackedAreaEngine
-{
-    public override string Area => AuditArea.Events;
-
-    // TODO(events): Subscribe to UIA automation events and assert that interactions raise the
-    // expected notifications; needs a time budget (see UiAuditContext.TimeBudget) to bound waits.
-    protected override IReadOnlyList<string> ResolveChecks(string profile) => [];
 }

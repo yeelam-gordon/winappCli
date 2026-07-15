@@ -559,6 +559,45 @@ export async function tool(options: ToolOptions = {}): Promise<WinappResult> {
 }
 
 // ---------------------------------------------------------------------------
+// ui audit
+// ---------------------------------------------------------------------------
+
+export interface UiAuditOptions extends CommonOptions {
+  /** Semantic slug (e.g., btn-minimize-d1a0) or text to search by name/automationId */
+  selector?: string;
+  /** Target app (process name, window title, or PID). Lists windows if ambiguous. */
+  app?: string;
+  /** Accessibility area(s) to audit (repeatable). Allowed: names, keyboard, screen-reader, contrast, roles, all. Default: all. */
+  area?: string | string[];
+  /** Format output as JSON */
+  json?: boolean;
+  /** Audit depth: basic (essential rules + WCAG AA contrast thresholds) or thorough (deeper rules + WCAG AAA contrast thresholds). Aliases: aa, aaa. Default: basic. */
+  level?: string;
+  /** Save output to file path (e.g., screenshot) */
+  output?: string;
+  /** Target window by HWND (stable handle from list output). Takes precedence over --app. */
+  window?: number;
+}
+
+/**
+ * Quick-lint the currently visible view of a running app for accessibility and contrast issues. Walks the element tree and evaluates modular audit areas (names, keyboard, static screen-reader readiness, contrast, roles) at a chosen level (basic/thorough). Audits one view at a time — it does not navigate; drive the other ui commands (invoke, send-keys) to move through other pages/tabs/states and audit each. This heuristic lint is not accessibility certification. Exits non-zero when any fail-severity issue is found or a requested check cannot run, so it can gate CI.
+ */
+export async function uiAudit(options: UiAuditOptions = {}): Promise<WinappResult> {
+  const args: string[] = ['ui', 'audit'];
+  if (options.selector) args.push(options.selector);
+  if (options.app) args.push('--app', options.app);
+  if (options.area) {
+    const areaArr = Array.isArray(options.area) ? options.area : [options.area];
+    for (const value of areaArr) args.push('--area', value.toString());
+  }
+  if (options.json) args.push('--json');
+  if (options.level) args.push('--level', options.level);
+  if (options.output) args.push('--output', options.output);
+  if (options.window !== undefined) args.push('--window', options.window.toString());
+  return execCommand(args, options);
+}
+
+// ---------------------------------------------------------------------------
 // ui click
 // ---------------------------------------------------------------------------
 

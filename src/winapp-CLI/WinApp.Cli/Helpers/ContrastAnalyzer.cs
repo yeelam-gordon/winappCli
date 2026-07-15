@@ -192,5 +192,5 @@ internal static class ContrastAnalyzer
     }
 
     private static double Linearize(double c)
-        => c <= 0.03928 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+        => c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
 }

@@ -104,6 +104,11 @@ function deriveUnionName(valueType) {
   return lastDot >= 0 ? key.slice(lastDot + 1) : key;
 }
 
+/** Strip an array suffix so a repeated value can be mapped to its scalar TypeScript type. */
+function scalarValueType(valueType) {
+  return valueType?.endsWith('[]') ? valueType.slice(0, -2) : valueType;
+}
+
 /** Map a .NET value type to a TypeScript type string. */
 function tsType(valueType, helpName) {
   if (!valueType) return 'string';
@@ -128,12 +133,12 @@ function isBoolFlag(opt) {
   return tsType(opt.valueType, opt.helpName) === 'boolean';
 }
 
-/** Whether a positional argument is variadic (accepts multiple values). */
-function isVariadicArg(argDef) {
+/** Whether an argument or option accepts multiple values. */
+function isVariadic(def) {
   // Array types (e.g., DirectoryInfo[], String[])
-  if (argDef.valueType && argDef.valueType.endsWith('[]')) return true;
+  if (def.valueType && def.valueType.endsWith('[]')) return true;
   // Arity with no maximum or maximum > 1
-  const arity = argDef.arity;
+  const arity = def.arity;
   if (arity && arity.maximum === undefined) return true;
   if (arity && arity.maximum > 1) return true;
   return false;
@@ -197,7 +202,7 @@ function generate(schema) {
   // -- pre-scan all commands to collect used union types
   for (const { cmd } of commands) {
     for (const optDef of Object.values(cmd.options || {})) {
-      tsType(optDef.valueType, optDef.helpName);
+      tsType(scalarValueType(optDef.valueType), optDef.helpName);
     }
   }
 
@@ -295,14 +300,15 @@ function generate(schema) {
     // positional args first
     for (const arg of positionalArgs) {
       const required = arg.def.arity?.minimum >= 1;
-      const variadic = isVariadicArg(arg.def);
+      const variadic = isVariadic(arg.def);
       const type = variadic ? 'string | string[]' : tsType(arg.def.valueType);
       L(`  /** ${cleanDesc(arg.def.description)} */`);
       L(`  ${arg.propName}${required ? '' : '?'}: ${type};`);
     }
     // then named options
     for (const opt of opts) {
-      const tp = tsType(opt.def.valueType, opt.def.helpName);
+      const scalarType = tsType(scalarValueType(opt.def.valueType), opt.def.helpName);
+      const tp = isVariadic(opt.def) ? `${scalarType} | ${scalarType}[]` : scalarType;
       L(`  /** ${cleanDesc(opt.def.description)} */`);
       L(`  ${opt.propName}?: ${tp};`);
     }
@@ -327,7 +333,7 @@ function generate(schema) {
     // Positional args
     for (const arg of positionalArgs) {
       const required = arg.def.arity?.minimum >= 1;
-      const variadic = isVariadicArg(arg.def);
+      const variadic = isVariadic(arg.def);
       if (variadic) {
         if (required) {
           L(`  const ${arg.propName}Arr = Array.isArray(options.${arg.propName}) ? options.${arg.propName} : [options.${arg.propName}];`);
@@ -347,7 +353,12 @@ function generate(schema) {
 
     // Named options
     for (const opt of opts) {
-      if (isBoolFlag(opt.def)) {
+      if (isVariadic(opt.def)) {
+        L(`  if (options.${opt.propName}) {`);
+        L(`    const ${opt.propName}Arr = Array.isArray(options.${opt.propName}) ? options.${opt.propName} : [options.${opt.propName}];`);
+        L(`    for (const value of ${opt.propName}Arr) args.push('${opt.cliName}', value.toString());`);
+        L('  }');
+      } else if (isBoolFlag(opt.def)) {
         L(`  if (options.${opt.propName}) args.push('${opt.cliName}');`);
       } else if (tsType(opt.def.valueType) === 'number') {
         L(`  if (options.${opt.propName} !== undefined) args.push('${opt.cliName}', options.${opt.propName}.toString());`);

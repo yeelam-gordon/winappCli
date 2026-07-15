@@ -10,7 +10,9 @@ namespace WinApp.Cli.Tests;
 [TestClass]
 public class UiAuditEngineTests
 {
-    private static UiAuditEngine.Options Opts(params string[] checks) => new()
+    private static UiAuditEngine.Options Opts(params string[] checks) => Opts(1.0, checks);
+
+    private static UiAuditEngine.Options Opts(double dpiScale, params string[] checks) => new()
     {
         Checks = checks.Length == 0
             ? new HashSet<string>(UiAuditEngine.AllChecks, StringComparer.OrdinalIgnoreCase)
@@ -18,6 +20,7 @@ public class UiAuditEngineTests
         Profile = AuditProfile.Basic,
         NormalContrast = 4.5,
         LargeContrast = 3.0,
+        DpiScale = dpiScale,
         WcagLevel = "AA",
     };
 
@@ -140,7 +143,11 @@ public class UiAuditEngineTests
     {
         var elements = new[]
         {
-            new UiElement { Id = "e0", Type = "Pane", Name = "Wrapper", IsInvokable = true, IsEnabled = true },
+            new UiElement
+            {
+                Id = "e0", Type = "Pane", Name = "Wrapper", IsInvokable = true,
+                IsEnabled = true, IsKeyboardFocusable = true,
+            },
         };
 
         var result = UiAuditEngine.Run(elements, Opts(UiAuditEngine.CheckRoles));
@@ -149,7 +156,29 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
-    public void Names_NameMatchingAutomationId_ProducesWarning()
+    public void Container_InvokablePaneWithoutKeyboardFocus_IsIgnored()
+    {
+        var elements = new[]
+        {
+            new UiElement
+            {
+                Id = "e0", Type = "Pane", Name = null, IsInvokable = true,
+                IsEnabled = true, IsKeyboardFocusable = false,
+            },
+        };
+
+        var result = UiAuditEngine.Run(elements, Opts(
+            UiAuditEngine.CheckNames,
+            UiAuditEngine.CheckKeyboard,
+            UiAuditEngine.CheckRoles,
+            UiAuditEngine.CheckScreenReader));
+
+        Assert.AreEqual(0, result.Issues.Length,
+            "structural containers that only expose InvokePattern must not be treated as actionable");
+    }
+
+    [TestMethod]
+    public void Names_NameMatchingAutomationId_DoesNotWarn()
     {
         var elements = new[]
         {
@@ -158,7 +187,8 @@ public class UiAuditEngineTests
 
         var result = UiAuditEngine.Run(elements, Opts(UiAuditEngine.CheckNames));
 
-        Assert.IsTrue(result.Issues.Any(i => i.RuleId == UiAuditEngine.CheckNames && i.Severity == UiAuditEngine.SeverityWarn));
+        Assert.AreEqual(0, result.Summary.Warn,
+            "AutomationId can legitimately match a user-facing name (for example Win32 menu items)");
     }
 
     [TestMethod]
@@ -226,6 +256,49 @@ public class UiAuditEngineTests
 
         Assert.AreEqual(0, result.Summary.Fail);
         Assert.AreEqual(1, result.Summary.Pass);
+    }
+
+    [TestMethod]
+    public void Contrast_NormalTextAt150PercentDpi_UsesNormalThreshold()
+    {
+        // A 24-physical-pixel box at 150% scaling is only 16px at 96 DPI, so it is normal text.
+        var text = new UiElement { Id = "e0", Type = "Text", Name = "Body", Width = 150, Height = 24 };
+
+        var result = UiAuditEngine.Run(
+            [text],
+            Opts(1.5, UiAuditEngine.CheckContrast),
+            _ => 3.2);
+
+        Assert.AreEqual(1, result.Summary.Fail,
+            "DPI scaling must not make normal text use the relaxed large-text threshold");
+    }
+
+    [TestMethod]
+    public void Contrast_LargeTextAt150PercentDpi_UsesLargeThreshold()
+    {
+        // A 36-physical-pixel box at 150% scaling normalizes to 24px and qualifies as large text.
+        var text = new UiElement { Id = "e0", Type = "Text", Name = "Heading", Width = 240, Height = 36 };
+
+        var result = UiAuditEngine.Run(
+            [text],
+            Opts(1.5, UiAuditEngine.CheckContrast),
+            _ => 3.2);
+
+        Assert.AreEqual(0, result.Summary.Fail);
+        Assert.AreEqual(1, result.Summary.Pass);
+    }
+
+    [TestMethod]
+    public void Contrast_RatioJustBelowThreshold_FailsWithoutRoundingTolerance()
+    {
+        var text = new UiElement { Id = "e0", Type = "Text", Name = "Body", Width = 100, Height = 16 };
+
+        var result = UiAuditEngine.Run(
+            [text],
+            Opts(UiAuditEngine.CheckContrast),
+            _ => 4.49);
+
+        Assert.AreEqual(1, result.Summary.Fail);
     }
 
     [TestMethod]

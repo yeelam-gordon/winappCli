@@ -17,7 +17,6 @@ public class UiAuditOrchestratorTests
         new ScreenReaderAreaEngine(),
         new ContrastAreaEngine(),
         new RolesAreaEngine(),
-        new EventsAreaEngine(),
     ]);
 
     private static UiAuditContext Context(IReadOnlyList<UiElement> elements, string profile = AuditProfile.Basic,
@@ -27,6 +26,7 @@ public class UiAuditOrchestratorTests
         Profile = profile,
         NormalContrast = 4.5,
         LargeContrast = 3.0,
+        DpiScale = 1.0,
         WcagLevel = "AA",
         ContrastProvider = contrast,
     };
@@ -67,7 +67,9 @@ public class UiAuditOrchestratorTests
     public void Profile_Normalize_AcceptsKnownRejectsUnknown()
     {
         Assert.AreEqual(AuditProfile.Basic, AuditProfile.Normalize(null));
+        Assert.AreEqual(AuditProfile.Basic, AuditProfile.Normalize("AA"));
         Assert.AreEqual(AuditProfile.Thorough, AuditProfile.Normalize("THOROUGH"));
+        Assert.AreEqual(AuditProfile.Thorough, AuditProfile.Normalize("aaa"));
         Assert.IsNull(AuditProfile.Normalize("deep"));
     }
 
@@ -108,33 +110,6 @@ public class UiAuditOrchestratorTests
         Assert.AreEqual(1, merged.Summary.Warn);
         Assert.IsTrue(merged.Issues.Any(i => i.RuleId == UiAuditEngine.CheckNames));
         Assert.IsTrue(merged.Issues.Any(i => i.RuleId == UiAuditEngine.CheckKeyboard));
-    }
-
-    [TestMethod]
-    public void EventsArea_ProducesNoFindingsUntilDynamicSupportLands()
-    {
-        var elements = new[]
-        {
-            new UiElement { Id = "e0", Type = "Button", Name = null, IsEnabled = true, IsKeyboardFocusable = true },
-        };
-        var orchestrator = DefaultOrchestrator();
-
-        var result = orchestrator.Run([AuditArea.Events], Context(elements));
-
-        Assert.AreEqual(0, result.Issues.Length);
-        Assert.AreEqual(0, result.Summary.Fail);
-        Assert.AreEqual(0, result.Summary.Warn);
-    }
-
-    [TestMethod]
-    public void Resolve_EventsArea_IsRejectedAsReserved()
-    {
-        // events is a reserved no-op extension point: not user-selectable for now.
-        var resolved = AuditArea.Resolve(["events"], out var invalid);
-        Assert.IsNull(resolved);
-        Assert.AreEqual("events", invalid);
-        CollectionAssert.DoesNotContain(AuditArea.Selectable.ToArray(), AuditArea.Events);
-        CollectionAssert.DoesNotContain(AuditArea.Implemented.ToArray(), AuditArea.Events);
     }
 
     [TestMethod]

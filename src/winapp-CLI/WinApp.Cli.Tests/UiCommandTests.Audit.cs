@@ -52,11 +52,23 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
     public async Task Audit_InvalidLevel_ReturnsError()
     {
-        var command = GetRequiredService<UiAuditCommand>();
-        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--level", "deep", "--json"]);
-        Assert.AreEqual(1, exitCode);
+        var originalError = Console.Error;
+        using var jsonError = new StringWriter();
+        try
+        {
+            Console.SetError(jsonError);
+            var command = GetRequiredService<UiAuditCommand>();
+            var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--level", "deep", "--json"]);
+            Assert.AreEqual(1, exitCode);
+            StringAssert.Contains(jsonError.ToString(), "\"code\": \"invalid_arguments\"");
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
     }
 
     [TestMethod]
@@ -78,7 +90,7 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
-    public async Task Audit_ContrastCaptureUnavailable_SkipsContrastGracefully()
+    public async Task Audit_ContrastCaptureUnavailable_FailsClosed()
     {
         _fakeUia.InspectResult =
         [
@@ -89,9 +101,9 @@ public partial class UiCommandTests
         var command = GetRequiredService<UiAuditCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "contrast", "--json"]);
 
-        // No fail-severity issues since contrast could not be measured.
-        Assert.AreEqual(0, exitCode);
-        StringAssert.Contains(TestAnsiConsole.Output, "\"fail\": 0");
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "\"fail\": 1");
+        StringAssert.Contains(TestAnsiConsole.Output, "Contrast could not be measured");
     }
 
     [TestMethod]
@@ -144,11 +156,90 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
     public async Task Audit_InvalidArea_ReturnsError()
     {
+        var originalError = Console.Error;
+        using var jsonError = new StringWriter();
+        try
+        {
+            Console.SetError(jsonError);
+            var command = GetRequiredService<UiAuditCommand>();
+            var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "bogus", "--json"]);
+            Assert.AreEqual(1, exitCode);
+            StringAssert.Contains(jsonError.ToString(), "\"code\": \"invalid_arguments\"");
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+    }
+
+    [TestMethod]
+    public async Task Audit_LevelAliases_AreAccepted()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement { Id = "e0", Type = "Window", Name = "App", IsEnabled = true },
+        ];
+
         var command = GetRequiredService<UiAuditCommand>();
-        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "bogus", "--json"]);
+        var aaExit = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "names", "--level", "aa", "--json"]);
+        var aaaExit = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "names", "--level", "aaa", "--json"]);
+
+        Assert.AreEqual(0, aaExit);
+        Assert.AreEqual(0, aaaExit);
+    }
+
+    [TestMethod]
+    public async Task Audit_ZeroElements_FailsInsteadOfReportingClean()
+    {
+        _fakeUia.InspectResult = [];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "names", "--json"]);
+
         Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "\"ruleId\": \"audit\"");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"fail\": 1");
+        StringAssert.Contains(TestAnsiConsole.Output, "No UI Automation elements were discovered");
+    }
+
+    [TestMethod]
+    public async Task Audit_HumanOutput_ReportsIncompleteContrast()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement { Id = "e0", Type = "Text", Name = "Hello", Width = 100, Height = 16 },
+        ];
+        _fakeUia.WindowCaptureException = new InvalidOperationException("no capture");
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "contrast"]);
+
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "Contrast could not be measured");
+        StringAssert.Contains(TestAnsiConsole.Output, "0 checks passed");
+    }
+
+    [TestMethod]
+    public async Task Audit_HumanOutput_EscapesSpectreMarkup()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement
+            {
+                Id = "e0", Type = "Button", Name = null, IsEnabled = true,
+                IsKeyboardFocusable = true, Selector = "[btn-x]",
+            },
+        ];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "names"]);
+
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "[btn-x]");
+        StringAssert.Contains(TestAnsiConsole.Output, "Summary:");
     }
 
     [TestMethod]
@@ -173,15 +264,6 @@ public partial class UiCommandTests
         StringAssert.Contains(output, "\"fail\": 1");
         // The duplicate missing-name findings from keyboard/screen-reader are collapsed away.
         StringAssert.DoesNotMatch(output, new System.Text.RegularExpressions.Regex("\"fail\":\\s*3"));
-    }
-
-    [TestMethod]
-    public async Task Audit_AreaEvents_ReturnsError()
-    {
-        // events is a reserved no-op area, not user-selectable for now.
-        var command = GetRequiredService<UiAuditCommand>();
-        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "events", "--json"]);
-        Assert.AreEqual(1, exitCode);
     }
 
     [TestMethod]

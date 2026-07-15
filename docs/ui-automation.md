@@ -420,6 +420,22 @@ winapp ui list-windows                                      # all windows (no fi
 winapp ui list-windows --show-hidden                        # include invisible zero-size windows
 ```
 
+### audit
+Run quick heuristic lint against the UI Automation elements currently exposed by the target window.
+```bash
+winapp ui audit -a myapp                                    # all areas, basic/AA level
+winapp ui audit -a myapp --area names --area keyboard
+winapp ui audit -a myapp --area contrast --level aaa --json -o audit.json
+```
+
+- Areas are `names`, `keyboard`, `screen-reader`, `contrast`, `roles`, or `all`; repeat `--area` to combine them.
+- Levels are `basic`/`aa` (WCAG AA contrast thresholds) and `thorough`/`aaa` (deeper heuristic checks and WCAG AAA contrast thresholds).
+- The `screen-reader` area statically checks UIA name, role, and focus readiness. It does not drive assistive technology or navigate application states.
+- Contrast uses window pixel sampling. Large-text classification estimates rendered size from DPI-normalized element bounds; it does not read the actual font.
+- No discovered UIA elements or an unavailable requested contrast capture is an incomplete audit, so the command reports a failure and exits non-zero. Summary `pass` counts are successful rule checks, not elements.
+
+This command is a current-view linting aid, not WCAG or accessibility certification. Supplement it with manual testing and maintained tools such as [Accessibility Insights for Windows](https://accessibilityinsights.io/docs/windows/overview/) or [Axe.Windows](https://github.com/microsoft/axe-windows) for comprehensive rule coverage.
+
 ## Framework Support
 
 | Framework | inspect | search | invoke | set-value | screenshot |

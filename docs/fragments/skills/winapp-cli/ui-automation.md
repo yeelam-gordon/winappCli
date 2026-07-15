@@ -206,15 +206,18 @@ winapp ui audit -a myapp --json -o audit.json
 # Scope to specific areas (repeatable). Areas: names, keyboard, screen-reader, contrast, roles
 winapp ui audit -a myapp --area names --area keyboard
 
-# Go deeper: 'thorough' adds heuristic rules (e.g. tab-order coherence) and applies WCAG AAA contrast
+# Go deeper: 'thorough' (alias: 'aaa') adds heuristic rules and applies WCAG AAA contrast
 winapp ui audit -a myapp --level thorough
 
-# Contrast only, at the default basic level (WCAG AA thresholds)
-winapp ui audit -a myapp --area contrast
+# Contrast only, at the default basic level (alias: 'aa'; WCAG AA thresholds)
+winapp ui audit -a myapp --area contrast --level aa
 ```
 - `--area` selects one or more audit areas (default: all). Contrast requires a window pixel capture; it is measured only when the `contrast` area is selected.
-- `--level basic` (default) runs fast essential rules with WCAG **AA** contrast thresholds (normal 4.5, large 3.0); `--level thorough` adds heuristic/deeper rules (e.g. keyboard tab-order) and applies WCAG **AAA** contrast thresholds (normal 7.0, large 4.5).
+- `--level basic` (default; alias `aa`) runs fast essential rules with WCAG **AA** contrast thresholds (normal 4.5, large 3.0); `--level thorough` (alias `aaa`) adds heuristic/deeper rules (e.g. keyboard tab-order) and applies WCAG **AAA** contrast thresholds (normal 7.0, large 4.5).
 - Non-client chrome (title-bar caption buttons, scrollbar parts) is suppressed, and the same defect surfaced by multiple areas is de-duplicated, so counts aren't inflated. Elements on a different window/HWND than the captured one are reported as "not measured" for contrast rather than mis-scored.
+- The audit is a static snapshot of the UI Automation elements currently exposed by the target window. The `screen-reader` area checks static UIA name, role, and focus readiness; it does not drive a screen reader or navigate application states.
+- Contrast is a pixel-sampling heuristic. Large-text classification estimates rendered size from DPI-normalized element bounds rather than reading the actual font. If no UIA elements are found, or a requested contrast capture is unavailable, the audit reports a failure and exits non-zero instead of reporting a clean result.
+- Summary `pass` counts are successful individual rule checks, not elements. This command is quick heuristic lint, not WCAG or accessibility certification. Supplement it with manual testing and maintained tools such as [Accessibility Insights for Windows](https://accessibilityinsights.io/docs/windows/overview/) or [Axe.Windows](https://github.com/microsoft/axe-windows) for comprehensive rule coverage.
 
 ## Tips
 - Use `--interactive` with `inspect` as your first command — it shows only what you can click

@@ -17,13 +17,18 @@ internal static class AuditProfile
     /// <summary>Superset of <see cref="Basic"/> adding heuristic / deeper rules and WCAG AAA contrast.</summary>
     public const string Thorough = "thorough";
 
-    /// <summary>Accepted <c>--level</c> values.</summary>
-    public static readonly IReadOnlyList<string> All = [Basic, Thorough];
+    /// <summary>Accepted <c>--level</c> values, including WCAG-level aliases.</summary>
+    public static readonly IReadOnlyList<string> All = [Basic, Thorough, "aa", "aaa"];
 
     /// <summary>Normalize a raw level token; returns <c>null</c> when unrecognized.</summary>
     public static string? Normalize(string? raw)
     {
         var normalized = (raw ?? Basic).Trim().ToLowerInvariant();
-        return All.Contains(normalized) ? normalized : null;
+        return normalized switch
+        {
+            Basic or "aa" => Basic,
+            Thorough or "aaa" => Thorough,
+            _ => null,
+        };
     }
 }

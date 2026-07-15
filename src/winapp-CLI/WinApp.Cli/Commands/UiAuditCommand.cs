@@ -17,7 +17,7 @@ namespace WinApp.Cli.Commands;
 
 internal class UiAuditCommand : Command, IShortDescription
 {
-    public string ShortDescription => "Audit the current app view for accessibility and contrast issues";
+    public string ShortDescription => "Quick-lint the current app view for accessibility and contrast issues";
 
     public static Option<string[]> AreaOption { get; }
     public static Option<string> LevelOption { get; }
@@ -38,18 +38,20 @@ internal class UiAuditCommand : Command, IShortDescription
         LevelOption = new Option<string>("--level")
         {
             Description = "Audit depth: basic (essential rules + WCAG AA contrast thresholds) or " +
-                          "thorough (deeper rules + WCAG AAA contrast thresholds). Default: basic.",
+                          "thorough (deeper rules + WCAG AAA contrast thresholds). " +
+                          "Aliases: aa, aaa. Default: basic.",
             DefaultValueFactory = _ => AuditProfile.Basic,
         };
     }
 
     public UiAuditCommand()
-        : base("audit", "Audit the currently visible view of a running app for accessibility and contrast issues. " +
+        : base("audit", "Quick-lint the currently visible view of a running app for accessibility and contrast issues. " +
                "Walks the element tree and evaluates modular audit areas (names, keyboard, " +
-               "screen-reader, contrast, roles) at a chosen level (basic/thorough). " +
+               "static screen-reader readiness, contrast, roles) at a chosen level (basic/thorough). " +
                "Audits one view at a time — it does not navigate; drive the other ui commands " +
                "(invoke, send-keys) to move through other pages/tabs/states and audit each. " +
-               "Exits non-zero when any fail-severity issue is found, so it can gate CI.")
+               "This heuristic lint is not accessibility certification. Exits non-zero when any " +
+               "fail-severity issue is found or a requested check cannot run, so it can gate CI.")
     {
         Arguments.Add(SharedUiOptions.SelectorArgument);
         Options.Add(SharedUiOptions.AppOption);
@@ -90,7 +92,7 @@ internal class UiAuditCommand : Command, IShortDescription
             {
                 var msg = $"Invalid --area '{invalidArea}'. Allowed values: {string.Join(", ", AuditArea.Selectable)}.";
                 logger.LogError("{Symbol} {Message}", UiSymbols.Error, msg);
-                UiJsonError.Emit(json, UiJsonError.CodeInternalError, msg);
+                UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, msg);
                 return 1;
             }
 
@@ -100,7 +102,7 @@ internal class UiAuditCommand : Command, IShortDescription
             {
                 var msg = $"Invalid --level '{parseResult.GetValue(LevelOption)}'. Allowed values: {string.Join(", ", AuditProfile.All)}.";
                 logger.LogError("{Symbol} {Message}", UiSymbols.Error, msg);
-                UiJsonError.Emit(json, UiJsonError.CodeInternalError, msg);
+                UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, msg);
                 return 1;
             }
 
@@ -118,12 +120,13 @@ internal class UiAuditCommand : Command, IShortDescription
             {
                 var session = await sessionService.ResolveSessionAsync(app, window, cancellationToken);
                 var elements = await uiAutomation.InspectAsync(session, selector, AuditDepth, cancellationToken);
+                var elementCount = elements.Count(el => el.Type != "---");
 
-                // Build the contrast provider (best-effort): capture the window once, then sample
-                // each text element's bounding rectangle. If capture fails, contrast is skipped.
+                // Build the contrast provider by capturing the window once, then sampling each
+                // text element's bounding rectangle. Capture failures are reported below.
                 Func<UiElement, double?>? contrastProvider = null;
                 var contrastMeasured = false;
-                if (needsContrast)
+                if (needsContrast && elementCount > 0)
                 {
                     var ratios = await TryComputeContrastAsync(session, elements, cancellationToken);
                     if (ratios is not null)
@@ -139,10 +142,23 @@ internal class UiAuditCommand : Command, IShortDescription
                     Profile = level,
                     NormalContrast = normalThreshold,
                     LargeContrast = largeThreshold,
+                    DpiScale = GetDpiScale(session.WindowHandle),
                     WcagLevel = wcagLevel,
                     ContrastProvider = contrastProvider,
                 };
                 var result = orchestrator.Run(areas, context);
+
+                if (elementCount == 0)
+                {
+                    AddAuditFailure(result, "audit",
+                        "No UI Automation elements were discovered, so the current view could not be audited. " +
+                        "Verify that the target window is visible and runs at the same elevation.");
+                }
+                else if (needsContrast && !contrastMeasured)
+                {
+                    AddAuditFailure(result, UiAuditEngine.CheckContrast,
+                        "Contrast could not be measured because window capture was unavailable; the audit is incomplete.");
+                }
 
                 var exitCode = result.Summary.Fail > 0 ? 1 : 0;
 
@@ -157,7 +173,7 @@ internal class UiAuditCommand : Command, IShortDescription
                 }
                 else
                 {
-                    var report = BuildHumanReport(result, session, level, areas, needsContrast, contrastMeasured);
+                    var report = BuildHumanReport(result, session, level, areas);
                     ansiConsole.Markup(report.Markup);
                     if (!string.IsNullOrEmpty(output))
                     {
@@ -167,8 +183,12 @@ internal class UiAuditCommand : Command, IShortDescription
                 }
 
                 logger.LogDebug("Audit evaluated {Count} elements: pass={Pass} warn={Warn} fail={Fail}",
-                    elements.Length, result.Summary.Pass, result.Summary.Warn, result.Summary.Fail);
+                    elementCount, result.Summary.Pass, result.Summary.Warn, result.Summary.Fail);
                 return exitCode;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (System.Runtime.InteropServices.COMException comEx)
             {
@@ -184,8 +204,8 @@ internal class UiAuditCommand : Command, IShortDescription
         }
 
         /// <summary>
-        /// Best-effort contrast measurement: capture the target window once and sample each text
-        /// element's bounding rectangle. Returns null when the window could not be captured.
+        /// Captures the target window once and samples each text element's bounding rectangle.
+        /// Returns null when the window could not be captured.
         /// </summary>
         private async Task<Dictionary<UiElement, double?>?> TryComputeContrastAsync(
             UiSessionInfo session, UiElement[] elements, CancellationToken ct)
@@ -230,9 +250,13 @@ internal class UiAuditCommand : Command, IShortDescription
                 }
                 return ratios;
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
-                logger.LogDebug(ex, "Contrast capture failed; skipping contrast checks");
+                logger.LogDebug(ex, "Contrast capture failed; marking the audit incomplete");
                 return null;
             }
         }
@@ -247,9 +271,36 @@ internal class UiAuditCommand : Command, IShortDescription
             await File.WriteAllTextAsync(output, content, ct);
         }
 
+        private static double GetDpiScale(long hwnd)
+        {
+            if (hwnd == 0)
+            {
+                return 1.0;
+            }
+
+            var dpi = Windows.Win32.PInvoke.GetDpiForWindow(
+                new Windows.Win32.Foundation.HWND((nint)hwnd));
+            return dpi == 0 ? 1.0 : dpi / 96.0;
+        }
+
+        private static void AddAuditFailure(UiAuditResult result, string ruleId, string message)
+        {
+            result.Issues =
+            [
+                .. result.Issues,
+                new UiAuditIssue
+                {
+                    RuleId = ruleId,
+                    Severity = UiAuditEngine.SeverityFail,
+                    Message = message,
+                },
+            ];
+            result.Summary.Fail++;
+        }
+
         private static (string Markup, string PlainText) BuildHumanReport(
             UiAuditResult result, UiSessionInfo session, string level,
-            IReadOnlyList<string> scope, bool needsContrast, bool contrastMeasured)
+            IReadOnlyList<string> scope)
         {
             var markup = new StringBuilder();
             var plain = new StringBuilder();
@@ -267,12 +318,6 @@ internal class UiAuditCommand : Command, IShortDescription
             var scopeText = string.Join(", ", scope);
             Line($"[grey]Areas: {scopeText} · Level: {level}[/]",
                  $"Areas: {scopeText} · Level: {level}");
-
-            if (needsContrast && !contrastMeasured)
-            {
-                Line("[yellow]⚠  Contrast could not be measured (window capture unavailable) — contrast checks were skipped.[/]",
-                     "!  Contrast could not be measured (window capture unavailable) — contrast checks were skipped.");
-            }
 
             markup.AppendLine();
             plain.AppendLine();
@@ -299,8 +344,8 @@ internal class UiAuditCommand : Command, IShortDescription
             plain.AppendLine();
 
             var s = result.Summary;
-            Line($"[bold]Summary:[/] [green]{s.Pass} passed[/], [yellow]{s.Warn} warnings[/], [red]{s.Fail} failures[/]",
-                 $"Summary: {s.Pass} passed, {s.Warn} warnings, {s.Fail} failures");
+            Line($"[bold]Summary:[/] [green]{s.Pass} checks passed[/], [yellow]{s.Warn} warnings[/], [red]{s.Fail} failures[/]",
+                 $"Summary: {s.Pass} checks passed, {s.Warn} warnings, {s.Fail} failures");
 
             return (markup.ToString(), plain.ToString());
         }

@@ -43,8 +43,11 @@ internal static class UiAuditEngine
         /// <summary>WCAG contrast threshold for normal-size text.</summary>
         public double NormalContrast { get; init; } = 4.5;
 
-        /// <summary>WCAG contrast threshold for large text (>= ~24px, or ~18.66px bold).</summary>
+        /// <summary>WCAG contrast threshold for large text (estimated from DPI-normalized bounds).</summary>
         public double LargeContrast { get; init; } = 3.0;
+
+        /// <summary>Target window DPI scale relative to 96 DPI.</summary>
+        public double DpiScale { get; init; } = 1.0;
 
         /// <summary>Informational: "AA" or "AAA".</summary>
         public string WcagLevel { get; init; } = "AA";
@@ -62,6 +65,13 @@ internal static class UiAuditEngine
     private static readonly HashSet<string> TextTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "Text", "Document", "Hyperlink"
+    };
+
+    // Structural containers can expose InvokePattern as a framework implementation detail. Treat
+    // them as actionable only when they are also keyboard-focusable.
+    private static readonly HashSet<string> ContainerTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Pane", "Group", "Window"
     };
 
     // Non-client / chrome ControlTypes that are structurally part of the window frame or scroll
@@ -87,11 +97,12 @@ internal static class UiAuditEngine
 
     private const string TitleBarType = "TitleBar";
 
-    /// <summary>Large-text px threshold (WCAG large text ≈ 18pt ≈ 24px).</summary>
-    private const double LargeTextHeightPx = 24.0;
+    /// <summary>Large-text height estimate at 96 DPI (WCAG large text ≈ 18pt ≈ 24px).</summary>
+    private const double LargeTextHeightAt96Dpi = 24.0;
 
     public static bool IsInteractive(UiElement el)
-        => el.IsInvokable || InteractiveTypes.Contains(el.Type);
+        => InteractiveTypes.Contains(el.Type)
+        || (el.IsInvokable && (!ContainerTypes.Contains(el.Type) || el.IsKeyboardFocusable));
 
     /// <summary>
     /// True when the element is non-client window chrome (title-bar / caption buttons) or scroll-bar
@@ -171,13 +182,7 @@ internal static class UiAuditEngine
 
                 if (!string.IsNullOrWhiteSpace(el.Name))
                 {
-                    if (!string.IsNullOrWhiteSpace(el.AutomationId)
-                        && string.Equals(el.Name, el.AutomationId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        issues.Add(Issue(CheckNames, SeverityWarn, el,
-                            $"{Describe(el)} uses its AutomationId as its accessible name. Provide a user-facing label instead of a control identifier."));
-                    }
-                    else if (!string.IsNullOrWhiteSpace(el.ClassName)
+                    if (!string.IsNullOrWhiteSpace(el.ClassName)
                         && string.Equals(el.Name, el.ClassName, StringComparison.OrdinalIgnoreCase))
                     {
                         issues.Add(Issue(CheckNames, SeverityWarn, el,
@@ -230,7 +235,7 @@ internal static class UiAuditEngine
             }
 
             // roles: actionable elements should expose a sensible ControlType (not Custom/Unknown).
-            if (options.Checks.Contains(CheckRoles) && el.IsInvokable && visible)
+            if (options.Checks.Contains(CheckRoles) && interactive && visible)
             {
                 if (HasUnknownRole(el.Type))
                 {
@@ -297,9 +302,10 @@ internal static class UiAuditEngine
                 var ratio = contrastProvider(el);
                 if (ratio is { } r)
                 {
-                    var isLarge = el.Height >= LargeTextHeightPx;
+                    var dpiScale = options.DpiScale > 0 ? options.DpiScale : 1.0;
+                    var isLarge = el.Height / dpiScale >= LargeTextHeightAt96Dpi;
                     var threshold = isLarge ? options.LargeContrast : options.NormalContrast;
-                    if (r + 0.05 < threshold) // small epsilon so exact-threshold passes
+                    if (r < threshold)
                     {
                         issues.Add(Issue(CheckContrast, SeverityFail, el,
                             $"{Describe(el)} contrast ratio {r:0.00}:1 is below the WCAG {options.WcagLevel} threshold {threshold:0.0}:1 for {(isLarge ? "large" : "normal")} text."));

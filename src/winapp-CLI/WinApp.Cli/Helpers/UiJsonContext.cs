@@ -193,7 +193,9 @@ internal sealed class UiGetValueResult
 {
     public string ElementId { get; set; } = "";
     public string? Text { get; set; }
-}internal sealed class UiScrollResult
+}
+
+internal sealed class UiScrollResult
 {
     public string ElementId { get; set; } = "";
     public string? Direction { get; set; }
@@ -262,7 +264,7 @@ internal sealed class UiAuditResult
 /// <summary>Roll-up counts across all evaluated rule checks.</summary>
 internal sealed class UiAuditSummary
 {
-    /// <summary>Number of individual rule checks that passed.</summary>
+    /// <summary>Number of individual rule checks that passed (not the number of elements).</summary>
     public int Pass { get; set; }
     /// <summary>Number of warn-severity issues.</summary>
     public int Warn { get; set; }
@@ -273,7 +275,7 @@ internal sealed class UiAuditSummary
 /// <summary>A single accessibility/contrast finding.</summary>
 internal sealed class UiAuditIssue
 {
-    /// <summary>Rule identifier: names, keyboard, roles, tab-order, contrast.</summary>
+    /// <summary>Rule identifier: audit, names, keyboard, screen-reader, roles, tab-order, or contrast.</summary>
     public string RuleId { get; set; } = "";
     /// <summary>"fail" or "warn".</summary>
     public string Severity { get; set; } = "";

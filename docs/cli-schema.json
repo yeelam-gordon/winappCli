@@ -1679,7 +1679,7 @@
       "hidden": false,
       "subcommands": {
         "audit": {
-          "description": "Audit the currently visible view of a running app for accessibility and contrast issues. Walks the element tree and evaluates modular audit areas (names, keyboard, screen-reader, contrast, roles) at a chosen level (basic/thorough). Audits one view at a time — it does not navigate; drive the other ui commands (invoke, send-keys) to move through other pages/tabs/states and audit each. Exits non-zero when any fail-severity issue is found, so it can gate CI.",
+          "description": "Quick-lint the currently visible view of a running app for accessibility and contrast issues. Walks the element tree and evaluates modular audit areas (names, keyboard, static screen-reader readiness, contrast, roles) at a chosen level (basic/thorough). Audits one view at a time — it does not navigate; drive the other ui commands (invoke, send-keys) to move through other pages/tabs/states and audit each. This heuristic lint is not accessibility certification. Exits non-zero when any fail-severity issue is found or a requested check cannot run, so it can gate CI.",
           "hidden": false,
           "arguments": {
             "selector": {
@@ -1735,7 +1735,7 @@
               "recursive": false
             },
             "--level": {
-              "description": "Audit depth: basic (essential rules + WCAG AA contrast thresholds) or thorough (deeper rules + WCAG AAA contrast thresholds). Default: basic.",
+              "description": "Audit depth: basic (essential rules + WCAG AA contrast thresholds) or thorough (deeper rules + WCAG AAA contrast thresholds). Aliases: aa, aaa. Default: basic.",
               "hidden": false,
               "valueType": "System.String",
               "hasDefaultValue": true,
