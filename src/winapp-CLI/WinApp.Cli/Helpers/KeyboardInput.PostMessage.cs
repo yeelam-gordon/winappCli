@@ -10,11 +10,34 @@ namespace WinApp.Cli.Helpers;
 
 internal static partial class KeyboardInput
 {
+    private const ushort VkControl = 0x11;
     private const ushort VkMenu = 0x12;
 
     private readonly record struct PostedKey(ushort VirtualKey, bool Extended);
+    private readonly record struct PostedKeyCleanup(int Failures, Exception? Error);
+
+    internal delegate bool PostMessageInvoker(
+        HWND hwnd,
+        uint message,
+        WPARAM wParam,
+        LPARAM lParam,
+        out int error);
 
     private static void SendViaPostMessage(HWND hwnd, IReadOnlyList<KeyAction> actions, HKL keyboardLayout)
+        => SendViaPostMessageCore(hwnd, actions, keyboardLayout, TryPostMessage);
+
+    internal static void SendViaPostMessage(
+        HWND hwnd,
+        IReadOnlyList<KeyAction> actions,
+        HKL keyboardLayout,
+        PostMessageInvoker postMessage)
+        => SendViaPostMessageCore(hwnd, actions, keyboardLayout, postMessage);
+
+    private static void SendViaPostMessageCore(
+        HWND hwnd,
+        IReadOnlyList<KeyAction> actions,
+        HKL keyboardLayout,
+        PostMessageInvoker postMessage)
     {
         var heldKeys = new List<PostedKey>();
         try
@@ -24,7 +47,7 @@ internal static partial class KeyboardInput
                 switch (action)
                 {
                     case KeyChord chord:
-                        PostChord(hwnd, chord, keyboardLayout, heldKeys);
+                        PostChord(hwnd, chord, keyboardLayout, heldKeys, postMessage);
                         break;
 
                     case TextInput text:
@@ -35,7 +58,8 @@ internal static partial class KeyboardInput
                                 PInvoke.WM_CHAR,
                                 new WPARAM(ch),
                                 new LPARAM(1),
-                                "WM_CHAR");
+                                "WM_CHAR",
+                                postMessage);
                         }
                         break;
                 }
@@ -43,16 +67,26 @@ internal static partial class KeyboardInput
                 Thread.Sleep(5);
             }
         }
-        catch (KeyboardInjectionException ex)
+        catch (Exception ex)
         {
-            var cleanupFailures = ReleasePostedKeys(hwnd, keyboardLayout, heldKeys);
-            if (cleanupFailures > 0)
+            var cleanup = TryReleasePostedKeys(hwnd, keyboardLayout, heldKeys, postMessage);
+            if (cleanup.Failures > 0)
             {
+                var cleanupDetail = cleanup.Error is null
+                    ? $"failed for {cleanup.Failures} key(s)"
+                    : $"failed for {cleanup.Failures} key(s), including " +
+                      $"{cleanup.Error.GetType().Name} during cleanup";
+                Exception innerException = cleanup.Error is null
+                    ? ex
+                    : new AggregateException(ex, cleanup.Error);
+
                 throw new KeyboardInjectionException(
-                    ex.Code,
-                    $"{ex.Message} Best-effort PostMessage key-up cleanup also failed for " +
-                    $"{cleanupFailures} key(s); the target may have observed a partial sequence.",
-                    ex);
+                    ex is KeyboardInjectionException injectionEx
+                        ? injectionEx.Code
+                        : UiJsonError.CodeInputInjectionFailed,
+                    $"{ex.Message} Best-effort PostMessage key-up cleanup also {cleanupDetail}; " +
+                    "the target may have observed a partial sequence.",
+                    innerException);
             }
 
             throw;
@@ -63,40 +97,66 @@ internal static partial class KeyboardInput
         HWND hwnd,
         KeyChord chord,
         HKL keyboardLayout,
-        List<PostedKey> heldKeys)
+        List<PostedKey> heldKeys,
+        PostMessageInvoker postMessage)
     {
         int altDownCount = 0;
 
         foreach (var modifier in chord.Modifiers)
         {
-            PostKeyDownChecked(hwnd, keyboardLayout, modifier, IsExtended(modifier), ref altDownCount);
+            PostKeyDownChecked(hwnd, keyboardLayout, modifier, IsExtended(modifier), ref altDownCount, postMessage);
             heldKeys.Add(new PostedKey(modifier, IsExtended(modifier)));
         }
 
         var mainVirtualKey = ResolveChordVirtualKey(chord, keyboardLayout);
-        PostKeyDownChecked(hwnd, keyboardLayout, mainVirtualKey, chord.Extended, ref altDownCount);
+        PostKeyDownChecked(hwnd, keyboardLayout, mainVirtualKey, chord.Extended, ref altDownCount, postMessage);
         heldKeys.Add(new PostedKey(mainVirtualKey, chord.Extended));
 
-        PostKeyUpChecked(hwnd, keyboardLayout, mainVirtualKey, chord.Extended, ref altDownCount);
+        PostKeyUpChecked(hwnd, keyboardLayout, mainVirtualKey, chord.Extended, ref altDownCount, postMessage);
         heldKeys.RemoveAt(heldKeys.Count - 1);
 
         for (int i = chord.Modifiers.Count - 1; i >= 0; i--)
         {
             var modifier = chord.Modifiers[i];
-            PostKeyUpChecked(hwnd, keyboardLayout, modifier, IsExtended(modifier), ref altDownCount);
+            PostKeyUpChecked(hwnd, keyboardLayout, modifier, IsExtended(modifier), ref altDownCount, postMessage);
             heldKeys.RemoveAt(heldKeys.Count - 1);
         }
     }
 
-    private static int ReleasePostedKeys(HWND hwnd, HKL keyboardLayout, List<PostedKey> heldKeys)
+    private static PostedKeyCleanup TryReleasePostedKeys(
+        HWND hwnd,
+        HKL keyboardLayout,
+        List<PostedKey> heldKeys,
+        PostMessageInvoker postMessage)
+    {
+        int trackedKeyCount = heldKeys.Count;
+        try
+        {
+            return ReleasePostedKeys(hwnd, keyboardLayout, heldKeys, postMessage);
+        }
+        catch (Exception cleanupError)
+        {
+            heldKeys.Clear();
+            return new PostedKeyCleanup(Math.Max(1, trackedKeyCount), cleanupError);
+        }
+    }
+
+    private static PostedKeyCleanup ReleasePostedKeys(
+        HWND hwnd,
+        HKL keyboardLayout,
+        List<PostedKey> heldKeys,
+        PostMessageInvoker postMessage)
     {
         int failures = 0;
+        Exception? firstError = null;
         int altDownCount = heldKeys.Count(key => IsAltKey(key.VirtualKey));
         for (int i = heldKeys.Count - 1; i >= 0; i--)
         {
             var key = heldKeys[i];
             bool isAlt = IsAltKey(key.VirtualKey);
-            bool posted = TryPostKey(
+            try
+            {
+                bool posted = TryPostKey(
                     hwnd,
                     keyboardLayout,
                     isSystem: altDownCount > 0 || isAlt,
@@ -104,19 +164,26 @@ internal static partial class KeyboardInput
                     keyUp: true,
                     key.VirtualKey,
                     key.Extended,
+                    postMessage,
                     out _);
-            if (!posted)
+                if (!posted)
+                {
+                    failures++;
+                }
+                else if (isAlt)
+                {
+                    altDownCount--;
+                }
+            }
+            catch (Exception cleanupError)
             {
                 failures++;
-            }
-            else if (isAlt)
-            {
-                altDownCount--;
+                firstError ??= cleanupError;
             }
         }
 
         heldKeys.Clear();
-        return failures;
+        return new PostedKeyCleanup(failures, firstError);
     }
 
     private static void PostKeyDownChecked(
@@ -124,7 +191,8 @@ internal static partial class KeyboardInput
         HKL keyboardLayout,
         ushort virtualKey,
         bool extended,
-        ref int altDownCount)
+        ref int altDownCount,
+        PostMessageInvoker postMessage)
     {
         bool isAlt = IsAltKey(virtualKey);
         PostKeyChecked(
@@ -134,7 +202,8 @@ internal static partial class KeyboardInput
             altContext: altDownCount > 0,
             keyUp: false,
             virtualKey,
-            extended);
+            extended,
+            postMessage);
         if (isAlt)
         {
             altDownCount++;
@@ -146,7 +215,8 @@ internal static partial class KeyboardInput
         HKL keyboardLayout,
         ushort virtualKey,
         bool extended,
-        ref int altDownCount)
+        ref int altDownCount,
+        PostMessageInvoker postMessage)
     {
         bool isAlt = IsAltKey(virtualKey);
         PostKeyChecked(
@@ -156,7 +226,8 @@ internal static partial class KeyboardInput
             altContext: altDownCount > 0,
             keyUp: true,
             virtualKey,
-            extended);
+            extended,
+            postMessage);
         if (isAlt && altDownCount > 0)
         {
             altDownCount--;
@@ -170,7 +241,8 @@ internal static partial class KeyboardInput
         bool altContext,
         bool keyUp,
         ushort virtualKey,
-        bool extended)
+        bool extended,
+        PostMessageInvoker postMessage)
     {
         if (!TryPostKey(
                 hwnd,
@@ -180,6 +252,7 @@ internal static partial class KeyboardInput
                 keyUp,
                 virtualKey,
                 extended,
+                postMessage,
                 out var error))
         {
             ThrowPostMessageFailure(error, keyUp ? "key-up" : "key-down");
@@ -194,6 +267,7 @@ internal static partial class KeyboardInput
         bool keyUp,
         ushort virtualKey,
         bool extended,
+        PostMessageInvoker postMessage,
         out int error)
     {
         uint message = isSystem
@@ -215,10 +289,10 @@ internal static partial class KeyboardInput
             lParam |= (1u << 30) | (1u << 31);
         }
 
-        return TryPostMessage(
+        return postMessage(
             hwnd,
             message,
-            new WPARAM(virtualKey),
+            new WPARAM(NormalizePostedVirtualKey(virtualKey)),
             new LPARAM((nint)(int)lParam),
             out error);
     }
@@ -228,9 +302,10 @@ internal static partial class KeyboardInput
         uint message,
         WPARAM wParam,
         LPARAM lParam,
-        string operation)
+        string operation,
+        PostMessageInvoker postMessage)
     {
-        if (TryPostMessage(hwnd, message, wParam, lParam, out var error))
+        if (postMessage(hwnd, message, wParam, lParam, out var error))
         {
             return;
         }
@@ -271,6 +346,15 @@ internal static partial class KeyboardInput
             UiJsonError.CodeInputInjectionFailed,
             $"PostMessage failed while posting {operation}. {detail} The target may have observed a partial sequence.");
     }
+
+    internal static ushort NormalizePostedVirtualKey(ushort virtualKey)
+        => virtualKey switch
+        {
+            0xA0 or 0xA1 => VkShift,
+            0xA2 or 0xA3 => VkControl,
+            0xA4 or 0xA5 => VkMenu,
+            _ => virtualKey
+        };
 
     private static bool IsAltKey(ushort virtualKey) => virtualKey is VkMenu or 0xA4 or 0xA5;
 }

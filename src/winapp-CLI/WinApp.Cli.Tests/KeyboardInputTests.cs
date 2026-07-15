@@ -2,6 +2,8 @@
 // Licensed under the MIT License.
 
 using WinApp.Cli.Helpers;
+using Windows.Win32;
+using Windows.Win32.Foundation;
 using Windows.Win32.UI.Input.KeyboardAndMouse;
 
 namespace WinApp.Cli.Tests;
@@ -42,6 +44,132 @@ public class KeyboardInputTests
         Assert.AreEqual(UiJsonError.CodeInputInjectionFailed, error.Code);
         StringAssert.Contains(error.Message, "UIPI");
         StringAssert.Contains(error.Message, "equal- or lower-integrity");
+    }
+
+    [TestMethod]
+    [DataRow("lshift", (ushort)0x10, (byte)0x2A, false)]
+    [DataRow("rshift", (ushort)0x10, (byte)0x36, false)]
+    [DataRow("lctrl", (ushort)0x11, (byte)0x1D, false)]
+    [DataRow("rctrl", (ushort)0x11, (byte)0x1D, true)]
+    [DataRow("lalt", (ushort)0x12, (byte)0x38, false)]
+    [DataRow("ralt", (ushort)0x12, (byte)0x38, true)]
+    public void PostMessage_SidedModifier_UsesGenericWParamAndSidedMetadata(
+        string modifier,
+        ushort expectedWParam,
+        byte expectedScanCode,
+        bool expectedExtended)
+    {
+        var posted = new List<(uint Message, nuint WParam, uint LParam)>();
+
+        KeyboardInput.SendViaPostMessage(
+            new HWND(1),
+            KeyStringParser.Parse($"{modifier}+a"),
+            default,
+            CapturePostMessage);
+
+        var keyDown = posted[0];
+        Assert.AreEqual((nuint)expectedWParam, keyDown.WParam);
+        Assert.AreEqual(expectedScanCode, (byte)((keyDown.LParam >> 16) & 0xFF));
+        Assert.AreEqual(expectedExtended, (keyDown.LParam & (1u << 24)) != 0);
+
+        bool CapturePostMessage(
+            HWND _,
+            uint message,
+            WPARAM wParam,
+            LPARAM lParam,
+            out int error)
+        {
+            error = 0;
+            posted.Add((message, (nuint)wParam, unchecked((uint)(nint)lParam)));
+            return true;
+        }
+    }
+
+    [TestMethod]
+    public void PostMessage_UnexpectedFailure_ReleasesTrackedModifierAndRethrows()
+    {
+        var posted = new List<(uint Message, nuint WParam, uint LParam)>();
+        var expected = new InvalidOperationException("Synthetic PostMessage failure.");
+
+        var actual = Assert.ThrowsExactly<InvalidOperationException>(
+            () => KeyboardInput.SendViaPostMessage(
+                new HWND(1),
+                KeyStringParser.Parse("rctrl+a"),
+                default,
+                FailSecondPostMessage));
+
+        Assert.AreSame(expected, actual);
+        Assert.AreEqual(3, posted.Count);
+        Assert.AreEqual(PInvoke.WM_KEYDOWN, posted[0].Message);
+        Assert.AreEqual((nuint)0x11, posted[0].WParam);
+        Assert.IsTrue((posted[0].LParam & (1u << 24)) != 0);
+        Assert.AreEqual(PInvoke.WM_KEYUP, posted[2].Message);
+        Assert.AreEqual((nuint)0x11, posted[2].WParam);
+        Assert.IsTrue((posted[2].LParam & (1u << 24)) != 0);
+        Assert.IsTrue((posted[2].LParam & (1u << 30)) != 0);
+        Assert.IsTrue((posted[2].LParam & (1u << 31)) != 0);
+
+        bool FailSecondPostMessage(
+            HWND _,
+            uint message,
+            WPARAM wParam,
+            LPARAM lParam,
+            out int error)
+        {
+            error = 0;
+            posted.Add((message, (nuint)wParam, unchecked((uint)(nint)lParam)));
+            if (posted.Count == 2)
+            {
+                throw expected;
+            }
+
+            return true;
+        }
+    }
+
+    [TestMethod]
+    public void PostMessage_UnexpectedFailureAndCleanupException_UsesInjectionFailure()
+    {
+        var posted = new List<(uint Message, nuint WParam)>();
+        int postCount = 0;
+        var error = Assert.ThrowsExactly<KeyboardInjectionException>(
+            () => KeyboardInput.SendViaPostMessage(
+                new HWND(1),
+                KeyStringParser.Parse("rctrl+rshift+a"),
+                default,
+                ThrowDuringDeliveryAndCleanup));
+
+        Assert.AreEqual(UiJsonError.CodeInputInjectionFailed, error.Code);
+        Assert.AreEqual(
+            "Synthetic PostMessage failure. Best-effort PostMessage key-up cleanup also failed for " +
+            "1 key(s), including InvalidOperationException during cleanup; " +
+            "the target may have observed a partial sequence.",
+            error.Message);
+        Assert.IsInstanceOfType<AggregateException>(error.InnerException);
+        Assert.AreEqual(5, posted.Count);
+        Assert.AreEqual(PInvoke.WM_KEYUP, posted[4].Message);
+        Assert.AreEqual((nuint)0x11, posted[4].WParam);
+
+        bool ThrowDuringDeliveryAndCleanup(
+            HWND _,
+            uint message,
+            WPARAM wParam,
+            LPARAM ____,
+            out int nativeError)
+        {
+            nativeError = 0;
+            postCount++;
+            posted.Add((message, (nuint)wParam));
+            if (postCount <= 2 || postCount == 5)
+            {
+                return true;
+            }
+
+            throw new InvalidOperationException(
+                postCount == 3
+                    ? "Synthetic PostMessage failure."
+                    : "Synthetic cleanup failure.");
+        }
     }
 
     [TestMethod]
