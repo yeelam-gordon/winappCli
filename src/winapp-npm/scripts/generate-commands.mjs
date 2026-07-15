@@ -73,10 +73,14 @@ function kebabToPascal(s) {
   return cc.charAt(0).toUpperCase() + cc.slice(1);
 }
 
-/** Clean up CLI description for JSDoc (single line, no trailing period). */
+/** Flatten CLI descriptions for JSDoc while preserving intentional repeated spaces in examples. */
 function cleanDesc(desc) {
   if (!desc) return '';
-  return desc.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim();
+  return desc
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ');
 }
 
 const COMMON_OPTIONS = new Set(['--quiet', '--verbose', '--help']);
