@@ -14,6 +14,9 @@ namespace WinApp.Cli.Tests;
 [TestClass]
 public class PointerGesturePlannerTests
 {
+    private const int ExpectedFingerSpacingPx = 24;
+    private const int ExpectedPinchCenterGapPx = 4;
+
     // -------------------------------------------------------------------------
     // Pinch geometry
     // -------------------------------------------------------------------------
@@ -65,15 +68,14 @@ public class PointerGesturePlannerTests
         var (contactPaths, _, _) = PointerGesturePlanner.PlanTouch(
             TouchGesture.Pinch, start, end: null, distance, fingers: 2);
 
-        int expectedHalf = Math.Max(5, distance / 2); // PinchCenterGapPx=4 → +1 = 5
+        int expectedHalf = Math.Max(ExpectedPinchCenterGapPx + 1, distance / 2);
         Assert.AreEqual(start.X - expectedHalf, contactPaths[0][0].X,
             "Left finger X start must be center.X - half");
         Assert.AreEqual(start.X + expectedHalf, contactPaths[1][0].X,
             "Right finger X start must be center.X + half");
-        const int expectedCenterGap = 4;
-        Assert.AreEqual(start.X - expectedCenterGap, contactPaths[0][^1].X,
+        Assert.AreEqual(start.X - ExpectedPinchCenterGapPx, contactPaths[0][^1].X,
             "Left finger X end must preserve the center gap");
-        Assert.AreEqual(start.X + expectedCenterGap, contactPaths[1][^1].X,
+        Assert.AreEqual(start.X + ExpectedPinchCenterGapPx, contactPaths[1][^1].X,
             "Right finger X end must preserve the center gap");
     }
 
@@ -242,7 +244,6 @@ public class PointerGesturePlannerTests
     public void PlanTouch_DoubleTap_MultiFinger_SpacesContactsCorrectly()
     {
         // With --fingers 3, DoubleTap plans 3 contacts each offset by FingerSpacingPx on X.
-        const int fingerSpacingPx = 24;
         var start = new PointerPoint(200, 300);
         var (contactPaths, points, fingers) = PointerGesturePlanner.PlanTouch(
             TouchGesture.DoubleTap, start, end: null, distance: 0, fingers: 3);
@@ -253,8 +254,8 @@ public class PointerGesturePlannerTests
         for (int i = 0; i < 3; i++)
         {
             Assert.AreEqual(1, contactPaths[i].Count, $"Contact {i} must be a single-point path for tap/double-tap");
-            var expected = new PointerPoint(start.X + (i * fingerSpacingPx), start.Y);
-            Assert.AreEqual(expected, contactPaths[i][0], $"Contact {i} must use the exact {fingerSpacingPx} px spacing");
+            var expected = new PointerPoint(start.X + (i * ExpectedFingerSpacingPx), start.Y);
+            Assert.AreEqual(expected, contactPaths[i][0], $"Contact {i} must use the exact {ExpectedFingerSpacingPx} px spacing");
             Assert.AreEqual(expected, points[i], $"Flattened point {i} must match contact {i}");
         }
     }
@@ -262,7 +263,6 @@ public class PointerGesturePlannerTests
     [TestMethod]
     public void PlanTouch_Swipe_MultiFinger_PreservesExactSpacingAcrossPath()
     {
-        const int fingerSpacingPx = 24;
         var start = new PointerPoint(200, 300);
         var end = new PointerPoint(360, 340);
         var (contactPaths, points, fingers) = PointerGesturePlanner.PlanTouch(
@@ -274,11 +274,11 @@ public class PointerGesturePlannerTests
 
         for (int i = 0; i < 3; i++)
         {
-            int offset = i * fingerSpacingPx;
+            int offset = i * ExpectedFingerSpacingPx;
             Assert.AreEqual(new PointerPoint(start.X, start.Y + offset), contactPaths[i][0],
-                $"Contact {i} start must use the exact {fingerSpacingPx} px spacing");
+                $"Contact {i} start must use the exact {ExpectedFingerSpacingPx} px spacing");
             Assert.AreEqual(new PointerPoint(end.X, end.Y + offset), contactPaths[i][1],
-                $"Contact {i} end must preserve the exact {fingerSpacingPx} px spacing");
+                $"Contact {i} end must preserve the exact {ExpectedFingerSpacingPx} px spacing");
         }
     }
 

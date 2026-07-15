@@ -269,7 +269,10 @@ internal sealed class UiTouchResult
     public UiPointResult[] Points { get; set; } = [];
     public int Fingers { get; set; }
     public int DurationMs { get; set; }
-    /// <summary>Effective hold time passed to the injector (500 ms for an implicit long-press default).</summary>
+    /// <summary>
+    /// Effective hold time passed to the injector: the supplied <c>--hold-ms</c> value for any gesture,
+    /// 500 ms for long-press when omitted, or 0 otherwise.
+    /// </summary>
     public int HoldMs { get; set; }
     public long Hwnd { get; set; }
 }
