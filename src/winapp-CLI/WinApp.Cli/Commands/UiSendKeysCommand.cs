@@ -23,8 +23,8 @@ internal class UiSendKeysCommand : Command, IShortDescription
                       "modifier combos (ctrl+shift+t, alt+f4), raw virtual keys (vk=0x42), or literal text (hello). " +
                       "Use text=<literal> to type a single value verbatim when it would otherwise be read as a key " +
                       "name or combo (text=enter types \"enter\"; text=ctrl+a types \"ctrl+a\"); backslash escapes \\s \\t " +
-                      "\\n \\r \\\\ are supported (text=a\\s\\sb types \"a  b\"). To type the whole argument literally " +
-                      "without escaping each token, pass --verbatim instead. " +
+                      "\\n \\r \\\\ are supported; text=a\\s\\sb types \"a  b\" (double space). " +
+                      "To type the whole argument literally without escaping each token, pass --verbatim instead. " +
                       "Quote multi-token strings, e.g. \"ctrl+a delete\".",
         Arity = ArgumentArity.ZeroOrOne
     };

@@ -828,6 +828,7 @@ public partial class UiCommandTests : BaseCommandTests
     {
         // F2: the text=<literal> escape must be discoverable via --help / cli-schema, not only the guide.
         StringAssert.Contains(UiSendKeysCommand.KeysArgument.Description, "text=");
+        StringAssert.Contains(UiSendKeysCommand.KeysArgument.Description, "double space");
     }
 
     [TestMethod]
