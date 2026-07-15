@@ -71,18 +71,6 @@ internal static class PointerGesturePlanner
     }
 
     /// <summary>
-    /// Whether a token that failed to parse as a point was nonetheless meant as coordinates (has a comma
-    /// and an integer first field). Mirrors <c>ui drag</c>'s heuristic so malformed coordinates surface
-    /// a precise error instead of a misleading "element not found".
-    /// </summary>
-    public static bool LooksLikeCoordinates(string token)
-    {
-        var parts = token.Split(',');
-        return parts.Length >= 2
-            && int.TryParse(parts[0].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out _);
-    }
-
-    /// <summary>
     /// Parses a pen ink path — a whitespace-separated list of <c>x,y</c> pairs
     /// (<c>"x1,y1 x2,y2 ..."</c>). Returns <see langword="false"/> if any token is not a valid pair.
     /// </summary>
@@ -108,9 +96,9 @@ internal static class PointerGesturePlanner
 
     /// <summary>
     /// Expands a touch gesture into per-finger waypoint paths plus the flattened point list reported in
-    /// JSON. <paramref name="start"/> is the anchor (selector center or <c>--at</c>). For pinch/stretch
-    /// <paramref name="fingers"/> is coerced to at least 2. <paramref name="direction"/> controls the
-    /// swipe axis when no explicit <paramref name="end"/> is given; defaults to <c>"right"</c>.
+    /// JSON. <paramref name="start"/> is the anchor (selector center or <c>--at</c>). Pinch/stretch
+    /// always produce exactly two contact paths. <paramref name="direction"/> controls the swipe axis
+    /// when no explicit <paramref name="end"/> is given; defaults to <c>"right"</c>.
     /// </summary>
     public static (List<IReadOnlyList<PointerPoint>> ContactPaths, List<PointerPoint> Points, int Fingers) PlanTouch(
         TouchGesture gesture,
@@ -139,7 +127,6 @@ internal static class PointerGesturePlanner
             case TouchGesture.Pinch:
             case TouchGesture.Stretch:
             {
-                fingers = Math.Max(2, fingers);
                 int half = Math.Max(PinchCenterGapPx + 1, distance / 2);
 
                 // Two opposing fingers along the x-axis. Pinch converges toward the center; stretch

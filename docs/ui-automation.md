@@ -326,7 +326,7 @@ winapp ui pen -a myapp --at 200,200 --tilt-x 30 --tilt-y -15           # tilted 
 - `--pressure <0.0–1.0>` — Pen pressure (default 0.5).
 - `--tilt-x <deg>` / `--tilt-y <deg>` — Pen tilt angles, −90 to 90 (default 0).
 - `--eraser` — Use the eraser end of the pen instead of the tip.
-- `--duration-ms <ms>` — Total stroke travel time in milliseconds distributed as interpolated UPDATE frames across the path (default: ~10 ms per waypoint). Use this to control how fast the pen visibly moves from start to end.
+- `--duration-ms <ms>` — Total stroke travel time in milliseconds distributed as interpolated UPDATE frames across the path (default: ~10 ms per path segment). Use this to control how fast the pen visibly moves from start to end.
 
 > **Injection safety.** Like `touch`, `pen` refuses to inject without a **non-zero, foregrounded target window** (`no_target` / `foreground_not_target` / `no_interactive_desktop`) and **bounds-checks every ink point** against the target window rectangle, rejecting out-of-bounds coordinates with **`invalid_arguments`** before any input is injected. Invalid `--pressure` (outside 0.0–1.0) or tilt (outside ±90°) are rejected up front.
 

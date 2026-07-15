@@ -93,26 +93,20 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
-    public async Task Pen_PressureNaN_Rejected_NoInjection()
+    public async Task Pen_PressureNaN_ParseRejected_NoInjection()
     {
-        // NaN passes `float.TryParse` but is caught by the !float.IsFinite guard in the handler.
+        // System.CommandLine rejects NaN at parse time, before the handler is invoked. The
+        // Program-level bridge has separate coverage for converting typed parse failures to JSON.
         var command = GetRequiredService<UiPenCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command,
             ["-a", "TestApp", "--at", "100,100", "--pressure", "NaN", "--json"]);
         Assert.AreEqual(1, exitCode);
         Assert.AreEqual(0, _fakePointer.PenCalls.Count, "Pen must not be injected for NaN pressure");
-        // Stdout must be empty.
         Assert.AreEqual(string.Empty, TestAnsiConsole.Output.Trim(),
             "Stdout must be empty — no success envelope for invalid pressure");
-        // The structured JSON error written to stderr must carry code == "invalid_arguments".
         var stderr = ConsoleStdErr.ToString();
-        int jsonStart = stderr.IndexOf('{');
-        Assert.IsTrue(jsonStart >= 0, $"stderr must contain a JSON error object; got: {stderr}");
-        var error = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(
-            stderr.AsSpan(jsonStart).TrimEnd());
-        Assert.AreEqual(UiJsonError.CodeInvalidArguments,
-            error.GetProperty("error").GetProperty("code").GetString(),
-            "JSON error.code must be 'invalid_arguments' for NaN pressure");
+        StringAssert.Contains(stderr, "Cannot parse argument 'NaN' for option '--pressure'",
+            "Direct command invocation must surface the typed parse failure");
     }
 
     [TestMethod]

@@ -15,7 +15,7 @@ namespace WinApp.Cli.Tests;
 public class PointerGesturePlannerTests
 {
     // -------------------------------------------------------------------------
-    // M9 — Pinch geometry
+    // Pinch geometry
     // -------------------------------------------------------------------------
 
     [TestMethod]
@@ -70,10 +70,15 @@ public class PointerGesturePlannerTests
             "Left finger X start must be center.X - half");
         Assert.AreEqual(start.X + expectedHalf, contactPaths[1][0].X,
             "Right finger X start must be center.X + half");
+        const int expectedCenterGap = 4;
+        Assert.AreEqual(start.X - expectedCenterGap, contactPaths[0][^1].X,
+            "Left finger X end must preserve the center gap");
+        Assert.AreEqual(start.X + expectedCenterGap, contactPaths[1][^1].X,
+            "Right finger X end must preserve the center gap");
     }
 
     // -------------------------------------------------------------------------
-    // M9 — Stretch geometry
+    // Stretch geometry
     // -------------------------------------------------------------------------
 
     [TestMethod]
@@ -133,7 +138,7 @@ public class PointerGesturePlannerTests
     }
 
     // -------------------------------------------------------------------------
-    // M9 — Finger-count coercion for pinch/stretch
+    // Finger-count coercion for pinch/stretch
     // -------------------------------------------------------------------------
 
     [TestMethod]
@@ -168,7 +173,7 @@ public class PointerGesturePlannerTests
     }
 
     // -------------------------------------------------------------------------
-    // M9 — Bounds rejection for pinch/stretch geometry
+    // Bounds rejection for pinch/stretch geometry
     // -------------------------------------------------------------------------
 
     [TestMethod]
@@ -204,7 +209,7 @@ public class PointerGesturePlannerTests
     }
 
     // -------------------------------------------------------------------------
-    // M9 — Double-tap path structure (repetition is in PointerInput.RunTouchGesture)
+    // Double-tap path structure (repetition is in PointerInput.RunTouchGesture)
     // -------------------------------------------------------------------------
 
     [TestMethod]
@@ -243,23 +248,43 @@ public class PointerGesturePlannerTests
 
         Assert.AreEqual(3, contactPaths.Count, "DoubleTap with --fingers 3 must produce 3 contact paths");
         Assert.AreEqual(3, fingers, "Reported finger count must be 3");
-        // Each contact is a single point at (start.X + i*FingerSpacingPx, start.Y).
+        // Lock in the planner's 24 px contact spacing rather than merely asserting ordering.
         for (int i = 0; i < 3; i++)
         {
             Assert.AreEqual(1, contactPaths[i].Count, $"Contact {i} must be a single-point path for tap/double-tap");
-            Assert.AreEqual(start.Y, contactPaths[i][0].Y, $"Contact {i} Y must match start Y");
+            var expected = new PointerPoint(start.X + (i * 24), start.Y);
+            Assert.AreEqual(expected, contactPaths[i][0], $"Contact {i} must use the exact 24 px spacing");
+            Assert.AreEqual(expected, points[i], $"Flattened point {i} must match contact {i}");
         }
-        // Contacts must be spread along X (ascending).
-        Assert.IsTrue(contactPaths[1][0].X > contactPaths[0][0].X, "Contact 1 X must be greater than contact 0 X");
-        Assert.IsTrue(contactPaths[2][0].X > contactPaths[1][0].X, "Contact 2 X must be greater than contact 1 X");
+    }
+
+    [TestMethod]
+    public void PlanTouch_Swipe_MultiFinger_PreservesExactSpacingAcrossPath()
+    {
+        var start = new PointerPoint(200, 300);
+        var end = new PointerPoint(360, 340);
+        var (contactPaths, points, fingers) = PointerGesturePlanner.PlanTouch(
+            TouchGesture.Swipe, start, end, distance: 0, fingers: 3);
+
+        Assert.AreEqual(3, contactPaths.Count);
+        Assert.AreEqual(3, fingers);
+        Assert.AreEqual(6, points.Count);
+
+        for (int i = 0; i < 3; i++)
+        {
+            int offset = i * 24;
+            Assert.AreEqual(new PointerPoint(start.X, start.Y + offset), contactPaths[i][0],
+                $"Contact {i} start must use the exact 24 px spacing");
+            Assert.AreEqual(new PointerPoint(end.X, end.Y + offset), contactPaths[i][1],
+                $"Contact {i} end must preserve the exact 24 px spacing");
+        }
     }
 
     [TestMethod]
     public void RunTouchGesture_DoubleTap_ProducesTwoDownUpCycles_WithInterTapDelay()
     {
-        // M4: the old test manually called InjectTouchStroke twice, bypassing the production
-        // repetition path. This test invokes RunTouchGesture directly with DoubleTap so the
-        // real repeats branch is exercised. An injectable sleepInter captures the inter-tap gap.
+        // Invoke RunTouchGesture directly with DoubleTap so the production repetition path is
+        // exercised. An injectable sleepInter captures the inter-tap gap.
         var allFlags = new List<Windows.Win32.UI.Input.Pointer.POINTER_FLAGS>();
         var interTapSleeps = new List<int>();
 
