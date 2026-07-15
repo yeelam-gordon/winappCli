@@ -56,8 +56,8 @@ internal class UiSendKeysCommand : Command, IShortDescription
                       "--via send-input, which are refused by default because they act on the OS/shell beyond the " +
                       "target app. Opt in to drive global hotkeys (e.g. PowerToys' win+shift+v, win+r). " +
                       "No effect on --via post-message (already window-scoped; a warning is emitted if set without send-input). " +
-                      "Note: plain win+l (without additional modifiers) stays blocked even with this flag — it locks the " +
-                      "workstation (LockWorkStation() via the shell hook), which is unrecoverable from automation. " +
+                      "Note: any Win-modified L chord (including win+shift+l) stays blocked even with this flag because " +
+                      "Windows lock handling may still invoke LockWorkStation(), which is unrecoverable from automation. " +
                       "Windows still blocks secure sequences " +
                       "such as ctrl+alt+del (SAS) from injected input regardless of this flag."
     };
@@ -225,14 +225,14 @@ internal class UiSendKeysCommand : Command, IShortDescription
 
                 // send-input is OS-wide, so a system-reserved combo (win+l, alt+f4, ctrl+shift+esc, …)
                 // acts on the OS/shell rather than just the target app. Reject these combos by default,
-                // keep the exact win+l lock shortcut permanently blocked, and require explicit opt-in for
+                // keep every Win-modified L chord permanently blocked, and require explicit opt-in for
                 // the remaining global shortcuts.
                 if (transport == KeyTransport.SendInput)
                 {
-                    // Plain win+l (LockWorkStation, with Win as the only modifier) is unconditionally
-                    // blocked even with --allow-system-keys: injecting it OS-wide locks the interactive
-                    // session and halts unattended automation until a user unlocks it. Return early so it
-                    // does not fall through into the soft-combo / allow path below.
+                    // Any Win-modified L chord is unconditionally blocked even with --allow-system-keys:
+                    // Windows lock handling may still invoke LockWorkStation when additional modifiers are
+                    // present, so fail closed rather than risking an unattended session lock. Return early
+                    // so it does not fall through into the soft-combo / allow path below.
                     var neverBypassable = SystemKeyGuard.FindNeverBypassableCombos(actions);
                     if (neverBypassable.Count > 0)
                     {

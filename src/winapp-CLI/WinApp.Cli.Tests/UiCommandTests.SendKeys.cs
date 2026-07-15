@@ -455,20 +455,19 @@ public partial class UiCommandTests
         Assert.AreEqual(0, _fakeKeyboard.SendCalls.Count, "cmd+l must never reach the keyboard transport");
     }
 
-    // Extra modifiers make this a distinct global hotkey rather than the exact Win+L lock shortcut.
+    // Extra modifiers must not bypass the Win+L safety invariant.
     [TestMethod]
-    public async Task SendKeys_WinShiftL_ViaSendInput_WithAllowSystemKeys_IsAllowed()
+    public async Task SendKeys_WinShiftL_ViaSendInput_WithAllowSystemKeys_IsStillRefused()
     {
-        // The permanent block is deliberately narrow: Win+Shift+L may be an app-registered global
-        // hotkey, so the explicit opt-in must allow it.
+        // Windows lock handling may still recognize Win+Shift+L, so the guard fails closed even when
+        // the caller opts into other system-wide shortcuts.
         _fakeSession.SessionResult.WindowHandle = 4242;
         var command = GetRequiredService<UiSendKeysCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command,
-            ["win+shift+l", "-a", "TestApp", "--via", "send-input", "--allow-system-keys"]);
+            ["win+shift+l", "-a", "TestApp", "--via", "send-input", "--allow-system-keys", "--json"]);
 
-        Assert.AreEqual(0, exitCode);
-        Assert.AreEqual(1, _fakeKeyboard.SendCalls.Count);
-        Assert.AreEqual(WinApp.Cli.Helpers.KeyTransport.SendInput, _fakeKeyboard.SendCalls[0].Transport);
+        Assert.AreEqual(1, exitCode);
+        Assert.AreEqual(0, _fakeKeyboard.SendCalls.Count, "Win+Shift+L must never reach the keyboard transport");
     }
 
     // LOW: lone right-Win key (vk=0x5c) is soft-blocked without --allow-system-keys

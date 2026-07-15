@@ -114,10 +114,27 @@ public class SystemKeyGuardTests
     [TestMethod]
     [DataRow("win+l")]   // standard win+l
     [DataRow("cmd+l")]   // cmd is an alias for win
-    public void NeverBypassable_WinL_IsDetected(string keys)
+    [DataRow("win+shift+l")]
+    [DataRow("win+ctrl+l")]
+    [DataRow("win+alt+l")]
+    public void NeverBypassable_WinModifiedL_IsDetected(string keys)
     {
-        // win+l (and its aliases) must always be refused — it locks the workstation via the shell hook.
+        // Fail closed for every Win-modified L chord because Windows lock handling may still recognize
+        // variants with additional modifiers.
         var hits = SystemKeyGuard.FindNeverBypassableCombos(KeyStringParser.Parse(keys));
+        Assert.AreEqual(1, hits.Count);
+        Assert.AreEqual("win+l", hits[0]);
+    }
+
+    [TestMethod]
+    public void NeverBypassable_RightWinModifiedL_IsDetected()
+    {
+        // The friendly grammar uses left Win for "win", so construct a right-Win + Shift + L chord
+        // directly to verify that either Windows modifier preserves the hard block.
+        KeyAction[] actions = [new KeyChord([0x5C, 0x10], 0x4C, Extended: false)];
+
+        var hits = SystemKeyGuard.FindNeverBypassableCombos(actions);
+
         Assert.AreEqual(1, hits.Count);
         Assert.AreEqual("win+l", hits[0]);
     }
@@ -126,15 +143,13 @@ public class SystemKeyGuardTests
     [DataRow("win+r")]
     [DataRow("win+d")]
     [DataRow("win+shift+v")]
-    [DataRow("win+shift+l")]
-    [DataRow("win+ctrl+l")]
     [DataRow("alt+f4")]
     [DataRow("ctrl+shift+esc")]
     [DataRow("vk=0x5B")]  // lone win key
     public void NeverBypassable_OtherCombos_AreNotHardBlocked(string keys)
     {
-        // Soft-blocked combos (including extra-modifier Win+L shortcuts) must NOT appear in the
-        // never-bypassable list — callers may legitimately opt in to them with --allow-system-keys.
+        // Soft-blocked non-L combos must NOT appear in the never-bypassable list — callers may
+        // legitimately opt in to them with --allow-system-keys.
         var hits = SystemKeyGuard.FindNeverBypassableCombos(KeyStringParser.Parse(keys));
         Assert.AreEqual(0, hits.Count);
     }
