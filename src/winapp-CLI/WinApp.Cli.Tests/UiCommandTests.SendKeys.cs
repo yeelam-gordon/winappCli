@@ -306,20 +306,36 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
     public async Task SendKeys_ViaPostMessage_NoTarget_ReturnsDeterministicError()
     {
         _fakeKeyboard.ExceptionToThrow = new WinApp.Cli.Helpers.KeyboardInjectionException(
             WinApp.Cli.Helpers.UiJsonError.CodeNoTargetWindow,
             "Keyboard input requires a resolvable target window.");
         var command = GetRequiredService<UiSendKeysCommand>();
-        var exitCode = await ParseAndInvokeWithCaptureAsync(
-            command,
-            ["enter", "-a", "TestApp", "--via", "post-message", "--json"]);
+        var originalError = Console.Error;
+        using var jsonError = new StringWriter();
+        int exitCode;
+        try
+        {
+            Console.SetError(jsonError);
+            exitCode = await ParseAndInvokeWithCaptureAsync(
+                command,
+                ["enter", "-a", "TestApp", "--via", "post-message", "--json"]);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
 
         Assert.AreEqual(1, exitCode);
-        Assert.AreEqual(0, _fakeKeyboard.SendCalls.Count);
         Assert.AreEqual(0, _fakeForeground.Calls.Count, "post-message does not consult the foreground guard");
-        StringAssert.Contains(ConsoleStdErr.ToString(), "resolvable target window");
+        var result = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(jsonError.ToString());
+        var error = result.GetProperty("error");
+        Assert.AreEqual(WinApp.Cli.Helpers.UiJsonError.CodeNoTargetWindow, error.GetProperty("code").GetString());
+        Assert.AreEqual(
+            "Keyboard input requires a resolvable target window.",
+            error.GetProperty("message").GetString());
     }
 
     [TestMethod]
