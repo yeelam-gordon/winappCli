@@ -929,4 +929,17 @@ public class PointerInputFrameTests
         Assert.IsFalse(PointerInput.IsWin32ErrorNotReady(caught),
             "The propagated exception must not be recognised as a Win32 error 21");
     }
+
+    [TestMethod]
+    public void IsWin32ErrorNotReady_DoesNotMatchLongerErrorCodes()
+    {
+        Assert.IsTrue(PointerInput.IsWin32ErrorNotReady(
+            new InvalidOperationException("InjectTouchInput failed (Win32 error 21) — unavailable")));
+        Assert.IsTrue(PointerInput.IsWin32ErrorNotReady(
+            new InvalidOperationException("InjectTouchInput failed (Win32 error 21: device not ready)")));
+        Assert.IsFalse(PointerInput.IsWin32ErrorNotReady(
+            new InvalidOperationException("InjectTouchInput failed (Win32 error 210) — unavailable")));
+        Assert.IsFalse(PointerInput.IsWin32ErrorNotReady(
+            new InvalidOperationException("InjectTouchInput failed (Win32 error 211: other failure)")));
+    }
 }

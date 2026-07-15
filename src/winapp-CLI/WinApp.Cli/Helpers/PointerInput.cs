@@ -99,10 +99,11 @@ internal static partial class PointerInput
     /// Returns <see langword="true"/> when <paramref name="ex"/> was thrown because the
     /// touch-injection API returned Win32 error 21 (ERROR_NOT_READY). The message format
     /// produced by <see cref="SendLegacyTouch"/> and <see cref="SendSyntheticTouch"/> includes
-    /// <c>"Win32 error 21"</c>.
+    /// <c>"Win32 error 21)"</c>; the colon form remains accepted for older/test diagnostics.
     /// </summary>
     internal static bool IsWin32ErrorNotReady(InvalidOperationException ex)
-        => ex.Message.Contains("Win32 error 21", StringComparison.Ordinal);
+        => ex.Message.Contains("Win32 error 21)", StringComparison.Ordinal) ||
+           ex.Message.Contains("Win32 error 21:", StringComparison.Ordinal);
 
     /// <summary>
     /// Runs the touch gesture loop (handles double-tap repetition) against the given
