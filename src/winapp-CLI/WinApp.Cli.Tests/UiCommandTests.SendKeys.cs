@@ -468,6 +468,7 @@ public partial class UiCommandTests
 
         Assert.AreEqual(1, exitCode);
         Assert.AreEqual(0, _fakeKeyboard.SendCalls.Count, "Win+Shift+L must never reach the keyboard transport");
+        StringAssert.Contains(ConsoleStdErr.ToString(), "may lock the workstation");
     }
 
     // LOW: lone right-Win key (vk=0x5c) is soft-blocked without --allow-system-keys

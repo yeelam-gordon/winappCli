@@ -238,12 +238,12 @@ internal class UiSendKeysCommand : Command, IShortDescription
                     {
                         logger.LogError(
                             "{Symbol} Refusing to synthesize {Combos} via --via send-input — this stays blocked " +
-                            "even with --allow-system-keys because it locks the workstation (unrecoverable from automation). " +
+                            "even with --allow-system-keys because the chord may lock the workstation (unrecoverable from automation). " +
                             "--allow-system-keys is for app-registered global hotkeys (e.g. win+r, win+shift+v), not session-locking combos.",
                             UiSymbols.Error, string.Join(", ", neverBypassable));
                         UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments,
                             $"Refusing to synthesize {string.Join(", ", neverBypassable)} via --via send-input. " +
-                            "This combo locks the workstation (unrecoverable from automation) and stays blocked even with " +
+                            "This combo may lock the workstation (unrecoverable from automation) and stays blocked even with " +
                             "--allow-system-keys. Use --allow-system-keys only for app-registered global hotkeys (e.g. win+r, win+shift+v).");
                         return 1;
                     }
