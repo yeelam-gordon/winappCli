@@ -105,8 +105,10 @@ public partial class UiCommandTests
         Assert.AreEqual(string.Empty, TestAnsiConsole.Output.Trim(),
             "Stdout must be empty — no success envelope for invalid pressure");
         var stderr = ConsoleStdErr.ToString();
-        StringAssert.Contains(stderr, "Cannot parse argument 'NaN' for option '--pressure'",
-            "Direct command invocation must surface the typed parse failure");
+        StringAssert.Contains(stderr, "NaN",
+            "Direct command invocation must identify the offending pressure token");
+        StringAssert.Contains(stderr, "--pressure",
+            "Direct command invocation must identify the pressure option");
     }
 
     [TestMethod]

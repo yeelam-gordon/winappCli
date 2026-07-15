@@ -242,18 +242,19 @@ public class PointerGesturePlannerTests
     public void PlanTouch_DoubleTap_MultiFinger_SpacesContactsCorrectly()
     {
         // With --fingers 3, DoubleTap plans 3 contacts each offset by FingerSpacingPx on X.
+        const int fingerSpacingPx = 24;
         var start = new PointerPoint(200, 300);
         var (contactPaths, points, fingers) = PointerGesturePlanner.PlanTouch(
             TouchGesture.DoubleTap, start, end: null, distance: 0, fingers: 3);
 
         Assert.AreEqual(3, contactPaths.Count, "DoubleTap with --fingers 3 must produce 3 contact paths");
         Assert.AreEqual(3, fingers, "Reported finger count must be 3");
-        // Lock in the planner's 24 px contact spacing rather than merely asserting ordering.
+        // Lock in the planner's contact spacing rather than merely asserting ordering.
         for (int i = 0; i < 3; i++)
         {
             Assert.AreEqual(1, contactPaths[i].Count, $"Contact {i} must be a single-point path for tap/double-tap");
-            var expected = new PointerPoint(start.X + (i * 24), start.Y);
-            Assert.AreEqual(expected, contactPaths[i][0], $"Contact {i} must use the exact 24 px spacing");
+            var expected = new PointerPoint(start.X + (i * fingerSpacingPx), start.Y);
+            Assert.AreEqual(expected, contactPaths[i][0], $"Contact {i} must use the exact {fingerSpacingPx} px spacing");
             Assert.AreEqual(expected, points[i], $"Flattened point {i} must match contact {i}");
         }
     }
@@ -261,6 +262,7 @@ public class PointerGesturePlannerTests
     [TestMethod]
     public void PlanTouch_Swipe_MultiFinger_PreservesExactSpacingAcrossPath()
     {
+        const int fingerSpacingPx = 24;
         var start = new PointerPoint(200, 300);
         var end = new PointerPoint(360, 340);
         var (contactPaths, points, fingers) = PointerGesturePlanner.PlanTouch(
@@ -272,11 +274,11 @@ public class PointerGesturePlannerTests
 
         for (int i = 0; i < 3; i++)
         {
-            int offset = i * 24;
+            int offset = i * fingerSpacingPx;
             Assert.AreEqual(new PointerPoint(start.X, start.Y + offset), contactPaths[i][0],
-                $"Contact {i} start must use the exact 24 px spacing");
+                $"Contact {i} start must use the exact {fingerSpacingPx} px spacing");
             Assert.AreEqual(new PointerPoint(end.X, end.Y + offset), contactPaths[i][1],
-                $"Contact {i} end must preserve the exact 24 px spacing");
+                $"Contact {i} end must preserve the exact {fingerSpacingPx} px spacing");
         }
     }
 
