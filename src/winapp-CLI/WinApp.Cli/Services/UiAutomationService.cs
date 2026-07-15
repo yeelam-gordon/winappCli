@@ -1300,6 +1300,8 @@ return Task.FromResult<UiElement?>(null);
             {
                 if (traversal is null || !traversal.CaptureDiagnostics)
                 {
+                    // Preserve the pre-audit contract: first-child provider failures propagated
+                    // from slug resolution; only audit callers convert them to diagnostics.
                     throw;
                 }
                 _logger.LogDebug(ex, "UIA child enumeration failed during slug resolution");
@@ -1333,6 +1335,7 @@ return Task.FromResult<UiElement?>(null);
                 {
                     if (traversal is null || !traversal.CaptureDiagnostics)
                     {
+                        // Preserve the existing best-effort sibling truncation for non-audit callers.
                         return;
                     }
                     _logger.LogDebug(ex, "UIA sibling enumeration failed during slug resolution");
@@ -1953,6 +1956,8 @@ return Task.FromResult<UiElement?>(null);
         {
             if (!traversal.CaptureDiagnostics)
             {
+                // Preserve the pre-audit contract: first-child provider failures propagated
+                // from the normal inspect tree walk.
                 throw;
             }
             _logger.LogDebug(ex, "UIA child enumeration failed");
@@ -2008,6 +2013,7 @@ return Task.FromResult<UiElement?>(null);
             {
                 if (!traversal.CaptureDiagnostics)
                 {
+                    // Preserve the existing best-effort sibling truncation for non-audit callers.
                     return true;
                 }
                 _logger.LogDebug(ex, "UIA sibling enumeration failed");
