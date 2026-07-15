@@ -339,7 +339,7 @@ function generate(schema) {
           L(`  const ${arg.propName}Arr = Array.isArray(options.${arg.propName}) ? options.${arg.propName} : [options.${arg.propName}];`);
           L(`  args.push(...${arg.propName}Arr);`);
         } else {
-          L(`  if (options.${arg.propName}) {`);
+          L(`  if (options.${arg.propName} !== undefined) {`);
           L(`    const ${arg.propName}Arr = Array.isArray(options.${arg.propName}) ? options.${arg.propName} : [options.${arg.propName}];`);
           L(`    args.push(...${arg.propName}Arr);`);
           L('  }');
@@ -354,7 +354,7 @@ function generate(schema) {
     // Named options
     for (const opt of opts) {
       if (isVariadic(opt.def)) {
-        L(`  if (options.${opt.propName}) {`);
+        L(`  if (options.${opt.propName} !== undefined) {`);
         L(`    const ${opt.propName}Arr = Array.isArray(options.${opt.propName}) ? options.${opt.propName} : [options.${opt.propName}];`);
         L(`    for (const value of ${opt.propName}Arr) args.push('${opt.cliName}', value.toString());`);
         L('  }');

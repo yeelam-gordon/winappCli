@@ -474,7 +474,7 @@ export interface RunOptions extends CommonOptions {
 export async function run(options: RunOptions): Promise<WinappResult> {
   const args: string[] = ['run'];
   args.push(options.inputFolder);
-  if (options.appArgs) {
+  if (options.appArgs !== undefined) {
     const appArgsArr = Array.isArray(options.appArgs) ? options.appArgs : [options.appArgs];
     args.push(...appArgsArr);
   }
@@ -573,7 +573,7 @@ export interface UiAuditOptions extends CommonOptions {
   json?: boolean;
   /** Audit depth: basic (essential rules + WCAG AA contrast thresholds) or thorough (deeper rules + WCAG AAA contrast thresholds). Aliases: aa, aaa. Default: basic. */
   level?: string;
-  /** Save output to file path (e.g., screenshot) */
+  /** Write the text or JSON audit report to a file. */
   output?: string;
   /** Target window by HWND (stable handle from list output). Takes precedence over --app. */
   window?: number;
@@ -586,7 +586,7 @@ export async function uiAudit(options: UiAuditOptions = {}): Promise<WinappResul
   const args: string[] = ['ui', 'audit'];
   if (options.selector) args.push(options.selector);
   if (options.app) args.push('--app', options.app);
-  if (options.area) {
+  if (options.area !== undefined) {
     const areaArr = Array.isArray(options.area) ? options.area : [options.area];
     for (const value of areaArr) args.push('--area', value.toString());
   }

@@ -21,6 +21,7 @@ internal class UiAuditCommand : Command, IShortDescription
 
     public static Option<string[]> AreaOption { get; }
     public static Option<string> LevelOption { get; }
+    public static Option<string?> OutputOption { get; }
 
     // Depth deep enough to walk an entire window's element tree.
     private const int AuditDepth = 40;
@@ -42,6 +43,11 @@ internal class UiAuditCommand : Command, IShortDescription
                           "Aliases: aa, aaa. Default: basic.",
             DefaultValueFactory = _ => AuditProfile.Basic,
         };
+
+        OutputOption = new Option<string?>("--output", "-o")
+        {
+            Description = "Write the text or JSON audit report to a file."
+        };
     }
 
     public UiAuditCommand()
@@ -58,7 +64,7 @@ internal class UiAuditCommand : Command, IShortDescription
         Options.Add(SharedUiOptions.WindowOption);
 
         Options.Add(WinAppRootCommand.JsonOption);
-        Options.Add(SharedUiOptions.OutputOption);
+        Options.Add(OutputOption);
         Options.Add(AreaOption);
         Options.Add(LevelOption);
     }
@@ -83,7 +89,7 @@ internal class UiAuditCommand : Command, IShortDescription
                 return 1;
             }
 
-            var output = parseResult.GetValue(SharedUiOptions.OutputOption);
+            var output = parseResult.GetValue(OutputOption);
             var rawAreas = parseResult.GetValue(AreaOption) ?? [];
 
             // Resolve the selected areas (WHAT to audit).

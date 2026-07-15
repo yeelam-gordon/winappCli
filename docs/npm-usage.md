@@ -430,7 +430,7 @@ function uiAudit(options?: UiAuditOptions): Promise<WinappResult>
 | `area` | `string \| string[] \| undefined` | No | Accessibility area(s) to audit (repeatable). Allowed: names, keyboard, screen-reader, contrast, roles, all. Default: all. |
 | `json` | `boolean \| undefined` | No | Format output as JSON |
 | `level` | `string \| undefined` | No | Audit depth: basic (essential rules + WCAG AA contrast thresholds) or thorough (deeper rules + WCAG AAA contrast thresholds). Aliases: aa, aaa. Default: basic. |
-| `output` | `string \| undefined` | No | Save output to file path (e.g., screenshot) |
+| `output` | `string \| undefined` | No | Write the text or JSON audit report to a file. |
 | `window` | `number \| undefined` | No | Target window by HWND (stable handle from list output). Takes precedence over --app. |
 
 *Also accepts [CommonOptions](#commonoptions) (`quiet`, `verbose`, `cwd`).*
@@ -1402,7 +1402,7 @@ type ManifestTemplates = "packaged" | "sparse"
 | `area` | `string \| string[] \| undefined` | No | Accessibility area(s) to audit (repeatable). Allowed: names, keyboard, screen-reader, contrast, roles, all. Default: all. |
 | `json` | `boolean \| undefined` | No | Format output as JSON |
 | `level` | `string \| undefined` | No | Audit depth: basic (essential rules + WCAG AA contrast thresholds) or thorough (deeper rules + WCAG AAA contrast thresholds). Aliases: aa, aaa. Default: basic. |
-| `output` | `string \| undefined` | No | Save output to file path (e.g., screenshot) |
+| `output` | `string \| undefined` | No | Write the text or JSON audit report to a file. |
 | `window` | `number \| undefined` | No | Target window by HWND (stable handle from list output). Takes precedence over --app. |
 | `quiet` | `boolean \| undefined` | No | Suppress progress messages. |
 | `verbose` | `boolean \| undefined` | No | Enable verbose output. |

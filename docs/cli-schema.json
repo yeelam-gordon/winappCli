@@ -1748,7 +1748,7 @@
               "recursive": false
             },
             "--output": {
-              "description": "Save output to file path (e.g., screenshot)",
+              "description": "Write the text or JSON audit report to a file.",
               "hidden": false,
               "aliases": [
                 "-o"

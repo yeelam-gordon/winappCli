@@ -640,5 +640,5 @@ Quick-lint the currently visible view of a running app for accessibility and con
 | `--area` | Accessibility area(s) to audit (repeatable). Allowed: names, keyboard, screen-reader, contrast, roles, all. Default: all. | (none) |
 | `--json` | Format output as JSON | (none) |
 | `--level` | Audit depth: basic (essential rules + WCAG AA contrast thresholds) or thorough (deeper rules + WCAG AAA contrast thresholds). Aliases: aa, aaa. Default: basic. | `basic` |
-| `--output` | Save output to file path (e.g., screenshot) | (none) |
+| `--output` | Write the text or JSON audit report to a file. | (none) |
 | `--window` | Target window by HWND (stable handle from list output). Takes precedence over --app. | (none) |
