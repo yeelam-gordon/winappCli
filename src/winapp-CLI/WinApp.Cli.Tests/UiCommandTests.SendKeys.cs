@@ -183,6 +183,14 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    public void SendKeys_ViaOption_DocumentsPostMessageTextLoss()
+    {
+        StringAssert.Contains(UiSendKeysCommand.ViaOption.Description, "posts WM_CHAR");
+        StringAssert.Contains(UiSendKeysCommand.ViaOption.Description, "may be dropped by WinUI/XAML");
+        Assert.DoesNotContain("typed text raises TextChanged", UiSendKeysCommand.ViaOption.Description);
+    }
+
+    [TestMethod]
     public async Task SendKeys_Verbatim_TypesEntireArgumentAsLiteralText()
     {
         // Without --verbatim this presses Down, Down, Enter; with it, the words are typed verbatim as

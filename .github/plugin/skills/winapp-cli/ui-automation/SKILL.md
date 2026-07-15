@@ -486,7 +486,7 @@ Send synthetic keyboard input to a window. Supports named keys (down, enter, tab
 | `--json` | Format output as JSON | (none) |
 | `--target` | Optional selector (slug or text) to focus before sending keys. | (none) |
 | `--verbatim` | Type the entire keys argument as literal text — no named-key, combo, or vk= interpretation, and exact whitespace preserved. The whole-argument form of the per-token text= escape: --verbatim "down down enter" types the words instead of pressing Down, Down, Enter. | (none) |
-| `--via` | Transport: post-message (default, HWND-targeted and subject to UIPI; typed text raises TextChanged but not a per-character KeyDown) or send-input (OS-wide; typed text raises a real per-character KeyDown + TextChanged; also subject to UIPI). Both can target only equal- or lower-integrity processes. Named keys and combos raise KeyDown on both, but keyboard accelerators/shortcuts (KeyboardAccelerator, e.g. ctrl+t) only fire via send-input. | `post-message` |
+| `--via` | Transport: post-message (default, HWND-targeted and subject to UIPI; typed text posts WM_CHAR without a per-character KeyDown and may be dropped by WinUI/XAML) or send-input (OS-wide; typed text is fed through the input pipeline; also subject to UIPI). Both can target only equal- or lower-integrity processes. Named keys and combos raise KeyDown on both, but keyboard accelerators/shortcuts (KeyboardAccelerator, e.g. ctrl+t) only fire via send-input. | `post-message` |
 | `--window` | Target window by HWND (stable handle from list output). Takes precedence over --app. | (none) |
 
 ### `winapp ui set-value`

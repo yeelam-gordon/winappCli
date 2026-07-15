@@ -36,9 +36,9 @@ internal class UiSendKeysCommand : Command, IShortDescription
 
     public static Option<string> ViaOption { get; } = new("--via")
     {
-        Description = "Transport: post-message (default, HWND-targeted and subject to UIPI; typed text raises TextChanged " +
-                      "but not a per-character KeyDown) or send-input (OS-wide; typed text raises a real per-character " +
-                      "KeyDown + TextChanged; also subject to UIPI). Both can target only equal- or lower-integrity processes. " +
+        Description = "Transport: post-message (default, HWND-targeted and subject to UIPI; typed text posts WM_CHAR " +
+                      "without a per-character KeyDown and may be dropped by WinUI/XAML) or send-input (OS-wide; typed text " +
+                      "is fed through the input pipeline; also subject to UIPI). Both can target only equal- or lower-integrity processes. " +
                       "Named keys and combos raise KeyDown on both, but keyboard " +
                       "accelerators/shortcuts (KeyboardAccelerator, e.g. ctrl+t) only fire via send-input.",
         DefaultValueFactory = _ => "post-message"
