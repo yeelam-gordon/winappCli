@@ -379,12 +379,12 @@ public partial class UiCommandTests
     [TestMethod]
     public async Task SendKeys_AllowSystemKeys_WithPostMessage_IsNoOpAndWarns()
     {
-        // post-message is already window-scoped and never blocks system combos, so --allow-system-keys
-        // has no effect with it. The command must succeed (exit 0) and still deliver the keystrokes;
-        // a warning is logged but the exit code stays 0.
+        // post-message is the default, is already window-scoped, and never blocks system combos, so
+        // --allow-system-keys has no effect with it. Match the reported reproduction without an explicit
+        // --via: the command succeeds and delivers the keystrokes, but warns instead of silently accepting it.
         var command = GetRequiredService<UiSendKeysCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command,
-            ["ctrl+a", "-a", "TestApp", "--via", "post-message", "--allow-system-keys"]);
+            ["ctrl+a", "-a", "TestApp", "--allow-system-keys"]);
 
         Assert.AreEqual(0, exitCode);
         Assert.AreEqual(1, _fakeKeyboard.SendCalls.Count, "keys should still be sent via post-message");
@@ -398,7 +398,7 @@ public partial class UiCommandTests
         // --json consumers see the no-op warning even though the global logger is suppressed in JSON mode.
         var command = GetRequiredService<UiSendKeysCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command,
-            ["ctrl+a", "-a", "TestApp", "--via", "post-message", "--allow-system-keys", "--json"]);
+            ["ctrl+a", "-a", "TestApp", "--allow-system-keys", "--json"]);
 
         Assert.AreEqual(0, exitCode);
         Assert.AreEqual(1, _fakeKeyboard.SendCalls.Count);
@@ -455,18 +455,20 @@ public partial class UiCommandTests
         Assert.AreEqual(0, _fakeKeyboard.SendCalls.Count, "cmd+l must never reach the keyboard transport");
     }
 
-    // LOW: win+shift+l (extra modifier alongside never-bypassable) stays hard-blocked
+    // Extra modifiers make this a distinct global hotkey rather than the exact Win+L lock shortcut.
     [TestMethod]
-    public async Task SendKeys_WinShiftL_ViaSendInput_WithAllowSystemKeys_IsStillRefused()
+    public async Task SendKeys_WinShiftL_ViaSendInput_WithAllowSystemKeys_IsAllowed()
     {
-        // Extra modifiers do not defeat the win+l hard block — the guard sees win modifier + VkL.
+        // The permanent block is deliberately narrow: Win+Shift+L may be an app-registered global
+        // hotkey, so the explicit opt-in must allow it.
         _fakeSession.SessionResult.WindowHandle = 4242;
         var command = GetRequiredService<UiSendKeysCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command,
-            ["win+shift+l", "-a", "TestApp", "--via", "send-input", "--allow-system-keys", "--json"]);
+            ["win+shift+l", "-a", "TestApp", "--via", "send-input", "--allow-system-keys"]);
 
-        Assert.AreEqual(1, exitCode);
-        Assert.AreEqual(0, _fakeKeyboard.SendCalls.Count, "win+shift+l must never reach the keyboard transport");
+        Assert.AreEqual(0, exitCode);
+        Assert.AreEqual(1, _fakeKeyboard.SendCalls.Count);
+        Assert.AreEqual(WinApp.Cli.Helpers.KeyTransport.SendInput, _fakeKeyboard.SendCalls[0].Transport);
     }
 
     // LOW: lone right-Win key (vk=0x5c) is soft-blocked without --allow-system-keys

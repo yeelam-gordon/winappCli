@@ -4,10 +4,9 @@
 namespace WinApp.Cli.Helpers;
 
 /// <summary>
-/// Recognizes system- and shell-reserved key combinations so <c>send-keys --via send-input</c> can refuse
-/// to synthesize them. These combos act on the OS/shell (lock, Start, Task Manager, close window), not just
-/// the targeted app, when injected OS-wide — so send-input rejects them rather than acting beyond the target.
-/// (<c>--via post-message</c> is window-scoped and is not affected.)
+/// Recognizes system- and shell-reserved key combinations so <c>send-keys --via send-input</c> can reject
+/// them by default, keep the exact <c>win+l</c> lock shortcut permanently blocked, and require an explicit
+/// opt-in for the remaining OS-wide combos. (<c>--via post-message</c> is window-scoped and is not affected.)
 /// </summary>
 internal static class SystemKeyGuard
 {
@@ -25,13 +24,14 @@ internal static class SystemKeyGuard
 
     /// <summary>
     /// Returns the friendly names of any combos that must NEVER be synthesized via send-input, even when
-    /// the caller opts in with <c>--allow-system-keys</c>. Currently scoped to <c>win+l</c> only:
-    /// when VK_LWIN/VK_RWIN + VK_L (0x4C) is injected OS-wide the shell hook fires
-    /// <c>LockWorkStation()</c>, locking the interactive session immediately with no recovery path from
-    /// automation. Unlike soft-blocked combos (<c>alt+f4</c>, <c>ctrl+shift+esc</c>, <c>win+r</c>, …)
-    /// that can be opted into for driving global hotkeys, a session lock is unrecoverable from code and
-    /// breaks CI and remote-desktop sessions irreversibly. (alt+f4, ctrl+shift+esc, win+r, etc. are
-    /// intentionally left as "soft" blocks — callers may legitimately need them for global hotkey testing.)
+    /// the caller opts in with <c>--allow-system-keys</c>. Currently scoped to the exact <c>win+l</c>
+    /// shortcut (Win is the only modifier): when VK_LWIN/VK_RWIN + VK_L (0x4C) is injected OS-wide the
+    /// shell hook fires <c>LockWorkStation()</c>, locking the interactive session immediately with no
+    /// recovery path from automation. Unlike soft-blocked combos (<c>alt+f4</c>, <c>ctrl+shift+esc</c>,
+    /// <c>win+r</c>, …) that can be opted into for driving global hotkeys, a session lock is unrecoverable
+    /// from code and halts unattended CI and remote-desktop automation until a user unlocks it.
+    /// Extra-modifier shortcuts such as <c>win+shift+l</c> remain soft-blocked because they are distinct
+    /// from the exact Windows lock shortcut.
     /// </summary>
     public static IReadOnlyList<string> FindNeverBypassableCombos(IEnumerable<KeyAction> actions)
     {
@@ -43,8 +43,9 @@ internal static class SystemKeyGuard
                 continue;
             }
 
-            bool win = chord.Modifiers.Contains(VkLWin) || chord.Modifiers.Contains(VkRWin);
-            if (win && chord.Vk == VkL)
+            bool onlyWinModifiers = chord.Modifiers.Count > 0 &&
+                chord.Modifiers.All(modifier => modifier is VkLWin or VkRWin);
+            if (onlyWinModifiers && chord.Vk == VkL)
             {
                 const string name = "win+l";
                 if (!hits.Contains(name))

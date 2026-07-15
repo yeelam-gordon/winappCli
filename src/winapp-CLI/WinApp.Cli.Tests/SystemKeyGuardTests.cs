@@ -126,13 +126,15 @@ public class SystemKeyGuardTests
     [DataRow("win+r")]
     [DataRow("win+d")]
     [DataRow("win+shift+v")]
+    [DataRow("win+shift+l")]
+    [DataRow("win+ctrl+l")]
     [DataRow("alt+f4")]
     [DataRow("ctrl+shift+esc")]
     [DataRow("vk=0x5B")]  // lone win key
     public void NeverBypassable_OtherCombos_AreNotHardBlocked(string keys)
     {
-        // Soft-blocked combos (win+r, alt+f4, etc.) must NOT appear in the never-bypassable list —
-        // callers may legitimately opt in to them with --allow-system-keys.
+        // Soft-blocked combos (including extra-modifier Win+L shortcuts) must NOT appear in the
+        // never-bypassable list — callers may legitimately opt in to them with --allow-system-keys.
         var hits = SystemKeyGuard.FindNeverBypassableCombos(KeyStringParser.Parse(keys));
         Assert.AreEqual(0, hits.Count);
     }
