@@ -165,7 +165,9 @@ public partial class UiCommandTests
         // and return non-zero with a structured JSON error (injection_unsupported), not crash or
         // report success.
         _fakeSession.SessionResult.WindowHandle = 4401;
-        _fakePointer.ThrowException = new InvalidOperationException("CreateSyntheticPointerDevice(PT_PEN) failed — locked desktop");
+        _fakePointer.ThrowException = PointerInjectionException.Combine(
+            new InvalidOperationException("initial pen DOWN failed"),
+            new InvalidOperationException("pen cancellation failed"));
 
         var command = GetRequiredService<UiPenCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command,
@@ -187,6 +189,12 @@ public partial class UiCommandTests
         Assert.AreEqual(UiJsonError.CodeInjectionUnsupported,
             error.GetProperty("error").GetProperty("code").GetString(),
             "JSON error.code must be 'injection_unsupported' when injection throws InvalidOperationException");
+        Assert.AreEqual(
+            "initial pen DOWN failed Best-effort canceled-UP cleanup also failed: pen cancellation failed",
+            error.GetProperty("error").GetProperty("message").GetString());
+        Assert.AreEqual(
+            "canceled_up_cleanup_failed: pen cancellation failed",
+            error.GetProperty("error").GetProperty("details").GetString());
     }
 
     [TestMethod]

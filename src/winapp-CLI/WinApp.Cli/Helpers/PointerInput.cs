@@ -1,10 +1,7 @@
 // Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 // Licensed under the MIT License.
 
-using System.ComponentModel;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
-using Windows.Win32;
 using Windows.Win32.Foundation;
 using Windows.Win32.UI.Input.Pointer;
 using Windows.Win32.UI.WindowsAndMessaging;
@@ -14,12 +11,13 @@ namespace WinApp.Cli.Helpers;
 /// <summary>
 /// Injects synthetic touch and pen input using the Windows pointer-injection APIs. Touch prefers the
 /// synthetic-pointer device (<c>CreateSyntheticPointerDevice(PT_TOUCH)</c>/
-/// <c>InjectSyntheticPointerInput</c>) — the same mechanism the pen path uses — and falls back to the
-/// legacy <c>InitializeTouchInjection</c>/<c>InjectTouchInput</c> API when a synthetic touch device
-/// cannot be created. Pen uses <c>CreateSyntheticPointerDevice(PT_PEN)</c>. Coordinates are screen
-/// pixels — the same space <c>ui inspect</c> reports.
+/// <c>InjectSyntheticPointerInput</c>) — the same mechanism the pen path uses — after verifying all
+/// related exports, and falls back to the legacy
+/// <c>InitializeTouchInjection</c>/<c>InjectTouchInput</c> API when the modern path is unavailable
+/// before any frame is accepted. Pen uses <c>CreateSyntheticPointerDevice(PT_PEN)</c> and has no
+/// legacy fallback. Coordinates are screen pixels — the same space <c>ui inspect</c> reports.
 /// </summary>
-internal static class PointerInput
+internal static partial class PointerInput
 {
     /// <summary>
     /// Maximum simultaneous touch contacts supported by this CLI. This intentionally matches the
@@ -48,101 +46,8 @@ internal static class PointerInput
     private const uint PEN_MASK_TILT_X = 0x00000004;
     private const uint PEN_MASK_TILT_Y = 0x00000008;
 
-    private static readonly object InitLock = new();
-    private static volatile bool _touchInitialized;
-
     /// <summary>Delegate that submits one frame of touch contacts (synthetic device or legacy API).</summary>
     internal delegate void TouchSender(POINTER_TOUCH_INFO[] contacts);
-
-    /// <summary>
-    /// Registers this process for legacy touch injection the first time it is needed. Idempotent — the
-    /// OS only allows a single successful <c>InitializeTouchInjection</c> per process. On failure the
-    /// actual Win32 error is surfaced so callers can tell "unsupported" from "locked desktop".
-    /// </summary>
-    private static void EnsureTouchInitialized()
-    {
-        if (_touchInitialized)
-        {
-            return;
-        }
-
-        lock (InitLock)
-        {
-            if (_touchInitialized)
-            {
-                return;
-            }
-
-            // TOUCH_FEEDBACK_NONE — suppress the OS touch-visual so automation stays invisible.
-            if (!PInvoke.InitializeTouchInjection(MaxContacts, TOUCH_FEEDBACK_MODE.TOUCH_FEEDBACK_NONE))
-            {
-                int err = Marshal.GetLastPInvokeError();
-                throw new InvalidOperationException(
-                    $"InitializeTouchInjection failed (Win32 error {err}: {Win32Message(err)}) — touch " +
-                    "injection is unsupported or unavailable on this desktop. This usually means the " +
-                    "device/driver does not support injected touch, or the session is locked / on a secure desktop.");
-            }
-
-            _touchInitialized = true;
-        }
-    }
-
-    /// <summary>Formats a Win32 error code into its system message for honest diagnostics.</summary>
-    private static string Win32Message(int error)
-    {
-        try { return new Win32Exception(error).Message; }
-        catch { return "unknown error"; }
-    }
-
-    public static void Touch(
-        TouchGesture gesture,
-        IReadOnlyList<IReadOnlyList<PointerPoint>> contactPaths,
-        int holdMs,
-        int durationMs)
-    {
-        // NOTE (M2 — P/Invoke test coverage): The production path below (CreateSyntheticPointerDevice
-        // → RunTouchGesture → InjectSyntheticPointerInput / InjectTouchInput → DestroySyntheticPointerDevice)
-        // requires an unlocked, interactive desktop and cannot be exercised in this shared CI/test
-        // environment without live input injection. Unit tests in PointerInputFrameTests cover the
-        // frame-planning and ordering logic via InjectTouchStroke's injectable TouchSender delegate;
-        // the P/Invoke device-create → payload-marshal → destroy path requires a dedicated
-        // interactive-desktop test lane.
-        // Primary path: a synthetic touch pointer device, mirroring the working pen path. This is the
-        // modern, better-supported mechanism (Windows 10 1809+).
-        var device = PInvoke.CreateSyntheticPointerDevice(
-            POINTER_INPUT_TYPE.PT_TOUCH, MaxContacts, POINTER_FEEDBACK_MODE.POINTER_FEEDBACK_NONE);
-
-        if (!device.IsNull)
-        {
-            try
-            {
-                RunTouchGesture(gesture, contactPaths, holdMs, durationMs,
-                    contacts => SendSyntheticTouch(device, contacts));
-                return;
-            }
-            finally
-            {
-                PInvoke.DestroySyntheticPointerDevice(device);
-            }
-        }
-
-        int createErr = Marshal.GetLastPInvokeError();
-
-        // Fallback path: the legacy touch-injection API. EnsureTouchInitialized surfaces an honest
-        // Win32 error if even this is unsupported.
-        try
-        {
-            EnsureTouchInitialized();
-        }
-        catch (InvalidOperationException ex)
-        {
-            throw new InvalidOperationException(
-                $"Synthetic touch injection is unsupported (CreateSyntheticPointerDevice(PT_TOUCH) failed, " +
-                $"Win32 error {createErr}: {Win32Message(createErr)}). {ex.Message}");
-        }
-
-        RunTouchGesture(gesture, contactPaths, holdMs, durationMs, SendLegacyTouch);
-    }
 
     /// <summary>
     /// Win32 error code 21 (ERROR_NOT_READY): the touch-injection subsystem is temporarily
@@ -161,6 +66,7 @@ internal static class PointerInput
     /// </summary>
     private static void SendFrameWithRetry(TouchSender send, POINTER_TOUCH_INFO[] contacts)
     {
+        bool priorNativeCallMayHaveBeenAttempted = false;
         for (int attempt = 0; attempt < MaxErrorNotReadyRetries; attempt++)
         {
             try
@@ -170,20 +76,33 @@ internal static class PointerInput
             }
             catch (InvalidOperationException ex) when (IsWin32ErrorNotReady(ex))
             {
+                priorNativeCallMayHaveBeenAttempted = true;
                 Thread.Sleep(1);
             }
+            catch (PointerNativeApiUnavailableException ex) when (priorNativeCallMayHaveBeenAttempted)
+            {
+                throw ex.WithPriorNativeCallAttempt();
+            }
         }
-        send(contacts); // final attempt — let any exception propagate
+
+        try
+        {
+            send(contacts); // final attempt — let any exception propagate
+        }
+        catch (PointerNativeApiUnavailableException ex) when (priorNativeCallMayHaveBeenAttempted)
+        {
+            throw ex.WithPriorNativeCallAttempt();
+        }
     }
 
     /// <summary>
     /// Returns <see langword="true"/> when <paramref name="ex"/> was thrown because the
     /// touch-injection API returned Win32 error 21 (ERROR_NOT_READY). The message format
     /// produced by <see cref="SendLegacyTouch"/> and <see cref="SendSyntheticTouch"/> includes
-    /// <c>"Win32 error 21:"</c>.
+    /// <c>"Win32 error 21"</c>.
     /// </summary>
     internal static bool IsWin32ErrorNotReady(InvalidOperationException ex)
-        => ex.Message.Contains("Win32 error 21:", StringComparison.Ordinal);
+        => ex.Message.Contains("Win32 error 21", StringComparison.Ordinal);
 
     /// <summary>
     /// Runs the touch gesture loop (handles double-tap repetition) against the given
@@ -233,11 +152,22 @@ internal static class PointerInput
                 POINTER_FLAGS.POINTER_FLAG_DOWN | POINTER_FLAGS.POINTER_FLAG_INRANGE | POINTER_FLAGS.POINTER_FLAG_INCONTACT,
                 primary: i == 0);
         }
-        send(contacts);
-
-        bool released = false;
+        bool contactMayBeActive = true;
         try
         {
+            try
+            {
+                send(contacts);
+            }
+            catch (PointerNativeApiUnavailableException ex)
+                when (!ex.PriorNativeCallMayHaveBeenAttempted)
+            {
+                // The source-generated interop stub failed before entering user32, so the
+                // initial DOWN was not submitted and there is nothing to cancel.
+                contactMayBeActive = false;
+                throw;
+            }
+
             // --- Hold phase: emit periodic stationary UPDATE frames so Windows does not drop/cancel
             //     the contact or mis-classify the hold as a tap. One frame per HoldFrameIntervalMs,
             //     clamping the final partial interval so the total hold ≈ holdMs. ---
@@ -337,14 +267,12 @@ internal static class PointerInput
                 contacts[i] = MakeContact((uint)i, last.X, last.Y, POINTER_FLAGS.POINTER_FLAG_UP, primary: i == 0);
             }
             send(contacts);
-            released = true;
+            contactMayBeActive = false;
         }
-        finally
+        catch (Exception primaryFailure)
         {
-            // Best-effort cancellation when unwinding from an earlier exception. The touch API
-            // requires an UP to reuse the most recently accepted location; jumping directly to the
-            // planned endpoint can reject the cleanup frame and leave the contact active.
-            if (!released)
+            Exception? cancellationFailure = null;
+            if (contactMayBeActive)
             {
                 try
                 {
@@ -358,8 +286,18 @@ internal static class PointerInput
                     }
                     send(contacts);
                 }
-                catch (InvalidOperationException) { }
+                catch (Exception ex)
+                {
+                    cancellationFailure = ex;
+                }
             }
+
+            if (cancellationFailure is not null)
+            {
+                throw PointerInjectionException.Combine(primaryFailure, cancellationFailure);
+            }
+
+            throw;
         }
     }
 
@@ -383,89 +321,6 @@ internal static class PointerInput
             touchMask = TOUCH_MASK_CONTACTAREA,
             rcContact = new RECT { left = x - 2, top = y - 2, right = x + 2, bottom = y + 2 },
         };
-    }
-
-    /// <summary>Submits one frame of touch contacts via the legacy <c>InjectTouchInput</c> API.</summary>
-    private static void SendLegacyTouch(POINTER_TOUCH_INFO[] contacts)
-    {
-        unsafe
-        {
-            fixed (POINTER_TOUCH_INFO* p = contacts)
-            {
-                if (!PInvoke.InjectTouchInput((uint)contacts.Length, p))
-                {
-                    int err = Marshal.GetLastPInvokeError();
-                    throw new InvalidOperationException(
-                        $"InjectTouchInput failed (Win32 error {err}: {Win32Message(err)}) — touch injection " +
-                        "failed or is unsupported on this desktop. Run winapp at matching elevation with the " +
-                        "target on the same unlocked interactive desktop.");
-                }
-            }
-        }
-    }
-
-    /// <summary>
-    /// Submits one frame of touch contacts via the synthetic-pointer device
-    /// (<c>InjectSyntheticPointerInput</c>) — the modern path shared with pen injection.
-    /// </summary>
-    private static void SendSyntheticTouch(HSYNTHETICPOINTERDEVICE device, POINTER_TOUCH_INFO[] contacts)
-    {
-        var infos = new POINTER_TYPE_INFO[contacts.Length];
-        for (int i = 0; i < contacts.Length; i++)
-        {
-            infos[i] = new POINTER_TYPE_INFO { type = POINTER_INPUT_TYPE.PT_TOUCH };
-            infos[i].Anonymous.touchInfo = contacts[i];
-        }
-
-        unsafe
-        {
-            fixed (POINTER_TYPE_INFO* p = infos)
-            {
-                if (!PInvoke.InjectSyntheticPointerInput(device, p, (uint)infos.Length))
-                {
-                    int err = Marshal.GetLastPInvokeError();
-                    throw new InvalidOperationException(
-                        $"InjectSyntheticPointerInput (touch) failed (Win32 error {err}: {Win32Message(err)}) — " +
-                        "touch injection failed. Run winapp at matching elevation with the target on the same " +
-                        "unlocked interactive desktop.");
-                }
-            }
-        }
-    }
-
-    public static void Pen(
-        IReadOnlyList<PointerPoint> path,
-        float pressure,
-        int tiltX,
-        int tiltY,
-        bool eraser,
-        int durationMs)
-    {
-        var device = PInvoke.CreateSyntheticPointerDevice(POINTER_INPUT_TYPE.PT_PEN, 1, POINTER_FEEDBACK_MODE.POINTER_FEEDBACK_NONE);
-        if (device.IsNull)
-        {
-            int err = Marshal.GetLastPInvokeError();
-            throw new InvalidOperationException(
-                $"CreateSyntheticPointerDevice(PT_PEN) failed (Win32 error {err}: {Win32Message(err)}) — " +
-                "synthetic pen injection is unavailable on this desktop (requires Windows 10 1809+ and an " +
-                "unlocked interactive session).");
-        }
-
-        try
-        {
-            uint mappedPressure = (uint)Math.Clamp((int)Math.Round(pressure * PenPressureMax), 0, (int)PenPressureMax);
-            if (mappedPressure == 0)
-            {
-                mappedPressure = 1; // in-contact frames need non-zero pressure
-            }
-
-            InjectPenStroke(path, mappedPressure, durationMs,
-                (x, y, p, flags) => SendPen(device, x, y, p, tiltX, tiltY, eraser, flags));
-        }
-        finally
-        {
-            PInvoke.DestroySyntheticPointerDevice(device);
-        }
     }
 
     /// <summary>
@@ -495,15 +350,23 @@ internal static class PointerInput
         Action<int>? sleep = null,
         Func<long>? nowMs = null)
     {
-        // DOWN at the first point.
         var first = path[0];
-        send(first.X, first.Y, contactPressure,
-            POINTER_FLAGS.POINTER_FLAG_DOWN | POINTER_FLAGS.POINTER_FLAG_INRANGE | POINTER_FLAGS.POINTER_FLAG_INCONTACT);
         var lastSent = first;
 
-        bool released = false;
+        bool contactMayBeActive = true;
         try
         {
+            try
+            {
+                send(first.X, first.Y, contactPressure,
+                    POINTER_FLAGS.POINTER_FLAG_DOWN | POINTER_FLAGS.POINTER_FLAG_INRANGE | POINTER_FLAGS.POINTER_FLAG_INCONTACT);
+            }
+            catch (PointerNativeApiUnavailableException)
+            {
+                contactMayBeActive = false;
+                throw;
+            }
+
             int segments = path.Count - 1;
             if (segments > 0)
             {
@@ -549,58 +412,30 @@ internal static class PointerInput
             // --- Lift on the normal path: let failure propagate so the caller knows the pen
             //     may be stuck and the command exits non-zero with a structured error. ---
             send(lastSent.X, lastSent.Y, 0, POINTER_FLAGS.POINTER_FLAG_UP);
-            released = true;
+            contactMayBeActive = false;
         }
-        finally
+        catch (Exception primaryFailure)
         {
-            // Best-effort cancellation at the last accepted location when a glide frame fails.
-            // Swallowing here avoids masking the original, more-informative exception.
-            if (!released)
+            Exception? cancellationFailure = null;
+            if (contactMayBeActive)
             {
                 try
                 {
                     send(lastSent.X, lastSent.Y, 0,
                         POINTER_FLAGS.POINTER_FLAG_UP | POINTER_FLAGS.POINTER_FLAG_CANCELED);
                 }
-                catch (InvalidOperationException) { }
+                catch (Exception ex)
+                {
+                    cancellationFailure = ex;
+                }
             }
-        }
-    }
 
-    private static void SendPen(
-        HSYNTHETICPOINTERDEVICE device, int x, int y, uint pressure, int tiltX, int tiltY, bool eraser, POINTER_FLAGS flags)
-    {
-        var penFlags = eraser ? PEN_FLAG_ERASER : PEN_FLAG_NONE;
-
-        var info = new POINTER_TYPE_INFO
-        {
-            type = POINTER_INPUT_TYPE.PT_PEN,
-        };
-        info.Anonymous.penInfo = new POINTER_PEN_INFO
-        {
-            pointerInfo = new POINTER_INFO
+            if (cancellationFailure is not null)
             {
-                pointerType = POINTER_INPUT_TYPE.PT_PEN,
-                pointerId = 1,
-                pointerFlags = flags,
-                ptPixelLocation = new System.Drawing.Point(x, y),
-            },
-            penFlags = penFlags,
-            penMask = PEN_MASK_PRESSURE | PEN_MASK_TILT_X | PEN_MASK_TILT_Y,
-            pressure = pressure,
-            tiltX = tiltX,
-            tiltY = tiltY,
-        };
-
-        unsafe
-        {
-            if (!PInvoke.InjectSyntheticPointerInput(device, &info, 1))
-            {
-                int err = Marshal.GetLastPInvokeError();
-                throw new InvalidOperationException(
-                    $"InjectSyntheticPointerInput (pen) failed (Win32 error {err}: {Win32Message(err)}) — the " +
-                    "target must be on the same unlocked interactive desktop; run winapp at matching elevation.");
+                throw PointerInjectionException.Combine(primaryFailure, cancellationFailure);
             }
+
+            throw;
         }
     }
 

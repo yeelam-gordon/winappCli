@@ -606,15 +606,13 @@ public class PointerInputFrameTests
     }
 
     // -------------------------------------------------------------------------
-    // HIGH 1 — UP-frame failures surface on normal path; swallowed only on unwind
+    // Cleanup failures are reported separately without masking the primary failure
     // -------------------------------------------------------------------------
 
     [TestMethod]
-    public void InjectTouchStroke_UpFrameFailsOnNormalPath_ExceptionSurfaced()
+    public void InjectTouchStroke_UpAndCleanupFail_ReportsBothFailures()
     {
-        // Sender succeeds for DOWN (and any UPDATE glide) but throws on the UP frame.
-        // On the normal (non-faulted) path the UP failure must propagate to the caller,
-        // not be swallowed — mirroring the MouseInput.Drag released-flag pattern.
+        // Sender fails both the normal UP and the bounded canceled-UP cleanup.
         var upEx = new InvalidOperationException("UP injection failed — pointer stuck");
 
         PointerInput.TouchSender sender = contacts =>
@@ -630,26 +628,22 @@ public class PointerInputFrameTests
             new List<PointerPoint> { new PointerPoint(100, 200) }
         };
 
-        InvalidOperationException? caught = null;
-        try
-        {
-            PointerInput.InjectTouchStroke(paths, holdMs: 0, durationMs: 0, sender);
-            Assert.Fail("Expected InvalidOperationException was not thrown");
-        }
-        catch (InvalidOperationException ex) { caught = ex; }
+        var caught = Assert.ThrowsExactly<PointerInjectionException>(() =>
+            PointerInput.InjectTouchStroke(paths, holdMs: 0, durationMs: 0, sender));
 
-        Assert.AreSame(upEx, caught,
-            "The exact UP-frame exception must surface; it must not be swallowed on the normal path");
+        Assert.AreSame(upEx, caught.PrimaryFailure);
+        Assert.AreSame(upEx, caught.CancellationFailure);
+        Assert.AreEqual(
+            "UP injection failed — pointer stuck Best-effort canceled-UP cleanup also failed: UP injection failed — pointer stuck",
+            caught.Message);
     }
 
     [TestMethod]
-    public void InjectTouchStroke_GlideFrameThrows_OriginalExceptionPreserved_UpFailureSwallowed()
+    public void InjectTouchStroke_GlideAndCleanupFail_ReportsBothFailures()
     {
-        // Sender throws on the first glide (UPDATE) frame. The UP-frame exception thrown inside
-        // the finally's best-effort lift must be swallowed so the original glide exception
-        // propagates unmasked — matching the MouseInput.Drag unwind behaviour.
+        // Sender throws on the first glide frame and again during canceled-UP cleanup.
         var glideEx = new InvalidOperationException("glide frame failed");
-        var upEx   = new InvalidOperationException("UP injection also failed — must be swallowed");
+        var upEx   = new InvalidOperationException("UP cleanup also failed");
 
         PointerInput.TouchSender sender = contacts =>
         {
@@ -669,16 +663,14 @@ public class PointerInputFrameTests
             new List<PointerPoint> { new PointerPoint(0, 0), new PointerPoint(100, 0) }
         };
 
-        InvalidOperationException? caught = null;
-        try
-        {
-            PointerInput.InjectTouchStroke(paths, holdMs: 0, durationMs: 0, sender);
-            Assert.Fail("Expected InvalidOperationException was not thrown");
-        }
-        catch (InvalidOperationException ex) { caught = ex; }
+        var caught = Assert.ThrowsExactly<PointerInjectionException>(() =>
+            PointerInput.InjectTouchStroke(paths, holdMs: 0, durationMs: 0, sender));
 
-        Assert.AreSame(glideEx, caught,
-            "The original glide exception must propagate; the UP exception in the finally must be swallowed");
+        Assert.AreSame(glideEx, caught.PrimaryFailure);
+        Assert.AreSame(upEx, caught.CancellationFailure);
+        Assert.AreEqual(
+            "glide frame failed Best-effort canceled-UP cleanup also failed: UP cleanup also failed",
+            caught.Message);
     }
 
     [TestMethod]
@@ -726,10 +718,9 @@ public class PointerInputFrameTests
     }
 
     [TestMethod]
-    public void InjectPenStroke_UpFrameFailsOnNormalPath_ExceptionSurfaced()
+    public void InjectPenStroke_UpAndCleanupFail_ReportsBothFailures()
     {
-        // Sender succeeds for DOWN (and any UPDATE glide) but throws on the UP frame.
-        // On the normal path the UP failure must propagate, not be swallowed.
+        // Sender fails both the normal UP and the bounded canceled-UP cleanup.
         var upEx = new InvalidOperationException("pen UP injection failed — pen stuck");
 
         PointerInput.PenFrameSender sender = (x, y, pressure, flags) =>
@@ -742,25 +733,22 @@ public class PointerInputFrameTests
 
         var path = new List<PointerPoint> { new PointerPoint(100, 200) };
 
-        InvalidOperationException? caught = null;
-        try
-        {
-            PointerInput.InjectPenStroke(path, contactPressure: 512, durationMs: 0, sender);
-            Assert.Fail("Expected InvalidOperationException was not thrown");
-        }
-        catch (InvalidOperationException ex) { caught = ex; }
+        var caught = Assert.ThrowsExactly<PointerInjectionException>(() =>
+            PointerInput.InjectPenStroke(path, contactPressure: 512, durationMs: 0, sender));
 
-        Assert.AreSame(upEx, caught,
-            "The UP-frame exception must surface on the normal path; it must not be swallowed");
+        Assert.AreSame(upEx, caught.PrimaryFailure);
+        Assert.AreSame(upEx, caught.CancellationFailure);
+        Assert.AreEqual(
+            "pen UP injection failed — pen stuck Best-effort canceled-UP cleanup also failed: pen UP injection failed — pen stuck",
+            caught.Message);
     }
 
     [TestMethod]
-    public void InjectPenStroke_GlideFrameThrows_OriginalExceptionPreserved_UpFailureSwallowed()
+    public void InjectPenStroke_GlideAndCleanupFail_ReportsBothFailures()
     {
-        // Sender throws on the first UPDATE (glide) frame. The UP exception thrown in the
-        // finally best-effort lift must be swallowed to preserve the original glide exception.
+        // Sender throws on the first UPDATE frame and again during canceled-UP cleanup.
         var glideEx = new InvalidOperationException("pen glide frame failed");
-        var upEx   = new InvalidOperationException("pen UP also failed — must be swallowed");
+        var upEx   = new InvalidOperationException("pen UP cleanup also failed");
 
         PointerInput.PenFrameSender sender = (x, y, pressure, flags) =>
         {
@@ -775,16 +763,14 @@ public class PointerInputFrameTests
             new PointerPoint(100, 0),
         };
 
-        InvalidOperationException? caught = null;
-        try
-        {
-            PointerInput.InjectPenStroke(path, contactPressure: 512, durationMs: 0, sender);
-            Assert.Fail("Expected InvalidOperationException was not thrown");
-        }
-        catch (InvalidOperationException ex) { caught = ex; }
+        var caught = Assert.ThrowsExactly<PointerInjectionException>(() =>
+            PointerInput.InjectPenStroke(path, contactPressure: 512, durationMs: 0, sender));
 
-        Assert.AreSame(glideEx, caught,
-            "The glide exception must propagate; the UP exception in the finally must be swallowed");
+        Assert.AreSame(glideEx, caught.PrimaryFailure);
+        Assert.AreSame(upEx, caught.CancellationFailure);
+        Assert.AreEqual(
+            "pen glide frame failed Best-effort canceled-UP cleanup also failed: pen UP cleanup also failed",
+            caught.Message);
     }
 
     [TestMethod]
@@ -901,21 +887,16 @@ public class PointerInputFrameTests
             new List<PointerPoint> { new PointerPoint(100, 200) }
         };
 
-        InvalidOperationException? caught = null;
-        try
-        {
+        var caught = Assert.ThrowsExactly<PointerInjectionException>(() =>
             PointerInput.RunTouchGesture(TouchGesture.Tap, paths, holdMs: 0, durationMs: 0, sender,
-                sleepInter: _ => { });
-            Assert.Fail("Expected InvalidOperationException was not thrown after all retries");
-        }
-        catch (InvalidOperationException ex) { caught = ex; }
+                sleepInter: _ => { }));
 
-        Assert.IsNotNull(caught, "Exception must be surfaced after retries are exhausted");
         Assert.IsTrue(PointerInput.IsWin32ErrorNotReady(caught),
             "Surfaced exception must still be the Win32 error 21 that was never resolved");
-        // Must have attempted exactly MaxErrorNotReadyRetries + 1 times (10 retries + 1 final).
-        Assert.AreEqual(PointerInput.MaxErrorNotReadyRetries + 1, callCount,
-            $"Must retry MaxErrorNotReadyRetries ({PointerInput.MaxErrorNotReadyRetries}) times then make one final attempt; got {callCount} total calls");
+        int attemptsPerFrame = PointerInput.MaxErrorNotReadyRetries + 1;
+        Assert.AreEqual(attemptsPerFrame * 2, callCount,
+            "The failed initial DOWN and the one bounded canceled-UP cleanup each use the retry limit");
+        Assert.IsNotNull(caught.CancellationFailure);
     }
 
     [TestMethod]
@@ -937,19 +918,15 @@ public class PointerInputFrameTests
             new List<PointerPoint> { new PointerPoint(100, 200) }
         };
 
-        InvalidOperationException? caught = null;
-        try
-        {
+        var caught = Assert.ThrowsExactly<PointerInjectionException>(() =>
             PointerInput.RunTouchGesture(TouchGesture.Tap, paths, holdMs: 0, durationMs: 0, sender,
-                sleepInter: _ => { });
-            Assert.Fail("Expected InvalidOperationException was not thrown");
-        }
-        catch (InvalidOperationException ex) { caught = ex; }
+                sleepInter: _ => { }));
 
-        Assert.AreSame(expected, caught, "Must propagate the exact exception object unchanged");
-        Assert.AreEqual(1, callCount,
-            "Non-error-21 exceptions must NOT be retried — sender must be called exactly once");
-        Assert.IsFalse(PointerInput.IsWin32ErrorNotReady(caught!),
+        Assert.AreSame(expected, caught.PrimaryFailure);
+        Assert.AreSame(expected, caught.CancellationFailure);
+        Assert.AreEqual(2, callCount,
+            "A non-error-21 failure is not retried, but receives one bounded cleanup attempt");
+        Assert.IsFalse(PointerInput.IsWin32ErrorNotReady(caught),
             "The propagated exception must not be recognised as a Win32 error 21");
     }
 }

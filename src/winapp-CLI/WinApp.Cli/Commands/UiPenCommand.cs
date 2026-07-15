@@ -304,6 +304,7 @@ internal class UiPenCommand : Command, IShortDescription
                 {
                     logger.LogError("{Symbol} {Message}", UiSymbols.Error, injectEx.Message);
                     UiJsonError.Emit(json, UiJsonError.CodeInjectionUnsupported, injectEx.Message,
+                        details: (injectEx as PointerInjectionException)?.CleanupDetails,
                         errorOut: parseResult.InvocationConfiguration.Error);
                     return 1;
                 }

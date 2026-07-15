@@ -53,6 +53,7 @@ internal static class StoreHostBuilderExtensions
             .AddSingleton<IUpdateNotificationService, UpdateNotificationService>()
             // UI Automation services
             .AddSingleton<IMouseInput, RealMouseInput>()
+            .AddSingleton<IPointerNativeApi, PointerNativeApi>()
             .AddSingleton<IPointerInput, RealPointerInput>()
             .AddSingleton<IKeyboardInput, RealKeyboardInput>()
             .AddSingleton<IForegroundGuard, RealForegroundGuard>()

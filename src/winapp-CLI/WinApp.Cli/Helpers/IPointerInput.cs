@@ -38,9 +38,10 @@ internal enum TouchGesture
 
 /// <summary>
 /// Abstraction over synthetic pointer (touch / pen) injection for testability. The real
-/// implementation prefers <c>CreateSyntheticPointerDevice</c>/<c>InjectSyntheticPointerInput</c>
-/// for touch, falls back to <c>InitializeTouchInjection</c>/<c>InjectTouchInput</c>, and uses a
-/// synthetic pointer device for pen. Fakes record the injected contacts and gesture parameters so
+/// implementation verifies the related modern exports before using
+/// <c>CreateSyntheticPointerDevice</c>/<c>InjectSyntheticPointerInput</c> for touch, falls back to
+/// <c>InitializeTouchInjection</c>/<c>InjectTouchInput</c>, and uses a synthetic pointer device for
+/// pen (which has no legacy fallback). Fakes record the injected contacts and gesture parameters so
 /// the <c>ui touch</c>/<c>ui pen</c> commands can be unit-tested without a live, unlocked desktop.
 /// </summary>
 internal interface IPointerInput

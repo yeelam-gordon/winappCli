@@ -9,9 +9,16 @@ namespace WinApp.Cli.Helpers;
 /// </summary>
 internal class RealPointerInput : IPointerInput
 {
+    private readonly IPointerNativeApi _nativeApi;
+
+    public RealPointerInput(IPointerNativeApi nativeApi)
+    {
+        _nativeApi = nativeApi;
+    }
+
     public void Touch(TouchGesture gesture, IReadOnlyList<IReadOnlyList<PointerPoint>> contactPaths, int holdMs, int durationMs)
-        => PointerInput.Touch(gesture, contactPaths, holdMs, durationMs);
+        => PointerInput.Touch(gesture, contactPaths, holdMs, durationMs, _nativeApi);
 
     public void Pen(IReadOnlyList<PointerPoint> path, float pressure, int tiltX, int tiltY, bool eraser, int durationMs)
-        => PointerInput.Pen(path, pressure, tiltX, tiltY, eraser, durationMs);
+        => PointerInput.Pen(path, pressure, tiltX, tiltY, eraser, durationMs, _nativeApi);
 }

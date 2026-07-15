@@ -380,7 +380,9 @@ public partial class UiCommandTests
         // now surfacing on the normal path), the command must catch it and return non-zero with a
         // structured JSON error (injection_unsupported), not crash or report success.
         _fakeSession.SessionResult.WindowHandle = 5162;
-        _fakePointer.ThrowException = new InvalidOperationException("UP frame injection failed — pointer stuck");
+        _fakePointer.ThrowException = PointerInjectionException.Combine(
+            new InvalidOperationException("initial touch DOWN failed"),
+            new InvalidOperationException("touch cancellation failed"));
 
         var command = GetRequiredService<UiTouchCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command,
@@ -402,6 +404,12 @@ public partial class UiCommandTests
         Assert.AreEqual(UiJsonError.CodeInjectionUnsupported,
             error.GetProperty("error").GetProperty("code").GetString(),
             "JSON error.code must be 'injection_unsupported' when injection throws InvalidOperationException");
+        Assert.AreEqual(
+            "initial touch DOWN failed Best-effort canceled-UP cleanup also failed: touch cancellation failed",
+            error.GetProperty("error").GetProperty("message").GetString());
+        Assert.AreEqual(
+            "canceled_up_cleanup_failed: touch cancellation failed",
+            error.GetProperty("error").GetProperty("details").GetString());
     }
 
     // -------------------------------------------------------------------------
