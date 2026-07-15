@@ -246,6 +246,76 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
+    public void Contrast_ButtonNameWithoutTextChild_IsEligible()
+    {
+        var button = new UiElement
+        {
+            Id = "e0", Type = "Button", Name = "Save", Width = 100, Height = 30, Depth = 0,
+        };
+
+        var candidates = UiAuditEngine.GetContrastCandidates([button]);
+
+        Assert.IsTrue(candidates.Contains(button));
+    }
+
+    [TestMethod]
+    public void Contrast_ButtonWithTextChild_UsesChildOnly()
+    {
+        var button = new UiElement
+        {
+            Id = "e0", Type = "Button", Name = "Save", Width = 100, Height = 30, Depth = 0,
+        };
+        var text = new UiElement
+        {
+            Id = "e1", Type = "Text", Name = "Save", Width = 40, Height = 16, Depth = 1,
+        };
+
+        var candidates = UiAuditEngine.GetContrastCandidates([button, text]);
+
+        Assert.AreEqual(1, candidates.Count);
+        Assert.IsFalse(candidates.Contains(button));
+        Assert.IsTrue(candidates.Contains(text));
+    }
+
+    [TestMethod]
+    public void Contrast_EditValueAndInteractiveCustomName_AreEligible()
+    {
+        var edit = new UiElement
+        {
+            Id = "e0", Type = "Edit", Name = "Search", Value = "query", Width = 160, Height = 30,
+        };
+        var custom = new UiElement
+        {
+            Id = "e1", Type = "Custom", Name = "Amount", IsInvokable = true, Width = 100, Height = 30,
+        };
+
+        var candidates = UiAuditEngine.GetContrastCandidates([edit, custom]);
+
+        Assert.IsTrue(candidates.Contains(edit));
+        Assert.IsTrue(candidates.Contains(custom));
+    }
+
+    [TestMethod]
+    public void Contrast_StaticLeafCustom_IsEligibleButNamedCustomContainerIsNot()
+    {
+        var leaf = new UiElement
+        {
+            Id = "e0", Type = "Custom", Name = "Status", Width = 160, Height = 30, Depth = 0,
+        };
+        var container = new UiElement
+        {
+            Id = "e1", Type = "Custom", Name = "Card", Width = 160, Height = 80, Depth = 0,
+        };
+        var child = new UiElement { Id = "e2", Type = "Pane", Width = 100, Height = 30, Depth = 1 };
+
+        var candidates = UiAuditEngine.GetContrastCandidates([leaf, container, child]);
+
+        Assert.AreEqual(1, candidates.Count);
+        Assert.IsTrue(candidates.Contains(leaf));
+        Assert.IsFalse(candidates.Contains(container));
+    }
+
+    [TestMethod]
     public void Contrast_LargeText_UsesRelaxedThreshold()
     {
         // 3.5:1 fails for normal text (< 4.5) but passes for large text (>= 3.0).
@@ -302,7 +372,7 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
-    public void Contrast_UnmeasuredCandidate_IsWarnedAndCounted()
+    public void Contrast_UnmeasuredCandidate_FailsAndIsCounted()
     {
         var text = new UiElement
         {
@@ -314,8 +384,9 @@ public class UiAuditEngineTests
             Opts(UiAuditEngine.CheckContrast),
             _ => null);
 
-        Assert.AreEqual(1, result.Summary.Warn);
-        Assert.AreEqual(UiAuditEngine.SeverityWarn, result.Issues.Single().Severity);
+        Assert.AreEqual(1, result.Summary.Fail);
+        Assert.AreEqual(0, result.Summary.Warn);
+        Assert.AreEqual(UiAuditEngine.SeverityFail, result.Issues.Single().Severity);
         Assert.AreEqual("body", result.Issues.Single().Selector);
         Assert.AreEqual(1, result.Summary.Contrast!.Attempted);
         Assert.AreEqual(0, result.Summary.Contrast.Measured);
@@ -613,6 +684,66 @@ public class ContrastAnalyzerTests
         var buf = SolidBgra(4, 4, 0, 0, 0);
         Assert.IsNull(ContrastAnalyzer.ComputeContrastRatio(buf, 4, 4, new ContrastAnalyzer.PixelRect(0, 0, 0, 0)));
         Assert.IsNull(ContrastAnalyzer.ComputeContrastRatio(buf, 4, 4, new ContrastAnalyzer.PixelRect(10, 10, 2, 2)));
+    }
+
+    [TestMethod]
+    public void LargeRegion_UsesBoundedDeterministicSampleGrid()
+    {
+        var (sampleWidth, sampleHeight) = ContrastAnalyzer.GetSampleGridSize(
+            width: 100_000,
+            height: 80_000);
+
+        Assert.IsTrue(sampleWidth > 0);
+        Assert.IsTrue(sampleHeight > 0);
+        Assert.IsTrue(
+            (long)sampleWidth * sampleHeight <= ContrastAnalyzer.MaxSamplePixels,
+            "sample count must remain within the fixed per-candidate budget");
+
+        var second = ContrastAnalyzer.GetSampleGridSize(100_000, 80_000);
+        Assert.AreEqual((sampleWidth, sampleHeight), second);
+    }
+
+    [TestMethod]
+    public void LargeRegion_HistogramPreservesKnownContrast()
+    {
+        const int w = 1024, h = 1024;
+        var buf = SolidBgra(w, h, 255, 255, 255);
+        for (var y = 0; y < h; y++)
+        {
+            for (var x = 0; x < w / 4; x++)
+            {
+                var p = (y * w + x) * 4;
+                buf[p + 0] = 0x77;
+                buf[p + 1] = 0x77;
+                buf[p + 2] = 0x77;
+            }
+        }
+
+        var ratio = ContrastAnalyzer.ComputeContrastRatio(
+            buf,
+            w,
+            h,
+            new ContrastAnalyzer.PixelRect(0, 0, w, h));
+
+        Assert.IsNotNull(ratio);
+        Assert.IsTrue(ratio < 4.5 && ratio > 4.0, $"expected bounded grey-on-white analysis, got {ratio}");
+    }
+
+    [TestMethod]
+    public void ContrastAnalysis_PreCanceledToken_Throws()
+    {
+        var buf = SolidBgra(32, 32, 255, 255, 255);
+        using var cts = new CancellationTokenSource();
+        cts.Cancel();
+
+        Assert.ThrowsExactly<OperationCanceledException>(() =>
+            ContrastAnalyzer.ComputeContrastRatio(
+                buf,
+                32,
+                32,
+                new ContrastAnalyzer.PixelRect(0, 0, 32, 32),
+                ContrastAnalyzer.MaxSamplePixels,
+                cts.Token));
     }
 
     [TestMethod]

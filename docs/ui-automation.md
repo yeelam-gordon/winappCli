@@ -431,11 +431,14 @@ winapp ui audit -a myapp --area contrast --level aaa --json -o audit.json
 - Areas are `names`, `keyboard`, `screen-reader`, `contrast`, `roles`, or `all`; repeat `--area` to combine them.
 - Levels are `basic`/`aa` (WCAG AA contrast thresholds) and `thorough`/`aaa` (deeper heuristic checks and WCAG AAA contrast thresholds).
 - The `screen-reader` area statically checks UIA name, role, and focus readiness. It does not drive assistive technology or navigate application states.
-- Contrast uses window pixel sampling. Large-text classification estimates rendered size from DPI-normalized element bounds; it does not read the actual font.
-- Human output and JSON `summary.contrast` expose `attempted`, `measured`, and `unmeasured` eligible-text counts. Unmeasured candidates produce warnings. If candidates exist but none can be measured, the audit adds an aggregate failure and exits non-zero, even when window capture itself succeeded.
+- A supplied selector scopes the audit to that element. If it no longer resolves, the command returns `element_not_found`; it never widens the audit to the root window.
+- UIA traversal is cooperatively cancellable and bounded to 10,000 elements, 30 seconds, and 32 detailed traversal diagnostics. Reaching a bound, depth truncation, or a provider child/sibling enumeration failure is reported as an explicit audit failure rather than a clean partial result. Cancellation and deadline checks occur between provider calls; a UIA COM call already in progress cannot be forcibly interrupted.
+- Contrast uses bounded, deterministic stratified sampling plus a fixed luminance histogram instead of allocating or sorting every pixel. Large-text classification estimates rendered size from DPI-normalized element bounds; it does not read the actual font.
+- Eligible contrast content includes provider-exposed `Text` plus common controls that render their own accessible `Name`/`Value` (for example buttons, populated edits, and leaf/interactive custom controls). When a provider also exposes a visible child `Text` node, only that child is sampled to avoid duplicate scoring.
+- Human output and JSON `summary.contrast` expose `attempted`, `measured`, and `unmeasured` eligible-text counts. Every unmeasured eligible candidate is a failure and makes the command exit non-zero; this includes capture, bounds, cross-HWND, reliability, and bounded-analysis failures.
 - Having no eligible visible text candidates is reported explicitly and is not itself a failure. Discovering no UIA elements at all remains an incomplete audit and exits non-zero. Summary `pass` counts are successful rule checks, not elements.
 
-This command is a current-view linting aid, not WCAG or accessibility certification. Supplement it with manual testing and maintained tools such as [Accessibility Insights for Windows](https://accessibilityinsights.io/docs/windows/overview/) or [Axe.Windows](https://github.com/microsoft/axe-windows) for comprehensive rule coverage.
+Provider exposure, pixel clustering, rendered-state timing, and bounding-box font-size estimation remain heuristics. This command is a current-view linting aid, not WCAG or accessibility certification. Supplement it with manual testing and maintained tools such as [Accessibility Insights for Windows](https://accessibilityinsights.io/docs/windows/overview/) or [Axe.Windows](https://github.com/microsoft/axe-windows) for comprehensive rule coverage.
 
 ## Framework Support
 

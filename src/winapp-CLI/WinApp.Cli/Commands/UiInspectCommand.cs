@@ -94,6 +94,12 @@ internal partial class UiInspectCommand : Command, IShortDescription
                     elements = await uiAutomation.InspectAsync(session, selector, depth, cancellationToken);
                 }
 
+                if (selector is not null && elements.Length == 0)
+                {
+                    UiErrors.ElementNotFound(logger, selector, json);
+                    return 1;
+                }
+
                 // Apply filters (preserve window separator elements)
                 if (hideDisabled)
                 {

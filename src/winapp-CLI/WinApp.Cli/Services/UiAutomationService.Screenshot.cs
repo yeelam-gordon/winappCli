@@ -249,7 +249,7 @@ internal sealed partial class UiAutomationService
             }
         };
 
-        var pixelData = new byte[width * height * 4];
+        var pixelData = new byte[checked(width * height * 4)];
         fixed (byte* pPixels = pixelData)
         {
             Windows.Win32.PInvoke.GetDIBits(hdc, hBitmap, 0, (uint)height, pPixels, &bmi,
@@ -325,7 +325,7 @@ internal sealed partial class UiAutomationService
             return null;
         }
 
-        var croppedPixels = new byte[cropW * cropH * 4];
+        var croppedPixels = new byte[checked(cropW * cropH * 4)];
         for (var row = 0; row < cropH; row++)
         {
             var srcOffset = ((cropY + row) * fullWidth + cropX) * 4;

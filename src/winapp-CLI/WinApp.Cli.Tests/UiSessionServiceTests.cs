@@ -68,6 +68,8 @@ public class UiSessionServiceTests
         public List<(nint Hwnd, int Pid, string Title)> FindWindowsByPid(int pid) => [];
 
         public Task<UiElement[]> InspectAsync(UiSessionInfo session, string? elementId, int depth, CancellationToken ct) => Task.FromResult<UiElement[]>([]);
+        public Task<UiInspectionResult> InspectAsync(UiSessionInfo session, string? elementId, int depth, UiInspectionOptions options, CancellationToken ct)
+            => Task.FromResult(new UiInspectionResult());
         public Task<UiElement[]> InspectAncestorsAsync(UiSessionInfo session, string elementId, CancellationToken ct) => Task.FromResult<UiElement[]>([]);
         public Task<UiElement[]> SearchAsync(UiSessionInfo session, SelectorExpression selector, int maxResults, CancellationToken ct) => Task.FromResult<UiElement[]>([]);
         public Task<UiElement?> FindSingleElementAsync(UiSessionInfo session, SelectorExpression selector, CancellationToken ct) => Task.FromResult<UiElement?>(null);
@@ -83,4 +85,3 @@ public class UiSessionServiceTests
         public Task<string?> GetTextAsync(UiSessionInfo session, UiElement element, CancellationToken ct) => Task.FromResult<string?>(null);
     }
 }
-

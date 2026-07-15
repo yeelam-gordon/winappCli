@@ -61,10 +61,25 @@ internal static class UiAuditEngine
         "TreeItem", "DataItem", "Slider"
     };
 
-    // ControlTypes that carry visible text worth contrast-checking.
-    private static readonly HashSet<string> TextTypes = new(StringComparer.OrdinalIgnoreCase)
+    // Leaf text providers expose the rendered content directly.
+    private static readonly HashSet<string> LeafTextTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Text", "Document", "Hyperlink"
+        "Text"
+    };
+
+    // Providers differ on whether rendered labels appear as child Text nodes or directly on the
+    // control. These common controls are eligible when they expose non-empty Name/Value content
+    // and no visible Text descendant already represents that content.
+    private static readonly HashSet<string> NamedTextControlTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Button", "CheckBox", "ComboBox", "DataItem", "Document", "Header", "HeaderItem",
+        "Hyperlink", "ListItem", "MenuItem", "RadioButton", "SplitButton", "Tab", "TabItem",
+        "ToolTip", "TreeItem"
+    };
+
+    private static readonly HashSet<string> ValueTextControlTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Edit", "TextBox"
     };
 
     // Structural containers can expose InvokePattern as a framework implementation detail. Treat
@@ -153,6 +168,7 @@ internal static class UiAuditEngine
         var contrastAttempted = 0;
         var contrastMeasured = 0;
         var contrastUnmeasured = 0;
+        var contrastCandidates = checkContrast ? GetContrastCandidates(elements) : null;
 
         foreach (var el in elements)
         {
@@ -302,7 +318,7 @@ internal static class UiAuditEngine
 
             // contrast: eligible visible text elements must either be measured or explicitly
             // reported as unmeasured. This prevents an incomplete contrast run from looking clean.
-            if (checkContrast && IsContrastCandidate(el))
+            if (checkContrast && contrastCandidates!.Contains(el))
             {
                 contrastAttempted++;
                 var ratio = contrastProvider?.Invoke(el);
@@ -311,8 +327,8 @@ internal static class UiAuditEngine
                     contrastUnmeasured++;
                     var reason = contrastProvider is null
                         ? "window capture was unavailable"
-                        : "its pixels were outside the capture or unsuitable for reliable analysis";
-                    issues.Add(Issue(CheckContrast, SeverityWarn, el,
+                        : "its pixels were outside the capture, unsuitable for reliable analysis, or exceeded the bounded sampling budget";
+                    issues.Add(Issue(CheckContrast, SeverityFail, el,
                         $"{Describe(el)} contrast was not measured because {reason}."));
                 }
                 else
@@ -402,12 +418,113 @@ internal static class UiAuditEngine
         }
     }
 
-    internal static bool IsContrastCandidate(UiElement el)
-        => !el.IsOffscreen
-        && TextTypes.Contains(el.Type)
-        && !string.IsNullOrWhiteSpace(el.Name)
-        && el.Width > 0
-        && el.Height > 0;
+    internal static HashSet<UiElement> GetContrastCandidates(IReadOnlyList<UiElement> elements)
+    {
+        var candidates = new HashSet<UiElement>(ReferenceEqualityComparer.Instance);
+        for (var i = 0; i < elements.Count; i++)
+        {
+            var el = elements[i];
+            if (!HasVisibleProviderText(el))
+            {
+                continue;
+            }
+
+            if (el.Type.Equals("Custom", StringComparison.OrdinalIgnoreCase)
+                && !IsInteractive(el)
+                && HasAnyDescendant(elements, i, el.Depth))
+            {
+                continue;
+            }
+
+            if (LeafTextTypes.Contains(el.Type)
+                || !HasVisibleTextDescendant(elements, i, el.Depth))
+            {
+                candidates.Add(el);
+            }
+        }
+
+        return candidates;
+    }
+
+    private static bool HasVisibleProviderText(UiElement el)
+    {
+        if (el.Type == "---"
+            || el.IsOffscreen
+            || IsNonClientChrome(el)
+            || el.Width <= 0
+            || el.Height <= 0)
+        {
+            return false;
+        }
+
+        if (LeafTextTypes.Contains(el.Type))
+        {
+            return !string.IsNullOrWhiteSpace(el.Name)
+                || !string.IsNullOrWhiteSpace(el.Value);
+        }
+
+        if (ValueTextControlTypes.Contains(el.Type))
+        {
+            return !string.IsNullOrWhiteSpace(el.Value);
+        }
+
+        if (NamedTextControlTypes.Contains(el.Type))
+        {
+            return !string.IsNullOrWhiteSpace(el.Name)
+                || !string.IsNullOrWhiteSpace(el.Value);
+        }
+
+        return el.Type.Equals("Custom", StringComparison.OrdinalIgnoreCase)
+            && (!string.IsNullOrWhiteSpace(el.Name) || !string.IsNullOrWhiteSpace(el.Value));
+    }
+
+    private static bool HasVisibleTextDescendant(
+        IReadOnlyList<UiElement> elements,
+        int parentIndex,
+        int? parentDepth)
+    {
+        if (parentDepth is null)
+        {
+            return false;
+        }
+
+        for (var i = parentIndex + 1; i < elements.Count; i++)
+        {
+            var candidate = elements[i];
+            if (candidate.Type == "---")
+            {
+                break;
+            }
+
+            if (candidate.Depth is not { } depth || depth <= parentDepth.Value)
+            {
+                break;
+            }
+
+            if (LeafTextTypes.Contains(candidate.Type) && HasVisibleProviderText(candidate))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasAnyDescendant(
+        IReadOnlyList<UiElement> elements,
+        int parentIndex,
+        int? parentDepth)
+    {
+        if (parentDepth is null || parentIndex + 1 >= elements.Count)
+        {
+            return false;
+        }
+
+        var next = elements[parentIndex + 1];
+        return next.Type != "---"
+            && next.Depth is { } depth
+            && depth > parentDepth.Value;
+    }
 
     private static bool HasUnknownRole(string type)
         => string.IsNullOrWhiteSpace(type)

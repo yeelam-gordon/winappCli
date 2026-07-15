@@ -12,6 +12,8 @@ namespace WinApp.Cli.Tests;
 internal class FakeUiAutomationService : IUiAutomationService
 {
     public UiElement[] InspectResult { get; set; } = [];
+    public UiInspectionIssue[] InspectIssues { get; set; } = [];
+    public UiInspectionOptions? LastInspectOptions { get; private set; }
     public UiElement[] SearchResult { get; set; } = [];
     public UiElement? FindSingleResult { get; set; }
 
@@ -51,6 +53,21 @@ internal class FakeUiAutomationService : IUiAutomationService
 
     public Task<UiElement[]> InspectAsync(UiSessionInfo session, string? elementId, int depth, CancellationToken ct)
         => Task.FromResult(InspectResult);
+
+    public Task<UiInspectionResult> InspectAsync(
+        UiSessionInfo session,
+        string? elementId,
+        int depth,
+        UiInspectionOptions options,
+        CancellationToken ct)
+    {
+        LastInspectOptions = options;
+        return Task.FromResult(new UiInspectionResult
+        {
+            Elements = InspectResult,
+            Issues = InspectIssues,
+        });
+    }
 
     public Task<UiElement[]> InspectAncestorsAsync(UiSessionInfo session, string elementId, CancellationToken ct)
         => Task.FromResult(InspectResult);
@@ -212,4 +229,3 @@ internal class FakeForegroundGuard : WinApp.Cli.Helpers.IForegroundGuard
         return false;
     }
 }
-
