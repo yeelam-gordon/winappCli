@@ -245,6 +245,9 @@ public class KeyStringParserTests
     [DataRow("pagedown", (ushort)0x22)]
     [DataRow("printscreen", (ushort)0x2C)]
     [DataRow("apps", (ushort)0x5D)]
+    [DataRow("divide", (ushort)0x6F)]
+    [DataRow("numpaddivide", (ushort)0x6F)]
+    [DataRow("numpadenter", (ushort)0x0D)]
     public void Parse_NamedKeyAliases_ResolveToExpectedVk(string name, ushort expected)
     {
         var chord = (KeyChord)KeyStringParser.Parse(name)[0];
@@ -264,6 +267,9 @@ public class KeyStringParserTests
     [DataRow("left")]
     [DataRow("right")]
     [DataRow("printscreen")]
+    [DataRow("divide")]
+    [DataRow("numpaddivide")]
+    [DataRow("numpadenter")]
     public void Parse_ExtendedKeys_SetExtendedFlag(string name)
     {
         Assert.IsTrue(((KeyChord)KeyStringParser.Parse(name)[0]).Extended);
@@ -319,6 +325,7 @@ public class KeyStringParserTests
     {
         // vk=0x2E is Delete, an extended key — the flag must be inferred from the code.
         Assert.IsTrue(((KeyChord)KeyStringParser.Parse("vk=0x2E")[0]).Extended);
+        Assert.IsTrue(((KeyChord)KeyStringParser.Parse("vk=0x6F")[0]).Extended);
     }
 
     [TestMethod]
@@ -333,11 +340,29 @@ public class KeyStringParserTests
     }
 
     [TestMethod]
-    public void Parse_ChordSingleCharMainKey_MapsViaKeyboardLayout()
+    public void Parse_ChordAsciiMainKey_KeepsLayoutIndependentHint()
     {
-        // The single-char → VK path runs for a chord's main key; 'a' resolves to 0x41 on a US layout.
         var chord = (KeyChord)KeyStringParser.Parse("ctrl+a")[0];
         Assert.AreEqual(0x41, chord.Vk);
+        Assert.AreEqual("a", chord.SemanticKey);
+    }
+
+    [TestMethod]
+    public void Parse_ChordSymbol_DefersMappingAndPreservesSemanticCharacter()
+    {
+        var chord = (KeyChord)KeyStringParser.Parse("ctrl+@")[0];
+
+        Assert.AreEqual(0, chord.Vk);
+        Assert.AreEqual("@", chord.SemanticKey);
+    }
+
+    [TestMethod]
+    public void Parse_ChordUppercase_PreservesRequiredCaseForTargetLayout()
+    {
+        var chord = (KeyChord)KeyStringParser.Parse("ctrl+A")[0];
+
+        Assert.AreEqual(0x41, chord.Vk);
+        Assert.AreEqual("A", chord.SemanticKey);
     }
 
     [TestMethod]

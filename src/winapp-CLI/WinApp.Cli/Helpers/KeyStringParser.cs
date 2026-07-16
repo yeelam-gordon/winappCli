@@ -80,6 +80,8 @@ internal static class KeyStringParser
         ["capslock"] = (0x14, false),
         ["printscreen"] = (0x2C, true), ["prtsc"] = (0x2C, true),
         ["apps"] = (0x5D, true), ["menukey"] = (0x5D, true),
+        ["divide"] = (0x6F, true), ["numpaddivide"] = (0x6F, true), ["kpdivide"] = (0x6F, true),
+        ["numpadenter"] = (0x0D, true), ["kpenter"] = (0x0D, true),
         ["f1"] = (0x70, false), ["f2"] = (0x71, false), ["f3"] = (0x72, false), ["f4"] = (0x73, false),
         ["f5"] = (0x74, false), ["f6"] = (0x75, false), ["f7"] = (0x76, false), ["f8"] = (0x77, false),
         ["f9"] = (0x78, false), ["f10"] = (0x79, false), ["f11"] = (0x7A, false), ["f12"] = (0x7B, false),
@@ -280,9 +282,9 @@ internal static class KeyStringParser
                 $"Unknown key '{mainKey}' in '{token}'. Use a named key (enter, down, f5), a single character, or vk=0xNN.");
         }
 
-        // VkKeyScan is layout-dependent. Retain a character chord's semantic identity so safety checks
-        // still know that the caller wrote (for example) "win+l" if another layout maps it to a different VK.
-        var semanticKey = mainKey.Length == 1 ? mainKey.ToLowerInvariant() : null;
+        // Character chords are re-resolved against the target thread's keyboard layout at delivery.
+        // Preserve the exact character, including case, so required Shift/Ctrl/AltGr state is not lost.
+        var semanticKey = mainKey.Length == 1 ? mainKey : null;
         chord = new KeyChord(modifiers, vk, extended, semanticKey);
         return true;
     }
@@ -302,16 +304,27 @@ internal static class KeyStringParser
             return true;
         }
 
-        // Single character: map to its virtual key via the active keyboard layout.
+        // Defer character-to-key mapping to the target window thread's layout. Keep only an
+        // ASCII letter/digit hint for semantic safety checks and diagnostics; symbols and
+        // target-layout-only characters intentionally carry VK 0 until delivery.
         if (name.Length == 1)
         {
-            short scan = Windows.Win32.PInvoke.VkKeyScan(name[0]);
-            if (scan != -1)
+            char character = name[0];
+            if (character is >= 'a' and <= 'z')
             {
-                vk = (ushort)(scan & 0xFF);
-                extended = false;
-                return true;
+                vk = (ushort)char.ToUpperInvariant(character);
             }
+            else if (character is (>= 'A' and <= 'Z') or (>= '0' and <= '9'))
+            {
+                vk = character;
+            }
+            else
+            {
+                vk = 0;
+            }
+
+            extended = false;
+            return true;
         }
 
         extended = false;
@@ -340,11 +353,12 @@ internal static class KeyStringParser
     }
 
     /// <summary>Virtual keys that require the extended-key flag for correct delivery.</summary>
-    private static bool IsExtendedVk(ushort vk) => vk is
+    internal static bool IsExtendedVk(ushort vk) => vk is
         0x21 or 0x22 or 0x23 or 0x24 or // PgUp PgDn End Home
         0x25 or 0x26 or 0x27 or 0x28 or // arrows
         0x2D or 0x2E or                 // Insert Delete
         0x2C or                         // PrintScreen
+        0x6F or                         // Numpad Divide
         0x5B or 0x5C or 0x5D or         // LWin RWin Apps
         0xA3 or 0xA5 or                  // RCtrl RAlt
         0x90;                           // NumLock

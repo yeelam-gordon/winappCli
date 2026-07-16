@@ -9,9 +9,9 @@ namespace WinApp.Cli.Tests;
 /// <summary>
 /// Unit tests for the pure decision logic behind the input-injection guards. The branch selection
 /// is extracted from the PInvoke-backed guards so the locked-desktop vs. wrong-window choice
-/// (<see cref="ForegroundGuard.Classify"/>) and the WM_CHAR drop warning gate
+/// (<see cref="ForegroundGuard.Classify"/>) and the WM_CHAR enqueue warning gate
 /// (<see cref="UiSendKeysCommand.Handler.ShouldWarnPostMessageTextDropped"/>) can be verified without
-/// a live desktop or a real XAML window.
+/// a live desktop.
 /// </summary>
 [TestClass]
 public class InjectionGuardTests
@@ -56,24 +56,21 @@ public class InjectionGuardTests
     }
 
     // -----------------------------------------------------------------
-    // UiSendKeysCommand.ShouldWarnPostMessageTextDropped — WM_CHAR drop warning gate (M6 / N6)
+    // UiSendKeysCommand.ShouldWarnPostMessageTextDropped — WM_CHAR enqueue warning gate
     // -----------------------------------------------------------------
 
     [TestMethod]
-    // Warn only when posting WM_CHAR AND there is literal text AND the target looks like XAML.
-    [DataRow(true, true, true, true)]
+    // PostMessage + literal text always warns because enqueue does not prove consumption.
+    [DataRow(true, true, true)]
     // send-input transport delivers real keystrokes → no WM_CHAR drop → no warning.
-    [DataRow(false, true, true, false)]
+    [DataRow(false, true, false)]
     // Only named keys / combos (no literal text) → KeyDown is posted regardless → no warning.
-    [DataRow(true, false, true, false)]
-    // Non-XAML target (Win32 / WPF / Electron consume WM_CHAR) → no warning. This is the N6 gate:
-    // before FrameworkHint, post-message + text warned on EVERY app, false-alarming the majority.
-    [DataRow(true, true, false, false)]
-    [DataRow(false, false, false, false)]
-    public void ShouldWarnPostMessageTextDropped_OnlyForXamlPostMessageText(
-        bool isPostMessage, bool hasLiteralText, bool targetLooksXaml, bool expected)
+    [DataRow(true, false, false)]
+    [DataRow(false, false, false)]
+    public void ShouldWarnPostMessageTextDropped_ForEveryPostMessageTextPayload(
+        bool isPostMessage, bool hasLiteralText, bool expected)
     {
         Assert.AreEqual(expected,
-            UiSendKeysCommand.Handler.ShouldWarnPostMessageTextDropped(isPostMessage, hasLiteralText, targetLooksXaml));
+            UiSendKeysCommand.Handler.ShouldWarnPostMessageTextDropped(isPostMessage, hasLiteralText));
     }
 }

@@ -26,10 +26,8 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
-    public async Task SendKeys_XamlPostMessageText_Json_IncludesExactWarning()
+    public async Task SendKeys_PostMessageText_Json_IncludesExactEnqueueWarning()
     {
-        _fakeFrameworkHint.IsLikelyXamlResult = true;
-
         var command = GetRequiredService<UiSendKeysCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(
             command,
@@ -40,8 +38,8 @@ public partial class UiCommandTests
         var warnings = result.GetProperty("warnings");
         Assert.AreEqual(1, warnings.GetArrayLength());
         Assert.AreEqual(
-            "Literal text via --via post-message may not be delivered to WinUI 3 / XAML apps " +
-            "(WM_CHAR is dropped by the input pipeline). Use --via send-input if the text does not appear.",
+            "Literal text via --via post-message is only enqueued as WM_CHAR; success does not confirm " +
+            "the target consumed it, and WinUI 3 / XAML apps may drop it. Use --via send-input if the text does not appear.",
             warnings[0].GetString());
     }
 
@@ -185,7 +183,8 @@ public partial class UiCommandTests
     [TestMethod]
     public void SendKeys_ViaOption_DocumentsPostMessageTextLoss()
     {
-        StringAssert.Contains(UiSendKeysCommand.ViaOption.Description, "posts WM_CHAR");
+        StringAssert.Contains(UiSendKeysCommand.ViaOption.Description, "only enqueues WM_CHAR");
+        StringAssert.Contains(UiSendKeysCommand.ViaOption.Description, "without proving consumption");
         StringAssert.Contains(UiSendKeysCommand.ViaOption.Description, "may be dropped by WinUI/XAML");
         Assert.DoesNotContain("typed text raises TextChanged", UiSendKeysCommand.ViaOption.Description);
     }
@@ -351,6 +350,19 @@ public partial class UiCommandTests
         Assert.AreEqual(0, exitCode);
         Assert.AreEqual(1, _fakeKeyboard.SendCalls.Count);
         Assert.AreEqual(WinApp.Cli.Helpers.KeyTransport.SendInput, _fakeKeyboard.SendCalls[0].Transport);
+    }
+
+    [TestMethod]
+    public async Task SendKeys_SystemComboWithLaterAction_IsRejectedBeforeTargetResolution()
+    {
+        var command = GetRequiredService<UiSendKeysCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+            ["win+r enter", "-a", "TestApp", "--via", "send-input", "--allow-system-keys", "--json"]);
+
+        Assert.AreEqual(1, exitCode);
+        Assert.AreEqual(0, _fakeSession.ResolveCalls);
+        Assert.AreEqual(0, _fakeForeground.Calls.Count);
+        Assert.AreEqual(0, _fakeKeyboard.SendCalls.Count);
     }
 
     [TestMethod]

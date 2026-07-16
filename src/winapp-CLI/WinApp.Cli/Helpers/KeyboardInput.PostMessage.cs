@@ -10,9 +10,6 @@ namespace WinApp.Cli.Helpers;
 
 internal static partial class KeyboardInput
 {
-    private const ushort VkControl = 0x11;
-    private const ushort VkMenu = 0x12;
-
     private readonly record struct PostedKey(ushort VirtualKey, bool Extended);
     private readonly record struct PostedKeyCleanup(int Failures, Exception? Error);
 
@@ -24,30 +21,50 @@ internal static partial class KeyboardInput
         out int error);
 
     private static void SendViaPostMessage(HWND hwnd, IReadOnlyList<KeyAction> actions, HKL keyboardLayout)
-        => SendViaPostMessageCore(hwnd, actions, keyboardLayout, TryPostMessage);
+        => SendViaPostMessageCore(hwnd, actions, keyboardLayout, TryPostMessage, PInvoke.VkKeyScanEx);
 
     internal static void SendViaPostMessage(
         HWND hwnd,
         IReadOnlyList<KeyAction> actions,
         HKL keyboardLayout,
         PostMessageInvoker postMessage)
-        => SendViaPostMessageCore(hwnd, actions, keyboardLayout, postMessage);
+        => SendViaPostMessageCore(hwnd, actions, keyboardLayout, postMessage, PInvoke.VkKeyScanEx);
+
+    internal static void SendViaPostMessage(
+        HWND hwnd,
+        IReadOnlyList<KeyAction> actions,
+        HKL keyboardLayout,
+        PostMessageInvoker postMessage,
+        KeyScanMapper mapCharacter)
+        => SendViaPostMessageCore(hwnd, actions, keyboardLayout, postMessage, mapCharacter);
 
     private static void SendViaPostMessageCore(
         HWND hwnd,
         IReadOnlyList<KeyAction> actions,
         HKL keyboardLayout,
-        PostMessageInvoker postMessage)
+        PostMessageInvoker postMessage,
+        KeyScanMapper mapCharacter)
     {
+        var resolvedChords = actions
+            .Select(action => action is KeyChord chord
+                ? ResolveChord(chord, keyboardLayout, mapCharacter)
+                : (ResolvedKeyChord?)null)
+            .ToArray();
         var heldKeys = new List<PostedKey>();
         try
         {
-            foreach (var action in actions)
+            for (int actionIndex = 0; actionIndex < actions.Count; actionIndex++)
             {
+                var action = actions[actionIndex];
                 switch (action)
                 {
-                    case KeyChord chord:
-                        PostChord(hwnd, chord, keyboardLayout, heldKeys, postMessage);
+                    case KeyChord:
+                        PostChord(
+                            hwnd,
+                            resolvedChords[actionIndex]!.Value,
+                            keyboardLayout,
+                            heldKeys,
+                            postMessage);
                         break;
 
                     case TextInput text:
@@ -95,7 +112,7 @@ internal static partial class KeyboardInput
 
     private static void PostChord(
         HWND hwnd,
-        KeyChord chord,
+        ResolvedKeyChord chord,
         HKL keyboardLayout,
         List<PostedKey> heldKeys,
         PostMessageInvoker postMessage)
@@ -108,11 +125,22 @@ internal static partial class KeyboardInput
             heldKeys.Add(new PostedKey(modifier, IsExtended(modifier)));
         }
 
-        var mainVirtualKey = ResolveChordVirtualKey(chord, keyboardLayout);
-        PostKeyDownChecked(hwnd, keyboardLayout, mainVirtualKey, chord.Extended, ref altDownCount, postMessage);
-        heldKeys.Add(new PostedKey(mainVirtualKey, chord.Extended));
+        PostKeyDownChecked(
+            hwnd,
+            keyboardLayout,
+            chord.VirtualKey,
+            chord.Extended,
+            ref altDownCount,
+            postMessage);
+        heldKeys.Add(new PostedKey(chord.VirtualKey, chord.Extended));
 
-        PostKeyUpChecked(hwnd, keyboardLayout, mainVirtualKey, chord.Extended, ref altDownCount, postMessage);
+        PostKeyUpChecked(
+            hwnd,
+            keyboardLayout,
+            chord.VirtualKey,
+            chord.Extended,
+            ref altDownCount,
+            postMessage);
         heldKeys.RemoveAt(heldKeys.Count - 1);
 
         for (int i = chord.Modifiers.Count - 1; i >= 0; i--)

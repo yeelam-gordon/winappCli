@@ -18,9 +18,23 @@ namespace WinApp.Cli.Helpers;
 internal static partial class KeyboardInput
 {
     private const ushort VkShift = 0x10;
+    private const ushort VkControl = 0x11;
+    private const ushort VkMenu = 0x12;
     private const ushort VkL = 0x4C;
     private const ushort VkLWin = 0x5B;
     private const ushort VkRWin = 0x5C;
+
+    internal readonly record struct ResolvedKeyChord(
+        IReadOnlyList<ushort> Modifiers,
+        ushort VirtualKey,
+        bool Extended);
+
+    internal delegate short KeyScanMapper(char character, HKL keyboardLayout);
+    internal delegate uint SendInputInvoker(INPUT[] inputs);
+    internal delegate void ForegroundValidator(long targetHwnd);
+    internal delegate bool KeyStateProbe(ushort virtualKey);
+
+    private readonly record struct InputActionBatch(KeyAction Action, INPUT[] Inputs);
 
     public static void Send(long hwnd, IReadOnlyList<KeyAction> actions, KeyTransport transport)
     {
@@ -54,73 +68,83 @@ internal static partial class KeyboardInput
         }
     }
 
-    private static unsafe void SendViaSendInput(
+    private static void SendViaSendInput(
         long targetHwnd,
         IReadOnlyList<KeyAction> actions,
         HKL keyboardLayout)
+        => SendViaSendInputCore(
+            targetHwnd,
+            actions,
+            keyboardLayout,
+            InvokeSendInput,
+            EnsureFinalForeground,
+            IsKeyDown,
+            PInvoke.VkKeyScanEx);
+
+    internal static void SendViaSendInput(
+        long targetHwnd,
+        IReadOnlyList<KeyAction> actions,
+        HKL keyboardLayout,
+        SendInputInvoker sendInput,
+        ForegroundValidator ensureForeground,
+        KeyStateProbe isKeyDown,
+        KeyScanMapper mapCharacter)
+        => SendViaSendInputCore(
+            targetHwnd,
+            actions,
+            keyboardLayout,
+            sendInput,
+            ensureForeground,
+            isKeyDown,
+            mapCharacter);
+
+    private static void SendViaSendInputCore(
+        long targetHwnd,
+        IReadOnlyList<KeyAction> actions,
+        HKL keyboardLayout,
+        SendInputInvoker sendInput,
+        ForegroundValidator ensureForeground,
+        KeyStateProbe isKeyDown,
+        KeyScanMapper mapCharacter)
     {
-        var inputs = new List<INPUT>();
+        EnsureSystemShortcutsAreIsolated(actions);
 
-        foreach (var action in actions)
+        // Resolve every action before injecting the first one. A target-layout mapping failure must
+        // fail closed without applying an earlier prefix of the requested sequence.
+        var batches = actions
+            .Select(action => new InputActionBatch(
+                action,
+                BuildActionInputs(action, keyboardLayout, mapCharacter)))
+            .Where(batch => batch.Inputs.Length > 0)
+            .ToArray();
+
+        foreach (var actionBatch in batches)
         {
-            switch (action)
+            var batch = actionBatch.Inputs;
+
+            // Re-check before every semantic action so a preceding action cannot redirect the
+            // remainder of the request to a different foreground process.
+            ensureForeground(targetHwnd);
+            EnsureNoWinLRisk(batch, [actionBatch.Action], isKeyDown);
+
+            var initiallyDownKeys = FindInitiallyDownConflictingKeys(batch, isKeyDown);
+            if (initiallyDownKeys.Count > 0)
             {
-                case KeyChord chord:
-                    foreach (var modifier in chord.Modifiers)
-                    {
-                        inputs.Add(KeyEvent(modifier, IsExtended(modifier), keyUp: false));
-                    }
-
-                    var mainVirtualKey = ResolveChordVirtualKey(chord, keyboardLayout);
-                    inputs.Add(KeyEvent(mainVirtualKey, chord.Extended, keyUp: false));
-                    inputs.Add(KeyEvent(mainVirtualKey, chord.Extended, keyUp: true));
-
-                    for (int i = chord.Modifiers.Count - 1; i >= 0; i--)
-                    {
-                        var modifier = chord.Modifiers[i];
-                        inputs.Add(KeyEvent(modifier, IsExtended(modifier), keyUp: true));
-                    }
-                    break;
-
-                case TextInput text:
-                    foreach (var ch in text.Text)
-                    {
-                        AppendCharEvents(inputs, ch, keyboardLayout);
-                    }
-                    break;
+                var keys = string.Join(", ", initiallyDownKeys.Select(key => $"0x{key:X2}"));
+                throw new KeyboardInjectionException(
+                    UiJsonError.CodeInputInjectionFailed,
+                    $"Refusing SendInput because a requested key or modifier is already physically held: {keys}. " +
+                    "Release them and retry so synthetic cleanup cannot release user-owned key state.");
             }
-        }
 
-        if (inputs.Count == 0)
-        {
-            return;
-        }
-
-        var batch = inputs.ToArray();
-
-        // Re-check at the last practical boundary. This narrows, but cannot eliminate, the foreground
-        // TOCTOU window between verification and the SendInput syscall.
-        EnsureFinalForeground(targetHwnd);
-        EnsureNoWinLRisk(batch, actions);
-
-        fixed (INPUT* pointer = batch)
-        {
-            var sent = PInvoke.SendInput((uint)batch.Length, pointer, sizeof(INPUT));
+            var sent = sendInput(batch);
             if (sent == (uint)batch.Length)
             {
-                return;
+                continue;
             }
 
-            var releases = BuildReleaseInputs(batch, sent);
-            uint released = 0;
-            if (releases.Length > 0)
-            {
-                fixed (INPUT* releasePointer = releases)
-                {
-                    released = PInvoke.SendInput((uint)releases.Length, releasePointer, sizeof(INPUT));
-                }
-            }
-
+            var releases = BuildReleaseInputs(batch, sent, initiallyDownKeys.ToHashSet());
+            uint released = releases.Length > 0 ? sendInput(releases) : 0;
             var cleanup = DescribeSendInputCleanup(
                 sent,
                 (uint)batch.Length,
@@ -146,6 +170,63 @@ internal static partial class KeyboardInput
         }
     }
 
+    private static INPUT[] BuildActionInputs(
+        KeyAction action,
+        HKL keyboardLayout,
+        KeyScanMapper mapCharacter)
+    {
+        var inputs = new List<INPUT>();
+        switch (action)
+        {
+            case KeyChord chord:
+                var resolvedChord = ResolveChord(chord, keyboardLayout, mapCharacter);
+                foreach (var modifier in resolvedChord.Modifiers)
+                {
+                    inputs.Add(KeyEvent(modifier, IsExtended(modifier), keyUp: false));
+                }
+
+                inputs.Add(KeyEvent(resolvedChord.VirtualKey, resolvedChord.Extended, keyUp: false));
+                inputs.Add(KeyEvent(resolvedChord.VirtualKey, resolvedChord.Extended, keyUp: true));
+
+                for (int i = resolvedChord.Modifiers.Count - 1; i >= 0; i--)
+                {
+                    var modifier = resolvedChord.Modifiers[i];
+                    inputs.Add(KeyEvent(modifier, IsExtended(modifier), keyUp: true));
+                }
+                break;
+
+            case TextInput text:
+                foreach (var ch in text.Text)
+                {
+                    AppendCharEvents(inputs, ch, keyboardLayout, mapCharacter);
+                }
+                break;
+        }
+
+        return inputs.ToArray();
+    }
+
+    private static unsafe uint InvokeSendInput(INPUT[] inputs)
+    {
+        fixed (INPUT* pointer = inputs)
+        {
+            return PInvoke.SendInput((uint)inputs.Length, pointer, sizeof(INPUT));
+        }
+    }
+
+    internal static void EnsureSystemShortcutsAreIsolated(IReadOnlyList<KeyAction> actions)
+    {
+        var systemCombos = SystemKeyGuard.FindSystemCombos(actions);
+        if (systemCombos.Count > 0 && actions.Count > 1)
+        {
+            throw new KeyboardInjectionException(
+                UiJsonError.CodeInvalidArguments,
+                $"System-reserved SendInput action(s) must be sent alone: {string.Join(", ", systemCombos)}. " +
+                "A system shortcut can change foreground before later actions; send it in a separate command, " +
+                "then resolve and foreground the next target again.");
+        }
+    }
+
     private static void EnsureFinalForeground(long targetHwnd)
     {
         if (ForegroundGuard.ForegroundBelongsTo(targetHwnd))
@@ -165,11 +246,14 @@ internal static partial class KeyboardInput
             "Refusing SendInput because the requested target is no longer the foreground window.");
     }
 
-    private static void EnsureNoWinLRisk(INPUT[] batch, IReadOnlyList<KeyAction> actions)
+    private static void EnsureNoWinLRisk(
+        INPUT[] batch,
+        IReadOnlyList<KeyAction> actions,
+        KeyStateProbe isKeyDown)
     {
-        bool leftWinDown = IsKeyDown(VkLWin);
-        bool rightWinDown = IsKeyDown(VkRWin);
-        bool lDown = IsKeyDown(VkL);
+        bool leftWinDown = isKeyDown(VkLWin);
+        bool rightWinDown = isKeyDown(VkRWin);
+        bool lDown = isKeyDown(VkL);
 
         bool semanticRisk = (leftWinDown || rightWinDown) && SystemKeyGuard.ContainsSemanticL(actions);
         bool transitionRisk = SystemKeyGuard.WouldCreateWinL(
@@ -205,11 +289,31 @@ internal static partial class KeyboardInput
     private static bool IsKeyDown(ushort virtualKey)
         => (PInvoke.GetAsyncKeyState(virtualKey) & 0x8000) != 0;
 
+    internal static IReadOnlyList<ushort> FindInitiallyDownConflictingKeys(
+        INPUT[] batch,
+        KeyStateProbe isKeyDown)
+    {
+        ushort[] ambientModifiers = [VkShift, VkControl, VkMenu, VkLWin, VkRWin];
+        return batch
+            .Where(input =>
+                input.type == INPUT_TYPE.INPUT_KEYBOARD &&
+                input.Anonymous.ki.wVk != 0 &&
+                (input.Anonymous.ki.dwFlags & KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP) == 0)
+            .Select(input => (ushort)input.Anonymous.ki.wVk)
+            .Concat(ambientModifiers)
+            .Distinct()
+            .Where(isKeyDown.Invoke)
+            .ToArray();
+    }
+
     /// <summary>
     /// Builds key-up events only for keys still held after replaying the prefix Windows reports as
     /// delivered. A zero-length prefix therefore never releases a physical key the CLI did not inject.
     /// </summary>
-    internal static INPUT[] BuildReleaseInputs(INPUT[] attemptedBatch, uint deliveredCount)
+    internal static INPUT[] BuildReleaseInputs(
+        INPUT[] attemptedBatch,
+        uint deliveredCount,
+        IReadOnlySet<ushort>? initiallyDownVirtualKeys = null)
     {
         var held = new List<KEYBDINPUT>();
         int count = (int)Math.Min(deliveredCount, (uint)attemptedBatch.Length);
@@ -225,6 +329,12 @@ internal static partial class KeyboardInput
             var key = input.Anonymous.ki;
             if ((key.dwFlags & KEYBD_EVENT_FLAGS.KEYEVENTF_KEYUP) == 0)
             {
+                if (key.wVk != 0 &&
+                    initiallyDownVirtualKeys?.Contains((ushort)key.wVk) == true)
+                {
+                    continue;
+                }
+
                 held.Add(key);
                 continue;
             }
@@ -307,9 +417,13 @@ internal static partial class KeyboardInput
         };
     }
 
-    private static void AppendCharEvents(List<INPUT> inputs, char ch, HKL keyboardLayout)
+    private static void AppendCharEvents(
+        List<INPUT> inputs,
+        char ch,
+        HKL keyboardLayout,
+        KeyScanMapper mapCharacter)
     {
-        short scan = PInvoke.VkKeyScanEx(ch, keyboardLayout);
+        short scan = mapCharacter(ch, keyboardLayout);
         int low = scan & 0xFF;
         int high = (scan >> 8) & 0xFF;
 
@@ -325,26 +439,90 @@ internal static partial class KeyboardInput
 
         var virtualKey = (ushort)low;
         bool needsShift = (high & 0x01) != 0;
+        bool extended = KeyStringParser.IsExtendedVk(virtualKey);
 
         if (needsShift) { inputs.Add(KeyEvent(VkShift, extended: false, keyUp: false)); }
-        inputs.Add(KeyEvent(virtualKey, extended: false, keyUp: false));
-        inputs.Add(KeyEvent(virtualKey, extended: false, keyUp: true));
+        inputs.Add(KeyEvent(virtualKey, extended, keyUp: false));
+        inputs.Add(KeyEvent(virtualKey, extended, keyUp: true));
         if (needsShift) { inputs.Add(KeyEvent(VkShift, extended: false, keyUp: true)); }
     }
 
-    private static ushort ResolveChordVirtualKey(KeyChord chord, HKL keyboardLayout)
+    private static ResolvedKeyChord ResolveChord(KeyChord chord, HKL keyboardLayout)
+        => ResolveChord(chord, keyboardLayout, PInvoke.VkKeyScanEx);
+
+    internal static ResolvedKeyChord ResolveChord(
+        KeyChord chord,
+        HKL keyboardLayout,
+        KeyScanMapper mapCharacter)
     {
         if (chord.SemanticKey is { Length: 1 })
         {
-            short mapped = PInvoke.VkKeyScanEx(chord.SemanticKey[0], keyboardLayout);
-            int low = mapped & 0xFF;
-            if (mapped != -1 && low != 0xFF)
+            char character = chord.SemanticKey[0];
+            short mapped = mapCharacter(character, keyboardLayout);
+            int virtualKey = mapped & 0xFF;
+            int modifierState = (mapped >> 8) & 0xFF;
+            if (mapped == -1 || virtualKey is 0 or 0xFF)
             {
-                return (ushort)low;
+                throw new KeyboardInjectionException(
+                    UiJsonError.CodeInvalidArguments,
+                    $"Character chord '{character}' cannot be mapped by the target window's keyboard layout. " +
+                    "Use a named key or vk=0xNN for explicit physical-key semantics.");
             }
+
+            const int supportedModifierBits = 0x01 | 0x02 | 0x04;
+            if ((modifierState & ~supportedModifierBits) != 0)
+            {
+                throw new KeyboardInjectionException(
+                    UiJsonError.CodeInvalidArguments,
+                    $"Character chord '{character}' requires unsupported keyboard-layout modifier state " +
+                    $"0x{modifierState:X2}. Use vk=0xNN for explicit physical-key semantics.");
+            }
+
+            var modifiers = chord.Modifiers.ToList();
+            if ((modifierState & 0x01) != 0)
+            {
+                AddImplicitModifier(modifiers, VkShift, 0xA0, 0xA1, insertBeforeAlt: false);
+            }
+            if ((modifierState & 0x02) != 0)
+            {
+                AddImplicitModifier(modifiers, VkControl, 0xA2, 0xA3, insertBeforeAlt: true);
+            }
+            if ((modifierState & 0x04) != 0)
+            {
+                AddImplicitModifier(modifiers, VkMenu, 0xA4, 0xA5, insertBeforeAlt: false);
+            }
+
+            var resolvedVirtualKey = (ushort)virtualKey;
+            return new ResolvedKeyChord(
+                modifiers,
+                resolvedVirtualKey,
+                KeyStringParser.IsExtendedVk(resolvedVirtualKey));
         }
 
-        return chord.Vk;
+        return new ResolvedKeyChord(chord.Modifiers, chord.Vk, chord.Extended);
+    }
+
+    private static void AddImplicitModifier(
+        List<ushort> modifiers,
+        ushort generic,
+        ushort left,
+        ushort right,
+        bool insertBeforeAlt)
+    {
+        if (!modifiers.Any(modifier => modifier == generic || modifier == left || modifier == right))
+        {
+            int insertionIndex = insertBeforeAlt
+                ? modifiers.FindIndex(modifier => modifier is VkMenu or 0xA4 or 0xA5)
+                : -1;
+            if (insertionIndex >= 0)
+            {
+                modifiers.Insert(insertionIndex, generic);
+            }
+            else
+            {
+                modifiers.Add(generic);
+            }
+        }
     }
 
     private static unsafe HKL GetTargetKeyboardLayout(HWND hwnd)

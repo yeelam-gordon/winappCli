@@ -19,7 +19,7 @@ internal class UiSendKeysCommand : Command, IShortDescription
 
     public static Argument<string?> KeysArgument { get; } = new("keys")
     {
-        Description = "Keys to send. Whitespace-separated tokens: named keys (down, enter, tab, esc, f5), " +
+        Description = "Keys to send. Whitespace-separated tokens: named keys (down, enter, numpadenter, divide, tab, esc, f5), " +
                       "modifier combos (ctrl+shift+t, alt+f4), raw virtual keys (vk=0x42), or literal text (hello). " +
                       "Use text=<literal> to type a single value verbatim when it would otherwise be read as a key " +
                       "name or combo (text=enter types \"enter\"; text=ctrl+a types \"ctrl+a\"); backslash escapes \\s \\t " +
@@ -36,8 +36,8 @@ internal class UiSendKeysCommand : Command, IShortDescription
 
     public static Option<string> ViaOption { get; } = new("--via")
     {
-        Description = "Transport: post-message (default, HWND-targeted and subject to UIPI; typed text posts WM_CHAR " +
-                      "without a per-character KeyDown and may be dropped by WinUI/XAML) or send-input (OS-wide; typed text " +
+        Description = "Transport: post-message (default, HWND-targeted and subject to UIPI; typed text only enqueues WM_CHAR " +
+                      "without proving consumption and may be dropped by WinUI/XAML) or send-input (OS-wide; typed text " +
                       "is fed through the input pipeline; also subject to UIPI). Both can target only equal- or lower-integrity processes. " +
                       "Named keys and combos raise KeyDown on both, but keyboard " +
                       "accelerators/shortcuts (KeyboardAccelerator, e.g. ctrl+t) only fire via send-input.",
@@ -56,6 +56,7 @@ internal class UiSendKeysCommand : Command, IShortDescription
         Description = "Allow synthesizing system-/shell-reserved combos (win+<key>, alt+f4, alt+tab, ctrl+esc, …) via " +
                       "--via send-input, which are refused by default because they act on the OS/shell beyond the " +
                       "target app. Opt in to drive global hotkeys (e.g. PowerToys' win+shift+v, win+r). " +
+                      "A system shortcut must be the command's only key action because it may change foreground. " +
                       "No effect on --via post-message (already window-scoped; a warning is emitted if set without send-input). " +
                       "Note: any Win-modified L chord (including win+shift+l) stays blocked even with this flag because " +
                       "Windows lock handling may still invoke LockWorkStation(), which is unrecoverable from automation. " +
@@ -86,13 +87,12 @@ internal class UiSendKeysCommand : Command, IShortDescription
         ISelectorService selectorService,
         IKeyboardInput keyboardInput,
         IForegroundGuard foregroundGuard,
-        IFrameworkHintService frameworkHint,
         IAnsiConsole ansiConsole,
         ILogger<UiSendKeysCommand> logger) : AsynchronousCommandLineAction
     {
-        private const string PostMessageXamlTextWarning =
-            "Literal text via --via post-message may not be delivered to WinUI 3 / XAML apps " +
-            "(WM_CHAR is dropped by the input pipeline). Use --via send-input if the text does not appear.";
+        private const string PostMessageTextWarning =
+            "Literal text via --via post-message is only enqueued as WM_CHAR; success does not confirm " +
+            "the target consumed it, and WinUI 3 / XAML apps may drop it. Use --via send-input if the text does not appear.";
 
         public override async Task<int> InvokeAsync(ParseResult parseResult, CancellationToken cancellationToken = default)
         {
@@ -195,6 +195,17 @@ internal class UiSendKeysCommand : Command, IShortDescription
                     return 1;
                 }
 
+                if (systemCombos.Count > 0 && actions.Count > 1)
+                {
+                    var message =
+                        $"System-reserved SendInput action(s) must be sent alone: {string.Join(", ", systemCombos)}. " +
+                        "A system shortcut can change foreground before later actions; send it in a separate command, " +
+                        "then resolve and foreground the next target again.";
+                    logger.LogError("{Symbol} {Message}", UiSymbols.Error, message);
+                    UiJsonError.Emit(json, UiJsonError.CodeInvalidArguments, message);
+                    return 1;
+                }
+
                 allowedSystemCombos = systemCombos;
             }
 
@@ -254,17 +265,15 @@ internal class UiSendKeysCommand : Command, IShortDescription
                     }
                 }
 
-                // WM_CHAR posted to a WinUI 3 / XAML host window is not turned into text by the XAML input
-                // pipeline, so typed literal text silently no-ops there. Warn — but only when the target
-                // actually looks like a XAML window — rather than false-alarming on Win32/WPF/Electron
-                // apps that do consume WM_CHAR. (Named keys/combos still post KeyDown regardless.)
+                // PostMessage reports only whether WM_CHAR was queued, not whether the target consumed it.
+                // Warn for every literal-text payload so framework-detection heuristics cannot turn a known
+                // XAML no-op into a clean success. Named keys/combos still post key messages regardless.
                 if (ShouldWarnPostMessageTextDropped(
                         transport == KeyTransport.PostMessage,
-                        actions.Any(a => a is TextInput),
-                        frameworkHint.IsLikelyXaml(targetHwnd)))
+                        actions.Any(a => a is TextInput)))
                 {
-                    logger.LogWarning("{Symbol} {Warning}", UiSymbols.Warning, PostMessageXamlTextWarning);
-                    warnings.Add(PostMessageXamlTextWarning);
+                    logger.LogWarning("{Symbol} {Warning}", UiSymbols.Warning, PostMessageTextWarning);
+                    warnings.Add(PostMessageTextWarning);
                 }
 
                 if (transport == KeyTransport.SendInput && allowedSystemCombos.Count > 0)
@@ -327,14 +336,12 @@ internal class UiSendKeysCommand : Command, IShortDescription
         }
 
         /// <summary>
-        /// Whether to warn that literal typed text may be silently dropped: only when posting WM_CHAR
-        /// (<paramref name="isPostMessage"/>) AND the payload actually contains literal text AND the
-        /// target looks like a XAML window (WinUI 3 / UWP), which drops posted WM_CHAR text. Pure so
-        /// the gate is unit-testable without a live XAML window; the command computes the three inputs
-        /// (the third via <see cref="FrameworkHint.IsLikelyXaml"/>) and routes the warning through here.
+        /// Whether to warn that literal typed text may be silently dropped. PostMessage success confirms
+        /// only that WM_CHAR was queued, so every post-message literal-text payload gets the warning
+        /// without relying on fallible framework detection.
         /// </summary>
-        internal static bool ShouldWarnPostMessageTextDropped(bool isPostMessage, bool hasLiteralText, bool targetLooksXaml)
-            => isPostMessage && hasLiteralText && targetLooksXaml;
+        internal static bool ShouldWarnPostMessageTextDropped(bool isPostMessage, bool hasLiteralText)
+            => isPostMessage && hasLiteralText;
 
         private static bool TryParseTransport(string via, out KeyTransport transport)
         {
