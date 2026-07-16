@@ -650,4 +650,26 @@ public partial class UiCommandTests
         StringAssert.Contains(output, "AAA");
         StringAssert.Contains(output, "7.0:1");
     }
+
+    [TestMethod]
+    public async Task Audit_HumanReport_ContrastUnavailable_RendersReadableOutput()
+    {
+        // Without --json the command renders BuildHumanReport. A capture failure must be shown
+        // as an incomplete contrast audit rather than a clean result.
+        _fakeUia.InspectResult =
+        [
+            new UiElement { Id = "e0", Type = "Text", Name = "Hello", Width = 100, Height = 16 },
+        ];
+        _fakeUia.WindowCaptureException = new InvalidOperationException("no capture");
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "contrast"]);
+
+        Assert.AreEqual(1, exitCode);
+        var output = TestAnsiConsole.Output;
+        StringAssert.Contains(output, "Accessibility audit:");
+        StringAssert.Contains(output, "Contrast coverage: 1 attempted, 0 measured, 1 unmeasured.");
+        StringAssert.Contains(output, "contrast was not measured because");
+        StringAssert.Contains(output, "bounded pixel analysis did not complete");
+    }
 }
