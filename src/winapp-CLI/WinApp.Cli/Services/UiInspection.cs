@@ -13,6 +13,7 @@ internal sealed class UiInspectionOptions
     public int MaxDiagnostics { get; init; } = 32;
     public bool CaptureDiagnostics { get; init; }
     public bool PromoteUniqueAutomationIds { get; init; } = true;
+    public bool IncludeScopedAncestorContext { get; init; }
 }
 
 internal sealed class UiInspectionResult
@@ -31,6 +32,7 @@ internal sealed class UiInspectionIssue
 
 internal static class UiInspectionIssueCodes
 {
+    public const string AncestorEnumeration = "ancestor-enumeration";
     public const string ChildEnumeration = "child-enumeration";
     public const string DepthLimit = "depth-limit";
     public const string DiagnosticLimit = "diagnostic-limit";

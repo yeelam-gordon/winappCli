@@ -96,22 +96,6 @@ internal static class UiAuditEngine
         "ScrollBar", "Thumb", "TitleBar"
     };
 
-    // System-provided accessible names for scrollbar increment/decrement parts. These are
-    // framework-generated, unambiguous, and effectively never real user-facing control names, so
-    // flagging them is noise. Only unambiguous part names are listed — caption buttons and the
-    // ambiguous bare part names (e.g. "Close", "Page Down") are intentionally left out and covered
-    // structurally by ChromeTypes (ScrollBar/Thumb) + TitleBar ancestry instead. This is only a
-    // fallback for parts exposed as generic Buttons.
-    private static readonly HashSet<string> ChromePartNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Vertical Small Increase", "Vertical Small Decrease",
-        "Vertical Large Increase", "Vertical Large Decrease",
-        "Horizontal Small Increase", "Horizontal Small Decrease",
-        "Horizontal Large Increase", "Horizontal Large Decrease",
-    };
-
-    private const string TitleBarType = "TitleBar";
-
     /// <summary>Large-text height estimate at 96 DPI (WCAG large text ≈ 18pt ≈ 24px).</summary>
     private const double LargeTextHeightAt96Dpi = 24.0;
 
@@ -123,8 +107,8 @@ internal static class UiAuditEngine
     /// True when the element is non-client window chrome (title-bar / caption buttons) or scroll-bar
     /// part machinery, which the accessibility rules should not flag: these are framework-owned
     /// affordances, keyboard-reachable via the scrollbar/window as a whole, not app content. Detected
-    /// primarily by ControlType (ScrollBar/Thumb/TitleBar) and TitleBar ancestry, with a fallback on
-    /// system-generated part names.
+    /// from locale-invariant ControlType and ancestor relationships. Accessible names are deliberately
+    /// excluded because providers localize them and app controls can legitimately use the same text.
     /// </summary>
     public static bool IsNonClientChrome(UiElement el)
     {
@@ -137,16 +121,11 @@ internal static class UiAuditEngine
         {
             foreach (var ancestor in path)
             {
-                if (string.Equals(ancestor, TitleBarType, StringComparison.OrdinalIgnoreCase))
+                if (ChromeTypes.Contains(ancestor))
                 {
                     return true;
                 }
             }
-        }
-
-        if (!string.IsNullOrWhiteSpace(el.Name) && ChromePartNames.Contains(el.Name.Trim()))
-        {
-            return true;
         }
 
         return false;

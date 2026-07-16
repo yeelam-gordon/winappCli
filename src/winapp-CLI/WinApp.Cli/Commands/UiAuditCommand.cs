@@ -146,6 +146,7 @@ internal class UiAuditCommand : Command, IShortDescription
                         // The existing promotion performs an unbounded full-tree FindAll. Audit
                         // selectors remain valid slugs while preserving the traversal budget.
                         PromoteUniqueAutomationIds = false,
+                        IncludeScopedAncestorContext = true,
                     },
                     cancellationToken);
                 var elements = inspection.Elements;

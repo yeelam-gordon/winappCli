@@ -123,6 +123,8 @@ internal sealed partial class UiAutomationService : IUiAutomationService
         // If a selector is provided, scope the tree walk to that element. A miss returns an
         // empty result; callers must never widen a missing target to the root window.
         IUIAutomationElement startElement = root;
+        List<string>? startAncestorTypes = null;
+        var inheritedNativeWindowHandle = session.WindowHandle;
         if (!string.IsNullOrEmpty(elementId))
         {
             IUIAutomationElement? target = null;
@@ -154,6 +156,18 @@ internal sealed partial class UiAutomationService : IUiAutomationService
             }
 
             startElement = target;
+            if (options.IncludeScopedAncestorContext)
+            {
+                var context = GetScopedAncestorContext(
+                    target,
+                    root,
+                    depth,
+                    traversal,
+                    elementId,
+                    session.WindowHandle);
+                startAncestorTypes = context.AncestorTypes;
+                inheritedNativeWindowHandle = context.NativeWindowHandle;
+            }
         }
 
         var elements = new List<UiElement>();
@@ -166,7 +180,8 @@ internal sealed partial class UiAutomationService : IUiAutomationService
             ref nextElementId,
             traversal,
             session.WindowHandle,
-            session.WindowHandle);
+            inheritedNativeWindowHandle,
+            ancestorTypes: startAncestorTypes);
 
         // Also walk popup/owned windows (when inspecting full tree, not scoped to element,
         // and the user did not explicitly target a single HWND — see issue #472).

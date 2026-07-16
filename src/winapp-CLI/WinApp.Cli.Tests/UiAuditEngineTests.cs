@@ -477,18 +477,52 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
-    public void Chrome_ScrollBarIncrementButton_NotFlagged()
+    public void Chrome_ScrollBarButtons_NotFlaggedRegardlessOfLocalizedName()
     {
-        // A scrollbar increment button (system-generated name, generic Button type) that is not
-        // keyboard-focusable would trip keyboard/screen-reader without name-based chrome suppression.
         var elements = new[]
         {
-            new UiElement { Id = "e0", Type = "Button", Name = "Vertical Small Increase", IsEnabled = true, IsInvokable = true, IsKeyboardFocusable = false, Selector = "vsi" },
+            new UiElement
+            {
+                Id = "e0", Type = "Button", Name = "Vertical Small Increase", IsEnabled = true,
+                IsInvokable = true, IsKeyboardFocusable = false, Selector = "vsi",
+                AncestorPath = ["Window", "ScrollBar"],
+            },
+            new UiElement
+            {
+                Id = "e1", Type = "Button", Name = "垂直方向に少し増加", IsEnabled = true,
+                IsInvokable = true, IsKeyboardFocusable = false, Selector = "localized-increase",
+                AncestorPath = ["Window", "Pane", "ScrollBar"],
+            },
+            new UiElement
+            {
+                Id = "e2", Type = "Button", Name = null, IsEnabled = true,
+                IsInvokable = true, IsKeyboardFocusable = false, Selector = "unnamed-decrease",
+                AncestorPath = ["Window", "ScrollBar"],
+            },
         };
 
         var result = UiAuditEngine.Run(elements, Opts(UiAuditEngine.CheckKeyboard, UiAuditEngine.CheckScreenReader, UiAuditEngine.CheckNames));
 
-        Assert.AreEqual(0, result.Issues.Length, "scrollbar increment button should not be flagged");
+        Assert.AreEqual(0, result.Issues.Length, "structural scrollbar parts should not depend on provider-localized names");
+    }
+
+    [TestMethod]
+    public void ButtonNamedLikeEnglishScrollPart_WithoutChromeContext_IsStillAudited()
+    {
+        var elements = new[]
+        {
+            new UiElement
+            {
+                Id = "e0", Type = "Button", Name = "Vertical Small Increase", IsEnabled = true,
+                IsInvokable = true, IsKeyboardFocusable = false, Selector = "app-increase",
+            },
+        };
+
+        var result = UiAuditEngine.Run(elements, Opts(UiAuditEngine.CheckKeyboard));
+
+        Assert.IsTrue(
+            result.Issues.Any(issue => issue.RuleId == UiAuditEngine.CheckKeyboard),
+            "localized or English names alone must not suppress an app-owned button");
     }
 
     [TestMethod]

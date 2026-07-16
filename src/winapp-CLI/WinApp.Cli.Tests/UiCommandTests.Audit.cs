@@ -385,6 +385,7 @@ public partial class UiCommandTests
         Assert.AreEqual(UiAuditCommand.AuditMaxElements, _fakeUia.LastInspectOptions!.MaxElements);
         Assert.AreEqual(UiAuditCommand.AuditMaxTraversalDuration, _fakeUia.LastInspectOptions.MaxDuration);
         Assert.IsFalse(_fakeUia.LastInspectOptions.PromoteUniqueAutomationIds);
+        Assert.IsTrue(_fakeUia.LastInspectOptions.IncludeScopedAncestorContext);
     }
 
     [TestMethod]
