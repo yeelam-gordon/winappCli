@@ -305,7 +305,7 @@ internal static class UiAuditEngine
                 {
                     contrastUnmeasured++;
                     var reason = contrastProvider is null
-                        ? "window capture was unavailable"
+                        ? "window capture or bounded pixel analysis did not complete"
                         : "its pixels were outside the capture, unsuitable for reliable analysis, or exceeded the bounded sampling budget";
                     issues.Add(Issue(CheckContrast, SeverityFail, el,
                         $"{Describe(el)} contrast was not measured because {reason}."));

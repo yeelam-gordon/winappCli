@@ -252,7 +252,7 @@ internal class UiAuditCommand : Command, IShortDescription
 
         /// <summary>
         /// Captures the target window once and samples each text element's bounding rectangle.
-        /// Returns null when the window could not be captured.
+        /// Returns null when capture or bounded analysis could not complete.
         /// </summary>
         private async Task<Dictionary<UiElement, double?>?> TryComputeContrastAsync(
             UiSessionInfo session,

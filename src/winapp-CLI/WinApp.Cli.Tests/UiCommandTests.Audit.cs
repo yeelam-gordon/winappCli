@@ -152,7 +152,7 @@ public partial class UiCommandTests
 
         Assert.AreEqual(1, exitCode);
         StringAssert.Contains(TestAnsiConsole.Output, "\"fail\": 1");
-        StringAssert.Contains(TestAnsiConsole.Output, "contrast was not measured because window capture was unavailable");
+        StringAssert.Contains(TestAnsiConsole.Output, "window capture or bounded pixel analysis did not complete");
         StringAssert.Contains(TestAnsiConsole.Output, "\"attempted\": 1");
         StringAssert.Contains(TestAnsiConsole.Output, "\"measured\": 0");
         StringAssert.Contains(TestAnsiConsole.Output, "\"unmeasured\": 1");
@@ -495,7 +495,7 @@ public partial class UiCommandTests
 
         Assert.AreEqual(1, exitCode);
         StringAssert.Contains(TestAnsiConsole.Output, "contrast was not measured because window capture");
-        StringAssert.Contains(TestAnsiConsole.Output, "was unavailable.");
+        StringAssert.Contains(TestAnsiConsole.Output, "or bounded pixel analysis did not complete.");
         StringAssert.Contains(TestAnsiConsole.Output, "Contrast coverage: 1 attempted, 0 measured, 1 unmeasured.");
         StringAssert.Contains(TestAnsiConsole.Output, "0 checks passed");
     }

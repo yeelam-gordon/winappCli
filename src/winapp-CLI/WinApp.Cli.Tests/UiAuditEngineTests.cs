@@ -394,6 +394,23 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
+    public void Contrast_MissingProvider_ReportsCaptureOrAnalysisFailure()
+    {
+        var text = new UiElement
+        {
+            Id = "e0", Type = "Text", Name = "Body", Width = 100, Height = 16,
+        };
+
+        var result = UiAuditEngine.Run(
+            [text],
+            Opts(UiAuditEngine.CheckContrast));
+
+        StringAssert.Contains(
+            result.Issues.Single().Message,
+            "window capture or bounded pixel analysis did not complete");
+    }
+
+    [TestMethod]
     public void Contrast_VisibleProviderTextWithInvalidBounds_FailsClosed()
     {
         var text = new UiElement
