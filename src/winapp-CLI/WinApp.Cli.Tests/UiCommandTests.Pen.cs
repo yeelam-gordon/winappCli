@@ -311,6 +311,23 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    public async Task Pen_ZeroPressure_PassedThroughWithoutCoercion()
+    {
+        _fakeSession.SessionResult.WindowHandle = 5501;
+
+        var command = GetRequiredService<UiPenCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command,
+            ["-a", "TestApp", "--at", "100,100", "--pressure", "0.0", "--json"]);
+
+        Assert.AreEqual(0, exitCode);
+        Assert.AreEqual(1, _fakePointer.PenCalls.Count);
+        Assert.AreEqual(0f, _fakePointer.PenCalls[0].Pressure);
+
+        var result = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(TestAnsiConsole.Output);
+        Assert.AreEqual(0f, result.GetProperty("pressure").GetSingle());
+    }
+
+    [TestMethod]
     [DoNotParallelize]
     public async Task Pen_PressureDotDecimal_ParsesInvariantlyUnderFrenchCulture()
     {

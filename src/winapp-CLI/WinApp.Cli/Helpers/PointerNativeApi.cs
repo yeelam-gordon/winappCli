@@ -14,6 +14,8 @@ internal interface IPointerNativeApi
 
     bool LegacyTouchInjectionAvailable { get; }
 
+    (int X, int Y) GetVirtualScreenOrigin();
+
     nint CreateSyntheticPointerDevice(
         POINTER_INPUT_TYPE pointerType,
         uint maxCount,
@@ -57,6 +59,11 @@ internal sealed class PointerNativeApi : IPointerNativeApi
     public bool ModernPointerInjectionAvailable => s_modernAvailable.Value;
 
     public bool LegacyTouchInjectionAvailable => s_legacyAvailable.Value;
+
+    public (int X, int Y) GetVirtualScreenOrigin()
+        => (
+            PInvoke.GetSystemMetrics(SYSTEM_METRICS_INDEX.SM_XVIRTUALSCREEN),
+            PInvoke.GetSystemMetrics(SYSTEM_METRICS_INDEX.SM_YVIRTUALSCREEN));
 
     public nint CreateSyntheticPointerDevice(
         POINTER_INPUT_TYPE pointerType,
@@ -251,6 +258,21 @@ internal sealed class ModernPointerPathUnavailableException : InvalidOperationEx
 {
     public ModernPointerPathUnavailableException(Exception innerException)
         : base(innerException.Message, innerException)
+    {
+    }
+}
+
+internal sealed class PointerCoordinateNormalizationException : InvalidOperationException
+{
+    public PointerCoordinateNormalizationException(
+        string coordinateName,
+        long absoluteCoordinate,
+        int virtualScreenOrigin)
+        : base(
+            $"Modern synthetic-pointer coordinate normalization failed for {coordinateName}: " +
+            $"absolute screen coordinate {absoluteCoordinate} minus virtual-screen origin {virtualScreenOrigin} " +
+            "is outside the Int32 range. Keep the target and display topology within the Windows " +
+            "screen-coordinate range. No pointer frame was injected.")
     {
     }
 }

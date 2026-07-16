@@ -169,6 +169,104 @@ public class PointerNativeApiTests
     }
 
     [TestMethod]
+    public void Touch_ModernAndLegacy_UseDistinctVirtualScreenCoordinateSpaces()
+    {
+        IReadOnlyList<IReadOnlyList<PointerPoint>> path =
+        [
+            new List<PointerPoint> { new(-1800, -900) },
+        ];
+        var modern = new FakePointerNativeApi
+        {
+            VirtualScreenOrigin = (-1920, -1080),
+        };
+        var legacy = new FakePointerNativeApi
+        {
+            ModernPointerInjectionAvailable = false,
+            VirtualScreenOrigin = (-1920, -1080),
+        };
+
+        PointerInput.Touch(TouchGesture.Tap, path, 0, 0, modern);
+        PointerInput.Touch(TouchGesture.Tap, path, 0, 0, legacy);
+
+        var modernDown = modern.SyntheticFrames[0][0].Anonymous.touchInfo;
+        Assert.AreEqual(120, modernDown.pointerInfo.ptPixelLocation.X);
+        Assert.AreEqual(180, modernDown.pointerInfo.ptPixelLocation.Y);
+        Assert.AreEqual(118, modernDown.rcContact.left);
+        Assert.AreEqual(178, modernDown.rcContact.top);
+        Assert.AreEqual(122, modernDown.rcContact.right);
+        Assert.AreEqual(182, modernDown.rcContact.bottom);
+        Assert.AreEqual(1, modern.VirtualScreenOriginCallCount);
+
+        var legacyDown = legacy.LegacyFrames[0][0];
+        Assert.AreEqual(-1800, legacyDown.pointerInfo.ptPixelLocation.X);
+        Assert.AreEqual(-900, legacyDown.pointerInfo.ptPixelLocation.Y);
+        Assert.AreEqual(-1802, legacyDown.rcContact.left);
+        Assert.AreEqual(-902, legacyDown.rcContact.top);
+        Assert.AreEqual(-1798, legacyDown.rcContact.right);
+        Assert.AreEqual(-898, legacyDown.rcContact.bottom);
+        Assert.AreEqual(0, legacy.VirtualScreenOriginCallCount);
+    }
+
+    [TestMethod]
+    public void Touch_ZeroVirtualScreenOrigin_LeavesModernCoordinatesUnchanged()
+    {
+        var native = new FakePointerNativeApi();
+
+        PointerInput.Touch(TouchGesture.Tap, OneTouchPath, 0, 0, native);
+
+        var down = native.SyntheticFrames[0][0].Anonymous.touchInfo;
+        Assert.AreEqual(100, down.pointerInfo.ptPixelLocation.X);
+        Assert.AreEqual(200, down.pointerInfo.ptPixelLocation.Y);
+        Assert.AreEqual(98, down.rcContact.left);
+        Assert.AreEqual(198, down.rcContact.top);
+        Assert.AreEqual(102, down.rcContact.right);
+        Assert.AreEqual(202, down.rcContact.bottom);
+        Assert.AreEqual(1, native.VirtualScreenOriginCallCount);
+    }
+
+    [TestMethod]
+    public void Touch_NormalizedCoordinateOverflow_FailsBeforeCreateOrInjection()
+    {
+        IReadOnlyList<IReadOnlyList<PointerPoint>> path =
+        [
+            new List<PointerPoint> { new(int.MaxValue, 0) },
+        ];
+        var native = new FakePointerNativeApi
+        {
+            VirtualScreenOrigin = (int.MinValue, 0),
+        };
+
+        var ex = Assert.ThrowsExactly<PointerCoordinateNormalizationException>(() =>
+            PointerInput.Touch(TouchGesture.Tap, path, 0, 0, native));
+
+        Assert.AreEqual(
+            "Modern synthetic-pointer coordinate normalization failed for touch x: " +
+            $"absolute screen coordinate {int.MaxValue} minus virtual-screen origin {int.MinValue} " +
+            "is outside the Int32 range. Keep the target and display topology within the Windows " +
+            "screen-coordinate range. No pointer frame was injected.",
+            ex.Message);
+        Assert.AreEqual(1, native.VirtualScreenOriginCallCount);
+        Assert.AreEqual(0, native.CreateCallCount);
+        Assert.AreEqual(0, native.SyntheticFrames.Count);
+        Assert.AreEqual(0, native.LegacyFrames.Count);
+    }
+
+    [TestMethod]
+    public void Touch_VirtualOriginApiUnavailable_FallsBackToLegacy()
+    {
+        var native = new FakePointerNativeApi
+        {
+            VirtualScreenOriginException = new EntryPointNotFoundException(),
+        };
+
+        PointerInput.Touch(TouchGesture.Tap, OneTouchPath, 0, 0, native);
+
+        Assert.AreEqual(1, native.VirtualScreenOriginCallCount);
+        Assert.AreEqual(0, native.CreateCallCount);
+        Assert.AreEqual(2, native.LegacyFrames.Count);
+    }
+
+    [TestMethod]
     public void Pen_CreateEntryPointMissing_HasNoLegacyFallback()
     {
         var native = new FakePointerNativeApi
@@ -309,6 +407,110 @@ public class PointerNativeApiTests
         Assert.AreEqual(2, native.SyntheticFrames.Count);
     }
 
+    [TestMethod]
+    public void Pen_NegativeVirtualScreenOrigin_NormalizesModernCoordinates()
+    {
+        var native = new FakePointerNativeApi
+        {
+            VirtualScreenOrigin = (-1920, -1080),
+        };
+
+        PointerInput.Pen([new PointerPoint(-1800, -900)], 0.5f, 0, 0, false, 0, native);
+
+        var down = native.SyntheticFrames[0][0].Anonymous.penInfo;
+        Assert.AreEqual(120, down.pointerInfo.ptPixelLocation.X);
+        Assert.AreEqual(180, down.pointerInfo.ptPixelLocation.Y);
+        Assert.AreEqual(1, native.VirtualScreenOriginCallCount);
+    }
+
+    [TestMethod]
+    public void Pen_ZeroVirtualScreenOrigin_LeavesModernCoordinatesUnchanged()
+    {
+        var native = new FakePointerNativeApi();
+
+        PointerInput.Pen([new PointerPoint(10, 20)], 0.5f, 0, 0, false, 0, native);
+
+        var down = native.SyntheticFrames[0][0].Anonymous.penInfo;
+        Assert.AreEqual(10, down.pointerInfo.ptPixelLocation.X);
+        Assert.AreEqual(20, down.pointerInfo.ptPixelLocation.Y);
+        Assert.AreEqual(1, native.VirtualScreenOriginCallCount);
+    }
+
+    [TestMethod]
+    public void Pen_ZeroPressure_IsPreservedInModernContactFrames()
+    {
+        var native = new FakePointerNativeApi();
+
+        PointerInput.Pen(
+            [new PointerPoint(10, 20), new PointerPoint(20, 30)],
+            0f,
+            0,
+            0,
+            false,
+            0,
+            native);
+
+        var contactFrames = native.SyntheticFrames
+            .Select(frame => frame[0].Anonymous.penInfo)
+            .Where(info =>
+                info.pointerInfo.pointerFlags.HasFlag(POINTER_FLAGS.POINTER_FLAG_DOWN) ||
+                info.pointerInfo.pointerFlags.HasFlag(POINTER_FLAGS.POINTER_FLAG_UPDATE))
+            .ToArray();
+        Assert.AreEqual(2, contactFrames.Length);
+        Assert.IsTrue(contactFrames.All(info => info.pressure == 0u));
+        Assert.IsTrue(contactFrames.All(info =>
+            info.pointerInfo.pointerFlags.HasFlag(POINTER_FLAGS.POINTER_FLAG_INCONTACT)));
+    }
+
+    [TestMethod]
+    public void Pen_NormalizedCoordinateOverflow_FailsBeforeCreateOrInjection()
+    {
+        var native = new FakePointerNativeApi
+        {
+            VirtualScreenOrigin = (int.MinValue, 0),
+        };
+
+        var ex = Assert.ThrowsExactly<PointerCoordinateNormalizationException>(() =>
+            PointerInput.Pen(
+                [new PointerPoint(int.MaxValue, 0)],
+                0.5f,
+                0,
+                0,
+                false,
+                0,
+                native));
+
+        Assert.AreEqual(
+            "Modern synthetic-pointer coordinate normalization failed for pen x: " +
+            $"absolute screen coordinate {int.MaxValue} minus virtual-screen origin {int.MinValue} " +
+            "is outside the Int32 range. Keep the target and display topology within the Windows " +
+            "screen-coordinate range. No pointer frame was injected.",
+            ex.Message);
+        Assert.AreEqual(1, native.VirtualScreenOriginCallCount);
+        Assert.AreEqual(0, native.CreateCallCount);
+        Assert.AreEqual(0, native.SyntheticFrames.Count);
+    }
+
+    [TestMethod]
+    public void Pen_VirtualOriginApiUnavailable_FailsExplicitlyWithoutCreatingDevice()
+    {
+        var native = new FakePointerNativeApi
+        {
+            VirtualScreenOriginException = new DllNotFoundException(),
+        };
+
+        var ex = Assert.ThrowsExactly<InvalidOperationException>(() =>
+            PointerInput.Pen([new PointerPoint(10, 20)], 0.5f, 0, 0, false, 0, native));
+
+        Assert.AreEqual(
+            "Pen injection is unavailable: GetSystemMetrics(SM_XVIRTUALSCREEN/SM_YVIRTUALSCREEN) is unavailable because the required user32.dll entry point could not be loaded. " +
+            "Pen has no legacy fallback. No pen frame was injected.",
+            ex.Message);
+        Assert.AreEqual(1, native.VirtualScreenOriginCallCount);
+        Assert.AreEqual(0, native.CreateCallCount);
+        Assert.AreEqual(0, native.SyntheticFrames.Count);
+    }
+
     private sealed class FakePointerNativeApi : IPointerNativeApi
     {
         private bool _modernPointerInjectionAvailable = true;
@@ -335,6 +537,10 @@ public class PointerNativeApiTests
 
         public Exception? DestroyException { get; set; }
 
+        public Exception? VirtualScreenOriginException { get; set; }
+
+        public (int X, int Y) VirtualScreenOrigin { get; set; }
+
         public Queue<Exception> SyntheticExceptions { get; } = new();
 
         public Dictionary<int, Exception> SyntheticExceptionsByCall { get; } = [];
@@ -355,7 +561,20 @@ public class PointerNativeApiTests
 
         public int InitializeLegacyCallCount { get; private set; }
 
+        public int VirtualScreenOriginCallCount { get; private set; }
+
         private int SyntheticCallCount { get; set; }
+
+        public (int X, int Y) GetVirtualScreenOrigin()
+        {
+            VirtualScreenOriginCallCount++;
+            if (VirtualScreenOriginException is not null)
+            {
+                throw VirtualScreenOriginException;
+            }
+
+            return VirtualScreenOrigin;
+        }
 
         public nint CreateSyntheticPointerDevice(
             POINTER_INPUT_TYPE pointerType,

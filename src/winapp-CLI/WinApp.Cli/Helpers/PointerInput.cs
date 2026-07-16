@@ -15,7 +15,9 @@ namespace WinApp.Cli.Helpers;
 /// related exports, and falls back to the legacy
 /// <c>InitializeTouchInjection</c>/<c>InjectTouchInput</c> API when the modern path is unavailable
 /// before any frame is accepted. Pen uses <c>CreateSyntheticPointerDevice(PT_PEN)</c> and has no
-/// legacy fallback. Coordinates are screen pixels — the same space <c>ui inspect</c> reports.
+/// legacy fallback. Callers provide absolute screen pixels — the same space <c>ui inspect</c>
+/// reports. The modern native payload is normalized relative to the virtual-screen origin while
+/// the legacy touch payload remains in absolute desktop coordinates.
 /// </summary>
 internal static partial class PointerInput
 {
@@ -27,6 +29,8 @@ internal static partial class PointerInput
 
     /// <summary>Pen pressure range used by the pointer APIs (0..1024).</summary>
     private const uint PenPressureMax = 1024;
+
+    private const int TouchContactHalfSize = 2;
 
     /// <summary>Steps used to interpolate a moving gesture between two waypoints.</summary>
     private const int GlideSteps = 20;
@@ -320,7 +324,13 @@ internal static partial class PointerInput
             },
             touchFlags = 0,
             touchMask = TOUCH_MASK_CONTACTAREA,
-            rcContact = new RECT { left = x - 2, top = y - 2, right = x + 2, bottom = y + 2 },
+            rcContact = new RECT
+            {
+                left = x - TouchContactHalfSize,
+                top = y - TouchContactHalfSize,
+                right = x + TouchContactHalfSize,
+                bottom = y + TouchContactHalfSize,
+            },
         };
     }
 

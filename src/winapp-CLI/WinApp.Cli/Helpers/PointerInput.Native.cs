@@ -71,6 +71,20 @@ internal static partial class PointerInput
         int durationMs,
         IPointerNativeApi nativeApi)
     {
+        (int X, int Y) virtualScreenOrigin;
+        try
+        {
+            virtualScreenOrigin = PointerNativeErrors.Invoke(
+                "GetSystemMetrics(SM_XVIRTUALSCREEN/SM_YVIRTUALSCREEN)",
+                nativeApi.GetVirtualScreenOrigin);
+        }
+        catch (PointerNativeApiUnavailableException ex)
+        {
+            throw new ModernPointerPathUnavailableException(ex);
+        }
+
+        ValidateModernTouchCoordinates(contactPaths, virtualScreenOrigin);
+
         nint device;
         try
         {
@@ -104,7 +118,7 @@ internal static partial class PointerInput
                 durationMs,
                 contacts =>
                 {
-                    SendSyntheticTouch(nativeApi, device, contacts);
+                    SendSyntheticTouch(nativeApi, device, contacts, virtualScreenOrigin);
                     anyFrameAccepted = true;
                 });
         }
@@ -222,13 +236,16 @@ internal static partial class PointerInput
     private static void SendSyntheticTouch(
         IPointerNativeApi nativeApi,
         nint device,
-        POINTER_TOUCH_INFO[] contacts)
+        POINTER_TOUCH_INFO[] contacts,
+        (int X, int Y) virtualScreenOrigin)
     {
         var infos = new POINTER_TYPE_INFO[contacts.Length];
         for (int i = 0; i < contacts.Length; i++)
         {
             infos[i] = new POINTER_TYPE_INFO { type = POINTER_INPUT_TYPE.PT_TOUCH };
-            infos[i].Anonymous.touchInfo = contacts[i];
+            infos[i].Anonymous.touchInfo = NormalizeModernTouchContact(
+                contacts[i],
+                virtualScreenOrigin);
         }
 
         bool injected = PointerNativeErrors.Invoke(
@@ -265,6 +282,20 @@ internal static partial class PointerInput
             throw PenUnavailable();
         }
 
+        (int X, int Y) virtualScreenOrigin;
+        try
+        {
+            virtualScreenOrigin = PointerNativeErrors.Invoke(
+                "GetSystemMetrics(SM_XVIRTUALSCREEN/SM_YVIRTUALSCREEN)",
+                nativeApi.GetVirtualScreenOrigin);
+        }
+        catch (PointerNativeApiUnavailableException ex)
+        {
+            throw PenUnavailable(ex);
+        }
+
+        ValidateModernPenCoordinates(path, virtualScreenOrigin);
+
         nint device;
         try
         {
@@ -294,15 +325,21 @@ internal static partial class PointerInput
         try
         {
             uint mappedPressure = (uint)Math.Clamp((int)Math.Round(pressure * PenPressureMax), 0, (int)PenPressureMax);
-            if (mappedPressure == 0)
-            {
-                mappedPressure = 1;
-            }
 
             InjectPenStroke(path, mappedPressure, durationMs,
                 (x, y, p, flags) =>
                 {
-                    SendPen(nativeApi, device, x, y, p, tiltX, tiltY, eraser, flags);
+                    SendPen(
+                        nativeApi,
+                        device,
+                        x,
+                        y,
+                        p,
+                        tiltX,
+                        tiltY,
+                        eraser,
+                        flags,
+                        virtualScreenOrigin);
                     anyFrameAccepted = true;
                 });
         }
@@ -370,7 +407,8 @@ internal static partial class PointerInput
         int tiltX,
         int tiltY,
         bool eraser,
-        POINTER_FLAGS flags)
+        POINTER_FLAGS flags,
+        (int X, int Y) virtualScreenOrigin)
     {
         var penFlags = eraser ? PEN_FLAG_ERASER : PEN_FLAG_NONE;
 
@@ -385,7 +423,9 @@ internal static partial class PointerInput
                 pointerType = POINTER_INPUT_TYPE.PT_PEN,
                 pointerId = 1,
                 pointerFlags = flags,
-                ptPixelLocation = new System.Drawing.Point(x, y),
+                ptPixelLocation = new System.Drawing.Point(
+                    NormalizeModernCoordinate(x, virtualScreenOrigin.X, "pen x"),
+                    NormalizeModernCoordinate(y, virtualScreenOrigin.Y, "pen y")),
             },
             penFlags = penFlags,
             penMask = PEN_MASK_PRESSURE | PEN_MASK_TILT_X | PEN_MASK_TILT_Y,
