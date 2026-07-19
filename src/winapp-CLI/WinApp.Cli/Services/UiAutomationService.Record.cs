@@ -100,9 +100,12 @@ internal sealed partial class UiAutomationService
                     // H1 privacy guard: do not silently fall back to screen capture unless the user
                     // explicitly consented by passing --capture-screen. Screen-DC capture includes any
                     // window overlapping the target on screen, which can leak unrelated content.
-                    // EnsureWgcFallbackConsented always throws here because WGC only runs when
-                    // --capture-screen is NOT set, so captureScreenRequested is always false.
-                    EnsureWgcFallbackConsented(ex, options.CaptureScreen, _logger);
+                    if (!options.CaptureScreen)
+                    {
+                        EnsureWgcFallbackConsented(ex, captureScreenRequested: false, logger: _logger);
+                        throw new UnreachableException("The WGC fallback consent guard must throw when screen capture was not requested.");
+                    }
+
                     useScreen = true;
                     useWgc = false;
                     srcWidth = rect.right - rect.left;
@@ -208,11 +211,12 @@ internal sealed partial class UiAutomationService
                             _logger.LogDebug(ex, "WGC retarget to popup HWND 0x{Hwnd:X} failed", captureTargetHwnd);
                             grabber?.Dispose();
                             grabber = null;
-                            // If the user did not pass --capture-screen, EnsureWgcFallbackConsented throws
-                            // (same privacy guard as for main-window WGC init failure).
-                            // captureOriginLeft/Top/srcWidth/srcHeight already reflect the popup window rect
-                            // (set by ResolvePopupCaptureHwnd), so any screen-DC fallback uses the right region.
-                            EnsureWgcFallbackConsented(ex, options.CaptureScreen, _logger);
+                            if (!options.CaptureScreen)
+                            {
+                                EnsureWgcFallbackConsented(ex, captureScreenRequested: false, logger: _logger);
+                                throw new UnreachableException("The WGC fallback consent guard must throw when screen capture was not requested.");
+                            }
+
                             useScreen = true;
                             useWgc = false;
                             mode = "screen";
