@@ -221,6 +221,7 @@ Want to inspect or interact with a running app's UI?
 - `ui wait-for <selector> -a <app> --timeout <ms> [--gone] [--value Y] [--property X --value Y]` — wait for element value or property match
 - `ui list-windows -a <app> [--show-hidden]` — list windows, popups, and dialogs with HWNDs (untitled zero-size windows hidden by default)
 - `ui get-focused -a <app>` — show the element with keyboard focus
+- `ui watch -a <app> [-e <event>] [--duration-sec N] [-n N] [--output <file>]` — stream UI events (focus, window-open/close, invoke) live; `--json` emits NDJSON
 
 ## Framework-specific guidance
 

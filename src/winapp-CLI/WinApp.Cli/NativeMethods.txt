@@ -109,10 +109,8 @@ GetMessage
 TranslateMessage
 DispatchMessage
 PostThreadMessage
-PostQuitMessage
 GetCurrentThreadId
 MSG
-GetAncestor
 MiniDumpWriteDump
 MINIDUMP_TYPE
 MINIDUMP_EXCEPTION_INFORMATION

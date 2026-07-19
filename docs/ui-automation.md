@@ -420,6 +420,17 @@ winapp ui list-windows                                      # all windows (no fi
 winapp ui list-windows --show-hidden                        # include invisible zero-size windows
 ```
 
+### watch
+Listen for UI events (focus changes, window open/close, invoke) from an app and stream them as they happen.
+With `--json`, emits NDJSON (one compact JSON object per event line) followed by a summary line.
+```bash
+winapp ui watch -a myapp                                    # watch all events until Ctrl+C
+winapp ui watch -a myapp -e focus -e window-open            # only focus and window-open events
+winapp ui watch -a myapp --duration-sec 10                  # stop after 10 seconds (0 = until Ctrl+C)
+winapp ui watch -a myapp -n 5                                # stop after 5 events (0 = unlimited)
+winapp ui watch -a myapp --json --output events.ndjson      # tee NDJSON to a file (flushed live)
+```
+
 ## Framework Support
 
 | Framework | inspect | search | invoke | set-value | screenshot |

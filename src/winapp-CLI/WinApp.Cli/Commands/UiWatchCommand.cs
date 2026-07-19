@@ -162,7 +162,7 @@ internal class UiWatchCommand : Command, IShortDescription
 
                 if (!string.IsNullOrWhiteSpace(outputPath))
                 {
-                    logFile = new StreamWriter(outputPath, append: false, Encoding.UTF8);
+                    logFile = new StreamWriter(outputPath, append: false, Encoding.UTF8) { AutoFlush = true };
                 }
 
                 if (!json)
