@@ -68,4 +68,26 @@ public class UiCaptureOptionsTests
 
         StringAssert.Contains(ex.Message, "exceeding the maximum supported capture buffer");
     }
+
+    [TestMethod]
+    public void BlankCaptureChecksHandleOddPixelCounts()
+    {
+        var pixels = new byte[4];
+
+        Assert.IsTrue(InvokeIsBlankCapture(typeof(WgcCapture), pixels));
+        Assert.IsTrue(InvokeIsBlankCapture(typeof(UiAutomationService), pixels));
+
+        pixels[3] = 1;
+        Assert.IsFalse(InvokeIsBlankCapture(typeof(WgcCapture), pixels));
+        Assert.IsFalse(InvokeIsBlankCapture(typeof(UiAutomationService), pixels));
+    }
+
+    private static bool InvokeIsBlankCapture(Type type, byte[] pixels)
+    {
+        var method = type.GetMethod(
+            "IsBlankCapture",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic);
+        Assert.IsNotNull(method);
+        return (bool)method.Invoke(null, [pixels, CancellationToken.None])!;
+    }
 }

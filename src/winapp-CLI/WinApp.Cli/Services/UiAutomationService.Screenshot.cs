@@ -312,7 +312,9 @@ internal sealed partial class UiAutomationService
     {
         // Check if all pixels are zero (black/unrendered frame).
         // Use int-sized chunks for speed on large buffers.
-        var span = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, long>(pixels.AsSpan());
+        var wholeWordByteCount = pixels.Length / sizeof(long) * sizeof(long);
+        var span = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, long>(
+            pixels.AsSpan(0, wholeWordByteCount));
         for (var i = 0; i < span.Length; i++)
         {
             if ((i & 0xFFF) == 0)
@@ -326,7 +328,7 @@ internal sealed partial class UiAutomationService
             }
         }
         // Check remaining bytes
-        for (var i = span.Length * sizeof(long); i < pixels.Length; i++)
+        for (var i = wholeWordByteCount; i < pixels.Length; i++)
         {
             if (pixels[i] != 0)
             {
