@@ -65,8 +65,8 @@ export function buildUiRecordArgs(options: UiRecordOptions): string[] {
     const value = options[spec.property];
     if (spec.kind === 'boolean') {
       if (value) args.push(spec.flag);
-    } else if (value !== undefined && value !== '') {
-      args.push(spec.flag, value.toString());
+    } else if (value !== null && value !== undefined && value !== '') {
+      args.push(spec.flag, String(value));
     }
   }
   // Place the positional selector AFTER '--' so a selector like '--capture-screen' is

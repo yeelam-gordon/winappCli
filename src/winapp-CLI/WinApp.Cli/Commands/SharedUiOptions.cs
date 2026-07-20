@@ -82,7 +82,7 @@ internal static class SharedUiOptions
 
         CaptureScreenOption = new Option<bool>("--capture-screen")
         {
-            Description = "Capture from screen DC via BitBlt (includes popups/overlays not owned by the target)."
+            Description = "Capture from screen DC via BitBlt (includes popups/overlays not owned by the target; brings the target window to the foreground)."
         };
 
         FocusOption = new Option<bool>("--focus")

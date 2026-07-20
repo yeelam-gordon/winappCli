@@ -2798,7 +2798,7 @@
               "recursive": false
             },
             "--capture-screen": {
-              "description": "Capture from screen DC via BitBlt (includes popups/overlays not owned by the target).",
+              "description": "Capture from screen DC via BitBlt (includes popups/overlays not owned by the target; brings the target window to the foreground).",
               "hidden": false,
               "valueType": "System.Boolean",
               "hasDefaultValue": true,
@@ -2959,7 +2959,7 @@
               "recursive": false
             },
             "--capture-screen": {
-              "description": "Capture from screen DC via BitBlt (includes popups/overlays not owned by the target).",
+              "description": "Capture from screen DC via BitBlt (includes popups/overlays not owned by the target; brings the target window to the foreground).",
               "hidden": false,
               "valueType": "System.Boolean",
               "hasDefaultValue": true,

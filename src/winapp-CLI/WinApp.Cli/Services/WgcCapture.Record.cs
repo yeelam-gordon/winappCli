@@ -89,10 +89,8 @@ internal static partial class WgcCapture
         private volatile bool _isClosed;
 
         // Throttle: track when we last did the expensive GPU→CPU copy so arrivals faster than
-        // the target FPS are discarded without copying. A residual TOCTOU race means at most
-        // ~2 copies can occur in the same sampling interval (two threads both pass the check
-        // before either updates _lastSampleMs), but this is harmless — the second copy simply
-        // overwrites the cached frame with an identical (or slightly newer) one.
+        // the target FPS are discarded without copying. _callbackLock serializes callbacks, so
+        // only one callback can evaluate and update this timestamp at a time.
         private long _lastSampleMs;
         private readonly int _minIntervalMs; // 0 = no throttle
 

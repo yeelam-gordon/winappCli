@@ -409,7 +409,7 @@ Capture the target window or element as a PNG image. When multiple windows exist
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--app` | Target app (process name, window title, or PID). Lists windows if ambiguous. | (none) |
-| `--capture-screen` | Capture from screen DC via BitBlt (includes popups/overlays not owned by the target). | (none) |
+| `--capture-screen` | Capture from screen DC via BitBlt (includes popups/overlays not owned by the target; brings the target window to the foreground). | (none) |
 | `--focus` | Bring the target window to the foreground before capture. Already implied by --capture-screen. | (none) |
 | `--json` | Format output as JSON | (none) |
 | `--output` | Save output to this file path. | (none) |
@@ -430,7 +430,7 @@ Record the target window (or an element's region) to an H.264 MP4 video. Capture
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--app` | Target app (process name, window title, or PID). Lists windows if ambiguous. | (none) |
-| `--capture-screen` | Capture from screen DC via BitBlt (includes popups/overlays not owned by the target). | (none) |
+| `--capture-screen` | Capture from screen DC via BitBlt (includes popups/overlays not owned by the target; brings the target window to the foreground). | (none) |
 | `--duration-sec` | Recording duration in seconds. Default 0 records until stopped — Ctrl+C, or (for programmatic callers) a newline or EOF on stdin. A valid MP4 is always finalized on graceful stop. | (none) |
 | `--fps` | Frames per second to capture | `15` |
 | `--json` | Format output as JSON | (none) |

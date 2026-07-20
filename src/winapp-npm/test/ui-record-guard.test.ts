@@ -145,6 +145,11 @@ test('buildUiRecordArgs: no selector produces no -- terminator', () => {
   assert.ok(!args.includes('--'), 'no selector means no -- terminator');
 });
 
+test('buildUiRecordArgs: null optional values are omitted', () => {
+  const args = buildUiRecordArgs({ durationSec: 5, output: null } as unknown as UiRecordOptions);
+  assert.ok(!args.includes('--output'), 'null optional values must not cause an unhandled TypeError');
+});
+
 // ---------------------------------------------------------------------------
 // M7 — _uiRecordWithCapture: full success-path test (mocked capture function)
 // ---------------------------------------------------------------------------
@@ -283,7 +288,7 @@ test('public package entrypoint exposes guarded uiRecord', async () => {
 });
 
 test('buildUiRecordArgs stays in sync with generated ui record options', () => {
-  const generatedPath = path.resolve(process.cwd(), 'src', 'winapp-commands.ts');
+  const generatedPath = path.resolve(__dirname, '..', '..', 'src', 'winapp-commands.ts');
   const source = fs.readFileSync(generatedPath, 'utf8');
   const match = source.match(/export interface UiRecordOptions extends CommonOptions \{([\s\S]*?)\n\}/);
   assert.ok(match, 'generated UiRecordOptions interface must be present');
