@@ -452,6 +452,7 @@ public class UiAuditEngineTests
         Assert.AreEqual(elements.Length, result.Summary.Contrast!.Attempted);
         Assert.AreEqual(elements.Length, result.Summary.Contrast.Unmeasured);
         Assert.AreEqual(UiAuditEngine.MaxDetailedContrastIssues + 1, result.Issues.Length);
+        Assert.AreEqual(elements.Length, result.Summary.Fail);
         StringAssert.Contains(result.Issues[^1].Message, "2 additional contrast failures were omitted");
     }
 

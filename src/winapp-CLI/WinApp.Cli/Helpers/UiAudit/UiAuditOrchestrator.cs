@@ -32,6 +32,7 @@ internal sealed class UiAuditOrchestrator
     {
         var issues = new List<UiAuditIssue>();
         var pass = 0;
+        var fail = 0;
         UiAuditContrastSummary? contrast = null;
 
         foreach (var area in areas)
@@ -44,6 +45,7 @@ internal sealed class UiAuditOrchestrator
             var result = engine.Evaluate(context);
             issues.AddRange(result.Issues);
             pass += result.Summary.Pass;
+            fail += result.Summary.Fail;
             if (result.Summary.Contrast is { } areaContrast)
             {
                 contrast ??= new UiAuditContrastSummary();
@@ -62,7 +64,8 @@ internal sealed class UiAuditOrchestrator
         var deduped = Deduplicate(issues);
 
         var warn = deduped.Count(i => i.Severity == UiAuditEngine.SeverityWarn);
-        var fail = deduped.Count(i => i.Severity == UiAuditEngine.SeverityFail);
+        fail -= issues.Count(i => i.Severity == UiAuditEngine.SeverityFail)
+            - deduped.Count(i => i.Severity == UiAuditEngine.SeverityFail);
 
         return new UiAuditResult
         {

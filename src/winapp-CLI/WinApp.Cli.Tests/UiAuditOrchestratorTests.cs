@@ -177,6 +177,23 @@ public class UiAuditOrchestratorTests
     }
 
     [TestMethod]
+    public void ContrastArea_PreservesTotalFailuresWhenDetailsAreCapped()
+    {
+        var elements = Enumerable.Range(0, UiAuditEngine.MaxDetailedContrastIssues + 2)
+            .Select(i => new UiElement
+            {
+                Id = $"e{i}", Type = "Text", Name = $"Text {i}", Width = 100, Height = 16,
+            })
+            .ToArray();
+        var orchestrator = DefaultOrchestrator();
+
+        var result = orchestrator.Run([AuditArea.Contrast], Context(elements, contrast: _ => null));
+
+        Assert.AreEqual(elements.Length, result.Summary.Fail);
+        Assert.AreEqual(UiAuditEngine.MaxDetailedContrastIssues + 1, result.Issues.Length);
+    }
+
+    [TestMethod]
     public void ContrastArea_ForwardsDpiScaleToRuleEngine()
     {
         // At 150% DPI, a 24-physical-pixel box normalizes to 16px and must use the normal-text

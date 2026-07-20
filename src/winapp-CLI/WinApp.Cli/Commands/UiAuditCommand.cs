@@ -285,7 +285,7 @@ internal class UiAuditCommand : Command, IShortDescription
                     // The capture belongs to the source window. NativeWindowHandle can be a child
                     // control hosted inside that window, but a modal's native root is a separate
                     // top-level window even when its UIA elements appear in the source tree.
-                    var hasDifferentNativeRoot = false;
+                    var nativeRootMatchesCapture = true;
                     if (el.NativeWindowHandle is { } nativeHwnd
                         && nativeHwnd != 0
                         && nativeHwnd != session.WindowHandle)
@@ -293,13 +293,13 @@ internal class UiAuditCommand : Command, IShortDescription
                         var root = Windows.Win32.PInvoke.GetAncestor(
                             new Windows.Win32.Foundation.HWND((nint)nativeHwnd),
                             Windows.Win32.UI.WindowsAndMessaging.GET_ANCESTOR_FLAGS.GA_ROOT);
-                        hasDifferentNativeRoot = !root.IsNull
-                            && root != new Windows.Win32.Foundation.HWND((nint)session.WindowHandle);
+                        nativeRootMatchesCapture = !root.IsNull
+                            && root == new Windows.Win32.Foundation.HWND((nint)session.WindowHandle);
                     }
 
                     if (!IsCaptureCompatibleWindow(
                         el.WindowHandle,
-                        hasDifferentNativeRoot,
+                        nativeRootMatchesCapture,
                         session.WindowHandle))
                     {
                         ratios[el] = null;
@@ -398,7 +398,7 @@ internal class UiAuditCommand : Command, IShortDescription
 
         internal static bool IsCaptureCompatibleWindow(
             long? sourceWindowHandle,
-            bool hasDifferentNativeRoot,
+            bool nativeRootMatchesCapture,
             long capturedWindowHandle)
         {
             if (sourceWindowHandle is { } source
@@ -408,7 +408,7 @@ internal class UiAuditCommand : Command, IShortDescription
                 return false;
             }
 
-            return !hasDifferentNativeRoot;
+            return nativeRootMatchesCapture;
         }
 
         private static (string Markup, string PlainText) BuildHumanReport(

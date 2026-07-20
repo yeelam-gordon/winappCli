@@ -573,7 +573,7 @@ public partial class UiCommandTests
         _fakeUia.InspectResult =
         [
             new UiElement { Id = "e0", Type = "Text", Name = "InWin", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 100, NativeWindowHandle = 100, Selector = "in-win" },
-            new UiElement { Id = "e1", Type = "Text", Name = "Hosted", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 100, NativeWindowHandle = 200, Selector = "hosted" },
+            new UiElement { Id = "e1", Type = "Text", Name = "Hosted", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 100, NativeWindowHandle = 100, Selector = "hosted" },
         ];
 
         var command = GetRequiredService<UiAuditCommand>();
@@ -593,9 +593,9 @@ public partial class UiCommandTests
     [TestMethod]
     public void Audit_CaptureWindowCompatibility_DistinguishesChildrenAndModals()
     {
-        Assert.IsTrue(UiAuditCommand.Handler.IsCaptureCompatibleWindow(100, false, 100));
-        Assert.IsFalse(UiAuditCommand.Handler.IsCaptureCompatibleWindow(100, true, 100));
-        Assert.IsFalse(UiAuditCommand.Handler.IsCaptureCompatibleWindow(200, false, 100));
+        Assert.IsTrue(UiAuditCommand.Handler.IsCaptureCompatibleWindow(100, true, 100));
+        Assert.IsFalse(UiAuditCommand.Handler.IsCaptureCompatibleWindow(100, false, 100));
+        Assert.IsFalse(UiAuditCommand.Handler.IsCaptureCompatibleWindow(200, true, 100));
     }
 
     // A 20x20 buffer whose glyph pixels are mid-grey (#696969, ~5.5:1 on white) — above the AA

@@ -151,9 +151,11 @@ internal static class UiAuditEngine
         var contrastCandidates = checkContrast ? GetContrastCandidates(elements) : null;
         var detailedContrastIssues = 0;
         var omittedContrastIssues = 0;
+        var contrastFailures = 0;
 
         void AddContrastIssue(UiAuditIssue issue)
         {
+            contrastFailures++;
             if (detailedContrastIssues < MaxDetailedContrastIssues)
             {
                 issues.Add(issue);
@@ -370,7 +372,8 @@ internal static class UiAuditEngine
         }
 
         var warn = issues.Count(i => i.Severity == SeverityWarn);
-        var fail = issues.Count(i => i.Severity == SeverityFail);
+        var fail = issues.Count(i => i.Severity == SeverityFail && i.RuleId != CheckContrast)
+            + contrastFailures;
 
         return new UiAuditResult
         {
