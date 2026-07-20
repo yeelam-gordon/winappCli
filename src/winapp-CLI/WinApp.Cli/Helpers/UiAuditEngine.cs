@@ -43,7 +43,7 @@ internal static class UiAuditEngine
         /// <summary>WCAG contrast threshold for normal-size text.</summary>
         public double NormalContrast { get; init; } = 4.5;
 
-        /// <summary>WCAG contrast threshold for large text (estimated from DPI-normalized bounds).</summary>
+        /// <summary>WCAG contrast threshold for large UIA Text elements (estimated from DPI-normalized bounds).</summary>
         public double LargeContrast { get; init; } = 3.0;
 
         /// <summary>Target window DPI scale relative to 96 DPI.</summary>
@@ -264,6 +264,7 @@ internal static class UiAuditEngine
 
             if (options.Checks.Contains(CheckScreenReader) && !chrome)
             {
+                var issueCountBeforeScreenReader = issues.Count;
                 if ((interactive || el.IsKeyboardFocusable) && visible && string.IsNullOrWhiteSpace(el.Name))
                 {
                     issues.Add(Issue(CheckScreenReader, SeverityFail, el,
@@ -293,6 +294,11 @@ internal static class UiAuditEngine
                     issues.Add(Issue(CheckScreenReader, SeverityWarn, el,
                         $"{Describe(el)} has a low-value accessible name that duplicates its role. Screen-reader users need a descriptive label."));
                 }
+
+                if (visible && issues.Count == issueCountBeforeScreenReader)
+                {
+                    pass++;
+                }
             }
 
             // contrast: eligible visible text elements must either be measured or explicitly
@@ -314,7 +320,8 @@ internal static class UiAuditEngine
                 {
                     contrastMeasured++;
                     var dpiScale = options.DpiScale > 0 ? options.DpiScale : 1.0;
-                    var isLarge = el.Height / dpiScale >= LargeTextHeightAt96Dpi;
+                    var isLarge = el.Type.Equals("Text", StringComparison.OrdinalIgnoreCase)
+                        && el.Height / dpiScale >= LargeTextHeightAt96Dpi;
                     var threshold = isLarge ? options.LargeContrast : options.NormalContrast;
                     if (r < threshold)
                     {

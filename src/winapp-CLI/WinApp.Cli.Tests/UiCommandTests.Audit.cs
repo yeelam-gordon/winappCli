@@ -545,11 +545,10 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
-    public async Task Audit_Contrast_HostedNativeHwnd_IsNotMeasuredAgainstRoot()
+    public async Task Audit_Contrast_ChildNativeHwnd_IsMeasuredAgainstRoot()
     {
-        // Both elements came from the root inspection (source HWND 100), but the provider reports
-        // that one is hosted by HWND 200. It must be unmeasured rather than sampled against the
-        // root buffer. The in-window element IS scored (and fails).
+        // Both elements came from the root inspection (source HWND 100). The provider's child
+        // HWND 200 is still composited into the root capture, so both elements are scored.
         _fakeSession.SessionResult = new UiSessionInfo
         {
             ProcessId = 1234,
@@ -581,14 +580,14 @@ public partial class UiCommandTests
         var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "contrast", "--json"]);
 
         var output = TestAnsiConsole.Output;
-        Assert.AreEqual(1, exitCode, "both low contrast and an unmeasured candidate should fail");
+        Assert.AreEqual(1, exitCode, "both low-contrast candidates should fail");
         StringAssert.Contains(output, "\"fail\": 2");
         StringAssert.Contains(output, "\"warn\": 0");
         StringAssert.Contains(output, "\"selector\": \"in-win\"");
         StringAssert.Contains(output, "\"selector\": \"hosted\"");
         StringAssert.Contains(output, "\"attempted\": 2");
-        StringAssert.Contains(output, "\"measured\": 1");
-        StringAssert.Contains(output, "\"unmeasured\": 1");
+        StringAssert.Contains(output, "\"measured\": 2");
+        StringAssert.Contains(output, "\"unmeasured\": 0");
     }
 
     // A 20x20 buffer whose glyph pixels are mid-grey (#696969, ~5.5:1 on white) — above the AA

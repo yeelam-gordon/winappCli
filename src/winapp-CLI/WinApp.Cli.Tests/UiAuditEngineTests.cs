@@ -219,6 +219,20 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
+    public void ScreenReader_CleanElementCountsPass()
+    {
+        var elements = new[]
+        {
+            new UiElement { Id = "e0", Type = "Button", Name = "Save", IsEnabled = true, IsInvokable = true, IsKeyboardFocusable = true },
+        };
+
+        var result = UiAuditEngine.Run(elements, Opts(UiAuditEngine.CheckScreenReader));
+
+        Assert.AreEqual(0, result.Issues.Length);
+        Assert.AreEqual(1, result.Summary.Pass);
+    }
+
+    [TestMethod]
     public void Contrast_LowRatioTextElement_ProducesFailure()
     {
         var text = new UiElement { Id = "e0", Type = "Text", Name = "Hello", Width = 100, Height = 16 };
@@ -326,6 +340,22 @@ public class UiAuditEngineTests
 
         Assert.AreEqual(0, result.Summary.Fail);
         Assert.AreEqual(1, result.Summary.Pass);
+    }
+
+    [TestMethod]
+    public void Contrast_TallButtonUsesNormalTextThreshold()
+    {
+        // A control's bounds do not describe its rendered glyph size, so it must not receive the
+        // relaxed large-text threshold merely because the button is tall.
+        var button = new UiElement
+        {
+            Id = "e0", Type = "Button", Name = "Save", Width = 200, Height = 30,
+            IsEnabled = true, IsInvokable = true,
+        };
+
+        var result = UiAuditEngine.Run([button], Opts(UiAuditEngine.CheckContrast), _ => 3.5);
+
+        Assert.AreEqual(1, result.Summary.Fail);
     }
 
     [TestMethod]

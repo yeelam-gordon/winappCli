@@ -282,12 +282,9 @@ internal class UiAuditCommand : Command, IShortDescription
                         continue;
                     }
 
-                    // Multi-HWND guard: the captured buffer belongs to the session's root window.
-                    // Elements that belong to a different HWND (e.g. popups / secondary windows)
-                    // must NOT be sampled against it — mark them "not measured" (null) instead of
-                    // reading the wrong pixels.
-                    var nativeHwnd = el.NativeWindowHandle ?? el.WindowHandle;
-                    if (nativeHwnd is { } elHwnd && elHwnd != 0 && elHwnd != session.WindowHandle)
+                    // The capture belongs to the source window. NativeWindowHandle can be a child
+                    // control hosted inside that window, so it must not exclude its pixels.
+                    if (el.WindowHandle is { } elHwnd && elHwnd != 0 && elHwnd != session.WindowHandle)
                     {
                         ratios[el] = null;
                         continue;
