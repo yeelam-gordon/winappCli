@@ -36,22 +36,27 @@ internal static partial class WgcCapture
             out _,
             out var context).ThrowOnFailure();
 
+        GraphicsCaptureItem? item = null;
+        Direct3D11CaptureFramePool? pool = null;
+        GraphicsCaptureSession? session = null;
         try
         {
             var winrtDevice = CreateDirect3DDevice(device);
-            var item = CreateItemForWindow(hwnd);
-            var pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
+            item = CreateItemForWindow(hwnd);
+            pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
                 winrtDevice,
                 DirectXPixelFormat.B8G8R8A8UIntNormalized,
                 numberOfBuffers: 2,
                 item.Size);
-            var session = pool.CreateCaptureSession(item);
+            session = pool.CreateCaptureSession(item);
             session.IsCursorCaptureEnabled = false;
 
             return new FrameGrabber(device, context, pool, session, item, logger, fps);
         }
         catch
         {
+            (session as IDisposable)?.Dispose();
+            (pool as IDisposable)?.Dispose();
             (context as IDisposable)?.Dispose();
             (device as IDisposable)?.Dispose();
             throw;
