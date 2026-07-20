@@ -253,7 +253,7 @@ winapp ui record -a myapp --duration-sec 10 --fps 15 --output demo.mp4
 winapp ui record -a myapp --max-edge 1280 --output capture.mp4
 
 # Programmatic stop (agent/script): pipe a newline; the recorder stops and writes a valid MP4
-"" | winapp ui record -a myapp --json --output capture.mp4
+printf '\n' | winapp ui record -a myapp --json --output capture.mp4
 
 # Record a single element's region (fails with element_not_found if the selector doesn't match)
 winapp ui record itm-chart-9f8e -a myapp --output chart.mp4
@@ -271,7 +271,7 @@ winapp ui record -a myapp --capture-screen --duration-sec 5 --output with-popups
 
 **Stop mechanisms:**
 - Interactive: **Ctrl+C** (any platform).
-- Programmatic / agent: write a **newline** (`""`) or close stdin (EOF). The stop is applied as soon as the encoder is ready (first frame captured); any stop signal that arrives before the first frame is latched and applied immediately at readiness — there is no grace window and no wall-clock delay.
+- Programmatic / agent: write a **newline** (for example, `printf '\n'`) or close stdin (EOF). The stop is applied as soon as the encoder is ready (first frame captured); any stop signal that arrives before the first frame is latched and applied immediately at readiness — there is no grace window and no wall-clock delay.
 
 **Capture modes** (reported in the JSON `mode` field):
 - `wgc` — Windows Graphics Capture (default; works while the window is occluded).

@@ -259,6 +259,17 @@ test('uiRecord(null) throws documented range error, not raw TypeError', async ()
   );
 });
 
+test('uiRecord(non-object) identifies the received value', async () => {
+  await assert.rejects(
+    () => (uiRecord as (o: unknown) => Promise<unknown>)(42),
+    (err: unknown) => {
+      assert.ok(err instanceof Error, 'should throw an Error');
+      assert.ok(err.message.includes('number (42)'), `error should identify the received value: "${err.message}"`);
+      return true;
+    }
+  );
+});
+
 test('public package entrypoint exposes guarded uiRecord', async () => {
   assert.equal(publicUiRecord, publicPackage.uiRecord, 'default export must use the guarded uiRecord entrypoint');
   await assert.rejects(

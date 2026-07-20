@@ -46,6 +46,10 @@ export const UI_RECORD_ARG_SPECS: readonly UiRecordArgSpec[] = [
   { property: 'verbose', flag: '--verbose', kind: 'boolean' },
 ] as const;
 
+function describeInvalidOptions(options: unknown): string {
+  return options === null ? 'null' : `${typeof options} (${String(options)})`;
+}
+
 /**
  * Builds the CLI argument list for `ui record` from a validated options object.
  * Named options are placed before the positional selector, and the selector is
@@ -87,7 +91,7 @@ export async function uiRecord(options: UiRecordOptions): Promise<WinappResult> 
   if (options === null || typeof options !== 'object') {
     throw new Error(
       `uiRecord: options must be an object with durationSec as a finite integer in [1, 86400]. ` +
-        'Got: null or undefined options. Pass options.durationSec > 0.'
+        `Got: ${describeInvalidOptions(options)}. Pass options.durationSec > 0.`
     );
   }
   // durationSec must be a finite integer in [1, 86400]: reject NaN, ±Infinity, non-integers,
@@ -126,7 +130,7 @@ export async function _uiRecordWithCapture(
   if (options === null || typeof options !== 'object') {
     throw new Error(
       `uiRecord: options must be an object with durationSec as a finite integer in [1, 86400]. ` +
-        'Got: null or undefined options. Pass options.durationSec > 0.'
+        `Got: ${describeInvalidOptions(options)}. Pass options.durationSec > 0.`
     );
   }
   if (

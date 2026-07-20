@@ -312,7 +312,14 @@ internal sealed partial class UiAutomationService
                     var latest = grabber!.TryGetLatest();
                     if (latest is null)
                     {
-                        await Task.Delay(5, ct).ConfigureAwait(false);
+                        try
+                        {
+                            await Task.Delay(5, ct).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
                         continue;
                     }
                     var (source, sw, sh, version) = latest.Value;
