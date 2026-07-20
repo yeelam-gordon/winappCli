@@ -344,7 +344,7 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
-    public void Contrast_LargeText_UsesRelaxedThreshold()
+    public void Contrast_TallTextUsesNormalThreshold()
     {
         // 3.5:1 fails for normal text (< 4.5) but passes for large text (>= 3.0).
         var large = new UiElement { Id = "e0", Type = "Text", Name = "Big", Width = 200, Height = 30 };
@@ -352,8 +352,7 @@ public class UiAuditEngineTests
 
         var result = UiAuditEngine.Run(elements, Opts(UiAuditEngine.CheckContrast), _ => 3.5);
 
-        Assert.AreEqual(0, result.Summary.Fail);
-        Assert.AreEqual(1, result.Summary.Pass);
+        Assert.AreEqual(1, result.Summary.Fail);
     }
 
     [TestMethod]
@@ -388,7 +387,7 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
-    public void Contrast_LargeTextAt150PercentDpi_UsesLargeThreshold()
+    public void Contrast_TallTextAt150PercentDpi_UsesNormalThreshold()
     {
         // A 36-physical-pixel box at 150% scaling normalizes to 24px and qualifies as large text.
         var text = new UiElement { Id = "e0", Type = "Text", Name = "Heading", Width = 240, Height = 36 };
@@ -398,8 +397,7 @@ public class UiAuditEngineTests
             Opts(1.5, UiAuditEngine.CheckContrast),
             _ => 3.2);
 
-        Assert.AreEqual(0, result.Summary.Fail);
-        Assert.AreEqual(1, result.Summary.Pass);
+        Assert.AreEqual(1, result.Summary.Fail);
     }
 
     [TestMethod]

@@ -96,8 +96,6 @@ internal static class UiAuditEngine
         "ScrollBar", "Thumb", "TitleBar"
     };
 
-    /// <summary>Large-text height estimate at 96 DPI (WCAG large text ≈ 18pt ≈ 24px).</summary>
-    private const double LargeTextHeightAt96Dpi = 24.0;
     internal const int MaxDetailedContrastIssues = 100;
 
     public static bool IsInteractive(UiElement el)
@@ -338,9 +336,10 @@ internal static class UiAuditEngine
                 else
                 {
                     contrastMeasured++;
-                    var dpiScale = options.DpiScale > 0 ? options.DpiScale : 1.0;
-                    var isLarge = el.Type.Equals("Text", StringComparison.OrdinalIgnoreCase)
-                        && el.Height / dpiScale >= LargeTextHeightAt96Dpi;
+                    // UIA bounds describe an element, not its glyph metrics: multiline normal text
+                    // can be tall enough to look "large". Without a reliable font-size attribute,
+                    // use the normal-text threshold to avoid false passes.
+                    var isLarge = false;
                     var threshold = isLarge ? options.LargeContrast : options.NormalContrast;
                     if (r < threshold)
                     {
