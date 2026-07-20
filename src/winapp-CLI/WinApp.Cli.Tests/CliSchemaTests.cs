@@ -184,6 +184,29 @@ public class CliSchemaTests : BaseCommandTests
     }
 
     [TestMethod]
+    public async Task CliSchemaUiAuditOutputDescribesReportFile()
+    {
+        var rootCommand = GetRequiredService<WinAppRootCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(rootCommand, ["--cli-schema"]);
+
+        Assert.AreEqual(0, exitCode, "CLI schema command should complete successfully");
+
+        using var jsonDoc = JsonDocument.Parse(TestAnsiConsole.Output);
+        var auditCommand = jsonDoc.RootElement
+            .GetProperty("subcommands")
+            .GetProperty("ui")
+            .GetProperty("subcommands")
+            .GetProperty("audit");
+        var outputDescription = auditCommand
+            .GetProperty("options")
+            .GetProperty("--output")
+            .GetProperty("description")
+            .GetString();
+
+        Assert.AreEqual("Write the text or JSON audit report to a file.", outputDescription);
+    }
+
+    [TestMethod]
     public async Task CliSchemaShouldHandleNestedSubcommands()
     {
         // Arrange

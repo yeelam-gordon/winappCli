@@ -37,11 +37,13 @@ internal sealed partial class UiAutomationService : IUiAutomationService
         return EnumerateWindows((pid, title) => pid == targetPid);
     }
 
-    private static List<(nint Hwnd, int Pid, string Title)> EnumerateWindows(Func<int, string, bool> filter)
+    internal static List<(nint Hwnd, int Pid, string Title)> EnumerateWindows(
+        Func<int, string, bool> filter,
+        UiTraversalState? traversal = null)
     {
         var results = new List<(nint, int, string)>();
         var hwnd = Windows.Win32.Foundation.HWND.Null;
-        while (true)
+        while (traversal?.Checkpoint() ?? true)
         {
             hwnd = Windows.Win32.PInvoke.FindWindowEx(
                 Windows.Win32.Foundation.HWND.Null, hwnd, null, (string?)null);
@@ -79,17 +81,50 @@ internal sealed partial class UiAutomationService : IUiAutomationService
 
     public Task<UiElement[]> InspectAsync(UiSessionInfo session, string? elementId, int depth, CancellationToken ct)
     {
+        var result = InspectCore(session, elementId, depth, new UiInspectionOptions(), ct);
+        return Task.FromResult(result.Elements);
+    }
+
+    public Task<UiInspectionResult> InspectAsync(
+        UiSessionInfo session,
+        string? elementId,
+        int depth,
+        UiInspectionOptions options,
+        CancellationToken ct)
+        => Task.FromResult(InspectCore(session, elementId, depth, options, ct));
+
+    private UiInspectionResult InspectCore(
+        UiSessionInfo session,
+        string? elementId,
+        int depth,
+        UiInspectionOptions options,
+        CancellationToken ct)
+    {
         _logger.LogDebug("Inspecting process {Pid} at depth {Depth}", session.ProcessId, depth);
         var nextElementId = 0;
+        var traversal = new UiTraversalState(options, ct);
+
+        if (!traversal.Checkpoint())
+        {
+            return new UiInspectionResult { Issues = traversal.GetIssues() };
+        }
 
         var root = GetRootElement(session);
         if (root is null)
         {
-            return Task.FromResult<UiElement[]>([]);
+            return new UiInspectionResult();
         }
 
-        // If a selector is provided, scope the tree walk to that element
+        if (!traversal.Checkpoint())
+        {
+            return new UiInspectionResult { Issues = traversal.GetIssues() };
+        }
+
+        // If a selector is provided, scope the tree walk to that element. A miss returns an
+        // empty result; callers must never widen a missing target to the root window.
         IUIAutomationElement startElement = root;
+        List<string>? startAncestorTypes = null;
+        var inheritedNativeWindowHandle = session.WindowHandle;
         if (!string.IsNullOrEmpty(elementId))
         {
             IUIAutomationElement? target = null;
@@ -98,51 +133,68 @@ internal sealed partial class UiAutomationService : IUiAutomationService
             var slugParsed = SlugGenerator.ParseSlug(elementId);
             if (slugParsed is not null)
             {
-                var slugResult = FindElementBySlug(elementId, root);
-                if (slugResult is not null)
-                {
-                    // Re-find the COM element
-                    target = ResolveComElement(session, slugResult);
-                }
+                (_, target) = FindElementBySlugWithCom(elementId, root, traversal);
             }
             else
             {
                 // Try as a legacy selector
-                var selectorService = _selectorService;
-                var selector = selectorService.Parse(elementId);
+                var selector = _selectorService.Parse(elementId);
                 var condition = BuildCondition(selector);
-                if (condition is not null)
+                if (condition is not null && traversal.Checkpoint())
                 {
                     target = root.FindFirst(TreeScope.TreeScope_Descendants, condition);
+                    if (!traversal.Checkpoint())
+                    {
+                        return new UiInspectionResult { Issues = traversal.GetIssues() };
+                    }
                 }
             }
 
-            if (target is not null)
+            if (target is null)
             {
-                startElement = target;
+                return new UiInspectionResult { Issues = traversal.GetIssues() };
+            }
+
+            startElement = target;
+            if (options.IncludeScopedAncestorContext)
+            {
+                var context = GetScopedAncestorContext(
+                    target,
+                    root,
+                    depth,
+                    traversal,
+                    elementId,
+                    session.WindowHandle);
+                startAncestorTypes = context.AncestorTypes;
+                inheritedNativeWindowHandle = context.NativeWindowHandle;
             }
         }
 
         var elements = new List<UiElement>();
-        WalkTree(startElement, depth, 0, "", elements, ref nextElementId);
-
-        // Set WindowHandle on all elements from main window
-        foreach (var el in elements)
-        {
-            el.WindowHandle = session.WindowHandle;
-        }
+        WalkTree(
+            startElement,
+            depth,
+            0,
+            "",
+            elements,
+            ref nextElementId,
+            traversal,
+            session.WindowHandle,
+            inheritedNativeWindowHandle,
+            ancestorTypes: startAncestorTypes);
 
         // Also walk popup/owned windows (when inspecting full tree, not scoped to element,
         // and the user did not explicitly target a single HWND — see issue #472).
-        if (string.IsNullOrEmpty(elementId) && !session.IsExplicitWindow)
+        if (!traversal.IsStopped && string.IsNullOrEmpty(elementId) && !session.IsExplicitWindow)
         {
             var mainHwnd = (nint)session.WindowHandle;
-            var allWindows = GetAllAppWindows(session);
+            var allWindows = GetAllAppWindows(session, traversal);
 
             // Filter out windows whose UIA root is already in the main tree (e.g., modal dialogs)
             var independentWindows = new List<(nint Hwnd, int Pid, string Title)>();
             foreach (var (hwnd, pid, title) in allWindows)
             {
+                if (!traversal.Checkpoint()) { break; }
                 if (hwnd == mainHwnd) { continue; }
 
                 // Skip internal system windows (PseudoConsoleWindow, IME, etc.)
@@ -153,7 +205,7 @@ internal sealed partial class UiAutomationService : IUiAutomationService
                 {
                     var hwndCondition = _automation.CreatePropertyCondition(
                         UIA_PROPERTY_ID.UIA_NativeWindowHandlePropertyId, ComVariant.Create((int)hwnd));
-                    var alreadyInMain = root!.FindFirst(TreeScope.TreeScope_Descendants, hwndCondition);
+                    var alreadyInMain = root.FindFirst(TreeScope.TreeScope_Descendants, hwndCondition);
                     if (alreadyInMain is not null)
                     {
                         _logger.LogDebug("Skipping HWND {Hwnd} \"{Title}\" — already in main window tree", hwnd, title);
@@ -181,6 +233,8 @@ internal sealed partial class UiAutomationService : IUiAutomationService
 
             foreach (var (hwnd, pid, title) in independentWindows)
             {
+                if (!traversal.Checkpoint()) { break; }
+
                 var windowRoot = GetRootElementForHwnd(hwnd);
                 if (windowRoot is null) { continue; }
 
@@ -197,20 +251,35 @@ internal sealed partial class UiAutomationService : IUiAutomationService
                 });
 
                 var popupElements = new List<UiElement>();
-                WalkTree(windowRoot, depth, 0, "", popupElements, ref nextElementId);
-                foreach (var el in popupElements)
+                if (!WalkTree(
+                        windowRoot,
+                        depth,
+                        0,
+                        "",
+                        popupElements,
+                        ref nextElementId,
+                        traversal,
+                        (long)hwnd,
+                        (long)hwnd))
                 {
-                    el.WindowHandle = hwnd;
+                    break;
                 }
                 elements.AddRange(popupElements);
             }
         }
 
-        // Promote unique AutomationIds to selectors (more stable than slugs)
-        PromoteUniqueAutomationIds(root, elements, session.WindowHandle);
+        // The audit disables this global FindAll-based promotion so its traversal limits remain
+        // effective. Regular inspect keeps the existing stable AutomationId promotion behavior.
+        if (options.PromoteUniqueAutomationIds && !traversal.IsStopped)
+        {
+            PromoteUniqueAutomationIds(root, elements, session.WindowHandle, ct);
+        }
 
-        var result = elements.ToArray();
-        return Task.FromResult(result);
+        return new UiInspectionResult
+        {
+            Elements = elements.ToArray(),
+            Issues = traversal.GetIssues(),
+        };
     }
 
     public Task<UiElement[]> InspectAncestorsAsync(UiSessionInfo session, string elementId, CancellationToken ct)
@@ -300,7 +369,7 @@ internal sealed partial class UiAutomationService : IUiAutomationService
         ancestors.Reverse();
 
         // Promote unique AutomationIds to selectors (more stable than slugs)
-        PromoteUniqueAutomationIds(root, ancestors);
+        PromoteUniqueAutomationIds(root, ancestors, ct: ct);
 
         var result = ancestors.ToArray();
         return Task.FromResult(result);
@@ -445,7 +514,7 @@ internal sealed partial class UiAutomationService : IUiAutomationService
         var results = mainResults.ToArray();
 
         // Promote unique AutomationIds to selectors (more stable than slugs)
-        PromoteUniqueAutomationIds(root, results, session.WindowHandle);
+        PromoteUniqueAutomationIds(root, results, session.WindowHandle, ct);
 
         return Task.FromResult(results);
     }
@@ -1146,7 +1215,10 @@ return Task.FromResult<UiElement?>(null);
     /// and matching + validating the RuntimeId hash.
     /// Returns both the UiElement model and the live COM element.
     /// </summary>
-    private (UiElement? Model, IUIAutomationElement? ComElement) FindElementBySlugWithCom(string targetSlug, IUIAutomationElement root)
+    private (UiElement? Model, IUIAutomationElement? ComElement) FindElementBySlugWithCom(
+        string targetSlug,
+        IUIAutomationElement root,
+        UiTraversalState? traversal = null)
     {
         var parsed = SlugGenerator.ParseSlug(targetSlug);
         if (parsed is null)
@@ -1166,6 +1238,17 @@ return Task.FromResult<UiElement?>(null);
         void Walk(IUIAutomationElement element, int depth)
         {
             if (matchedCom is not null || depth > maxRecursionDepth)
+            {
+                if (depth > maxRecursionDepth)
+                {
+                    traversal?.RecordIssue(
+                        UiInspectionIssueCodes.DepthLimit,
+                        "UI Automation selector resolution reached its depth limit; the target search is incomplete.");
+                }
+                return;
+            }
+
+            if (traversal is not null && !traversal.TryVisit(null))
             {
                 return;
             }
@@ -1223,13 +1306,69 @@ return Task.FromResult<UiElement?>(null);
             }
 
             // Recurse children
-            var walker = _automation.get_ControlViewWalker();
-            var child = walker.GetFirstChildElement(element);
+            IUIAutomationTreeWalker walker;
+            IUIAutomationElement? child;
+            try
+            {
+                if (traversal is not null && !traversal.Checkpoint())
+                {
+                    return;
+                }
+                walker = _automation.get_ControlViewWalker();
+                child = walker.GetFirstChildElement(element);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (traversal is null || !traversal.CaptureDiagnostics)
+                {
+                    // Preserve the pre-audit contract: first-child provider failures propagated
+                    // from slug resolution; only audit callers convert them to diagnostics.
+                    throw;
+                }
+                _logger.LogDebug(ex, "UIA child enumeration failed during slug resolution");
+                traversal.RecordIssue(
+                    UiInspectionIssueCodes.ChildEnumeration,
+                    "UI Automation could not enumerate children while resolving the selector; the target search is incomplete.");
+                return;
+            }
+
             while (child is not null && matchedCom is null)
             {
                 Walk(child, depth + 1);
-                try { child = walker.GetNextSiblingElement(child); }
-                catch { break; }
+                if (traversal?.IsStopped == true)
+                {
+                    return;
+                }
+
+                try
+                {
+                    if (traversal is not null && !traversal.Checkpoint())
+                    {
+                        return;
+                    }
+                    child = walker.GetNextSiblingElement(child);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    if (traversal is null || !traversal.CaptureDiagnostics)
+                    {
+                        // Preserve the existing best-effort sibling truncation for non-audit callers.
+                        return;
+                    }
+                    _logger.LogDebug(ex, "UIA sibling enumeration failed during slug resolution");
+                    traversal.RecordIssue(
+                        UiInspectionIssueCodes.SiblingEnumeration,
+                        "UI Automation could not continue sibling enumeration while resolving the selector; the target search is incomplete.");
+                    return;
+                }
             }
         }
 
@@ -1351,17 +1490,30 @@ return Task.FromResult<UiElement?>(null);
     /// Get all windows associated with an app: same-PID windows + cross-process owned windows.
     /// Excludes internal system windows (PseudoConsoleWindow, IME, etc.).
     /// </summary>
-    private List<(nint Hwnd, int Pid, string Title)> GetAllAppWindows(UiSessionInfo session)
+    private List<(nint Hwnd, int Pid, string Title)> GetAllAppWindows(
+        UiSessionInfo session,
+        UiTraversalState? traversal = null)
     {
-        var windows = FindWindowsByPid(session.ProcessId);
+        var windows = EnumerateWindows((pid, _) => pid == session.ProcessId, traversal);
 
         // Remove internal system windows from same-PID results
-        windows.RemoveAll(w => IsInternalWindow(UiSessionService.GetWindowClassName(w.Hwnd)));
+        for (var i = windows.Count - 1; i >= 0; i--)
+        {
+            if (!(traversal?.Checkpoint() ?? true))
+            {
+                return windows;
+            }
+
+            if (IsInternalWindow(UiSessionService.GetWindowClassName(windows[i].Hwnd)))
+            {
+                windows.RemoveAt(i);
+            }
+        }
 
         // Find cross-process owned windows (file pickers, system dialogs)
         var appHwnds = new HashSet<nint>(windows.Select(w => w.Hwnd));
         var hwnd = Windows.Win32.Foundation.HWND.Null;
-        while (true)
+        while (traversal?.Checkpoint() ?? true)
         {
             hwnd = Windows.Win32.PInvoke.FindWindowEx(
                 Windows.Win32.Foundation.HWND.Null, hwnd, null, (string?)null);
@@ -1753,10 +1905,29 @@ return Task.FromResult<UiElement?>(null);
         return null;
     }
 
-    private void WalkTree(IUIAutomationElement element, int maxDepth, int currentDepth, string path, List<UiElement> results, ref int nextElementId,
-                          string? parentSelector = null, List<string>? ancestorTypes = null)
+    private bool WalkTree(
+        IUIAutomationElement element,
+        int maxDepth,
+        int currentDepth,
+        string path,
+        List<UiElement> results,
+        ref int nextElementId,
+        UiTraversalState traversal,
+        long sourceWindowHandle,
+        long inheritedNativeWindowHandle,
+        string? parentSelector = null,
+        List<string>? ancestorTypes = null)
     {
+        if (!traversal.TryVisit(parentSelector))
+        {
+            return false;
+        }
+
         var uiElement = ToUiElement(element, path, ref nextElementId);
+        var nativeWindowHandle = ApplyWindowHandleContext(
+            uiElement,
+            sourceWindowHandle,
+            inheritedNativeWindowHandle);
         uiElement.Depth = currentDepth;
         uiElement.ParentSelector = parentSelector;
         if (ancestorTypes is { Count: > 0 })
@@ -1770,18 +1941,79 @@ return Task.FromResult<UiElement?>(null);
             // Peek for children so we can hint that the tree was truncated.
             try
             {
+                if (!traversal.Checkpoint(uiElement.Selector ?? uiElement.Id))
+                {
+                    uiElement.HasMoreChildren = true;
+                    return false;
+                }
+
                 var peekWalker = _automation.get_ControlViewWalker();
                 if (peekWalker.GetFirstChildElement(element) is not null)
                 {
                     uiElement.HasMoreChildren = true;
+                    traversal.RecordIssue(
+                        UiInspectionIssueCodes.DepthLimit,
+                        "UI Automation traversal reached the audit depth limit; descendants were not audited.",
+                        uiElement.Selector ?? uiElement.Id,
+                        uiElement.Name);
                 }
             }
-            catch { /* COM errors here are non-fatal — leave HasMoreChildren null */ }
-            return;
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (!traversal.CaptureDiagnostics)
+                {
+                    return true;
+                }
+                _logger.LogDebug(ex, "UIA child enumeration failed at the inspect depth limit");
+                uiElement.HasMoreChildren = true;
+                traversal.RecordIssue(
+                    UiInspectionIssueCodes.ChildEnumeration,
+                    "UI Automation could not determine whether this element has additional children; the audit tree is incomplete.",
+                    uiElement.Selector ?? uiElement.Id,
+                    uiElement.Name);
+            }
+            return !traversal.IsStopped;
         }
 
-        var walker = _automation.get_ControlViewWalker();
-        var child = walker.GetFirstChildElement(element);
+        IUIAutomationTreeWalker walker;
+        IUIAutomationElement? child;
+        try
+        {
+            if (!traversal.Checkpoint(uiElement.Selector ?? uiElement.Id))
+            {
+                uiElement.HasMoreChildren = true;
+                return false;
+            }
+
+            walker = _automation.get_ControlViewWalker();
+            child = walker.GetFirstChildElement(element);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            if (!traversal.CaptureDiagnostics)
+            {
+                // Preserve the pre-audit contract: first-child provider failures propagated
+                // from the normal inspect tree walk.
+                throw;
+            }
+            _logger.LogDebug(ex, "UIA child enumeration failed");
+            uiElement.HasMoreChildren = true;
+            traversal.RecordIssue(
+                UiInspectionIssueCodes.ChildEnumeration,
+                "UI Automation could not enumerate this element's children; the audit tree is incomplete.",
+                uiElement.Selector ?? uiElement.Id,
+                uiElement.Name);
+            return true;
+        }
+
         var childIndex = 0;
 
         // Build ancestor list for children: parent's ancestors + this element's type.
@@ -1792,20 +2024,58 @@ return Task.FromResult<UiElement?>(null);
         while (child is not null)
         {
             var childPath = string.IsNullOrEmpty(path) ? $"/{childIndex}" : $"{path}/{childIndex}";
-            WalkTree(child, maxDepth, currentDepth + 1, childPath, results, ref nextElementId, childParentSelector, childAncestors);
+            if (!WalkTree(
+                    child,
+                    maxDepth,
+                    currentDepth + 1,
+                    childPath,
+                    results,
+                    ref nextElementId,
+                    traversal,
+                    sourceWindowHandle,
+                    nativeWindowHandle,
+                    childParentSelector,
+                    childAncestors))
+            {
+                uiElement.HasMoreChildren = true;
+                return false;
+            }
 
             IUIAutomationElement? next;
             try
             {
+                if (!traversal.Checkpoint(uiElement.Selector ?? uiElement.Id))
+                {
+                    uiElement.HasMoreChildren = true;
+                    return false;
+                }
                 next = walker.GetNextSiblingElement(child);
             }
-            catch
+            catch (OperationCanceledException)
             {
-                next = null;
+                throw;
+            }
+            catch (Exception ex)
+            {
+                if (!traversal.CaptureDiagnostics)
+                {
+                    // Preserve the existing best-effort sibling truncation for non-audit callers.
+                    return true;
+                }
+                _logger.LogDebug(ex, "UIA sibling enumeration failed");
+                uiElement.HasMoreChildren = true;
+                traversal.RecordIssue(
+                    UiInspectionIssueCodes.SiblingEnumeration,
+                    "UI Automation could not continue this element's child enumeration; the audit tree is incomplete.",
+                    uiElement.Selector ?? uiElement.Id,
+                    uiElement.Name);
+                return true;
             }
             child = next;
             childIndex++;
         }
+
+        return true;
     }
 
     private static UiElement ToUiElement(IUIAutomationElement element, string path, ref int nextElementId)
@@ -1916,6 +2186,7 @@ return Task.FromResult<UiElement?>(null);
             ScrollDir = scrollDir,
             Selector = selector,
             IsInvokable = isInvokable,
+            NativeWindowHandle = SafeGetNativeWindowHandle(element),
         };
     }
 
@@ -1936,12 +2207,17 @@ return Task.FromResult<UiElement?>(null);
     /// across the full UIA tree, use it directly as the selector instead of a generated slug.
     /// AutomationIds are developer-set, stable across layout changes, and more readable.
     /// </summary>
-    private void PromoteUniqueAutomationIds(IUIAutomationElement root, IList<UiElement> elements, long mainWindowHandle = 0)
+    private void PromoteUniqueAutomationIds(
+        IUIAutomationElement root,
+        IList<UiElement> elements,
+        long mainWindowHandle = 0,
+        CancellationToken ct = default)
     {
         // Collect AutomationIds from the inspected elements that could be promoted
         var candidateAids = new HashSet<string>();
         foreach (var el in elements)
         {
+            ct.ThrowIfCancellationRequested();
             if (el.AutomationId is not null)
             {
                 candidateAids.Add(el.AutomationId);
@@ -1966,6 +2242,7 @@ return Task.FromResult<UiElement?>(null);
                 var count = allElements.get_Length();
                 for (var i = 0; i < count; i++)
                 {
+                    ct.ThrowIfCancellationRequested();
                     try
                     {
                         var aid = SafeGetBstr(() => allElements.GetElement(i).get_CurrentAutomationId());
@@ -1978,6 +2255,10 @@ return Task.FromResult<UiElement?>(null);
                 }
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             _logger.LogDebug("AutomationId uniqueness check failed: {Message}", ex.Message);
@@ -1988,6 +2269,7 @@ return Task.FromResult<UiElement?>(null);
         // Skip elements from other windows — the frequency map only covers the main window tree
         foreach (var el in elements)
         {
+            ct.ThrowIfCancellationRequested();
             if (el.AutomationId is not null &&
                 (mainWindowHandle == 0 || el.WindowHandle == mainWindowHandle) &&
                 aidCounts.TryGetValue(el.AutomationId, out var count) && count == 1)
@@ -2024,7 +2306,36 @@ return Task.FromResult<UiElement?>(null);
         }
     }
 
-    private static string GetControlTypeName(UIA_CONTROLTYPE_ID controlType) => controlType switch
+    private static long? SafeGetNativeWindowHandle(IUIAutomationElement element)
+    {
+        try
+        {
+            var handle = (long)(nint)element.get_CurrentNativeWindowHandle();
+            return handle == 0 ? null : handle;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    internal static long ApplyWindowHandleContext(
+        UiElement element,
+        long sourceWindowHandle,
+        long? inheritedNativeWindowHandle = null)
+    {
+        element.WindowHandle = sourceWindowHandle;
+        if (element.NativeWindowHandle is null or 0)
+        {
+            element.NativeWindowHandle = inheritedNativeWindowHandle is not null and not 0
+                ? inheritedNativeWindowHandle
+                : sourceWindowHandle;
+        }
+
+        return element.NativeWindowHandle.Value;
+    }
+
+    internal static string GetControlTypeName(UIA_CONTROLTYPE_ID controlType) => controlType switch
     {
         UIA_CONTROLTYPE_ID.UIA_ButtonControlTypeId => "Button",
         UIA_CONTROLTYPE_ID.UIA_CalendarControlTypeId => "Calendar",
@@ -2056,6 +2367,7 @@ return Task.FromResult<UiElement?>(null);
         UIA_CONTROLTYPE_ID.UIA_DataGridControlTypeId => "DataGrid",
         UIA_CONTROLTYPE_ID.UIA_DataItemControlTypeId => "DataItem",
         UIA_CONTROLTYPE_ID.UIA_DocumentControlTypeId => "Document",
+        UIA_CONTROLTYPE_ID.UIA_CustomControlTypeId => "Custom",
         UIA_CONTROLTYPE_ID.UIA_SplitButtonControlTypeId => "SplitButton",
         UIA_CONTROLTYPE_ID.UIA_WindowControlTypeId => "Window",
         UIA_CONTROLTYPE_ID.UIA_PaneControlTypeId => "Pane",
@@ -2094,6 +2406,7 @@ return Task.FromResult<UiElement?>(null);
         "TreeItem" => (int)UIA_CONTROLTYPE_ID.UIA_TreeItemControlTypeId,
         "Group" => (int)UIA_CONTROLTYPE_ID.UIA_GroupControlTypeId,
         "DataGrid" => (int)UIA_CONTROLTYPE_ID.UIA_DataGridControlTypeId,
+        "Custom" => (int)UIA_CONTROLTYPE_ID.UIA_CustomControlTypeId,
         "Window" => (int)UIA_CONTROLTYPE_ID.UIA_WindowControlTypeId,
         "Pane" => (int)UIA_CONTROLTYPE_ID.UIA_PaneControlTypeId,
         "Table" => (int)UIA_CONTROLTYPE_ID.UIA_TableControlTypeId,

@@ -20,7 +20,7 @@ internal static class AuditArea
     /// <summary>Keyboard reachability (and, in <see cref="AuditProfile.Thorough"/>, tab-order coherence).</summary>
     public const string Keyboard = "keyboard";
 
-    /// <summary>Screen-reader affordances (static readiness proxy over the UIA tree).</summary>
+    /// <summary>Static screen-reader readiness proxy over the UIA tree (does not drive assistive technology).</summary>
     public const string ScreenReader = "screen-reader";
 
     /// <summary>WCAG color-contrast of visible text. Requires a captured-pixel provider.</summary>
@@ -29,21 +29,12 @@ internal static class AuditArea
     /// <summary>Control-type / role clarity on actionable elements.</summary>
     public const string Roles = "roles";
 
-    /// <summary>
-    /// UIA event/interaction behavior. Reserved extension point (see <see cref="UiAudit.EventsAreaEngine"/>
-    /// TODO). Not yet user-selectable — its engine is a registered no-op until dynamic event
-    /// validation lands, so it is intentionally excluded from <see cref="Implemented"/> and
-    /// <see cref="Selectable"/> and <c>--area events</c> is rejected as invalid for now.
-    /// </summary>
-    public const string Events = "events";
-
     /// <summary>Meta-selector expanding to every <see cref="Implemented"/> area.</summary>
     public const string All = "all";
 
     /// <summary>
     /// User-facing areas with a registered, active engine, in stable display order. Extend this
-    /// (and DI) when adding a new area engine. Reserved no-op areas (e.g. <see cref="Events"/>) are
-    /// intentionally omitted until they produce findings.
+    /// (and DI) when adding a new area engine.
     /// </summary>
     public static readonly IReadOnlyList<string> Implemented =
         [Names, Keyboard, ScreenReader, Contrast, Roles];

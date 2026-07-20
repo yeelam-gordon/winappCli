@@ -17,6 +17,11 @@ internal static class ContrastAnalyzer
     /// <summary>Pixels with an alpha below this are treated as transparent and ignored.</summary>
     private const byte AlphaOpaqueThreshold = 250;
 
+    /// <summary>Maximum sampled pixels for one candidate rectangle.</summary>
+    internal const int MaxSamplePixels = 65_536;
+
+    private const int LuminanceBinCount = 4096;
+
     /// <summary>
     /// A rect is "not measured" (returns null) unless at least this fraction of its pixels are
     /// opaque. Guards transparent/layered regions that would otherwise be scored as raw (often
@@ -50,13 +55,28 @@ internal static class ContrastAnalyzer
     /// trust (sparse-glyph guard). This deliberately avoids fabricating a low ratio for sparse or
     /// transparent content.
     /// </summary>
-    public static double? ComputeContrastRatio(ReadOnlySpan<byte> bgra, int width, int height, PixelRect rect)
+    public static double? ComputeContrastRatio(
+        ReadOnlySpan<byte> bgra,
+        int width,
+        int height,
+        PixelRect rect)
+        => ComputeContrastRatio(bgra, width, height, rect, MaxSamplePixels, CancellationToken.None);
+
+    public static double? ComputeContrastRatio(
+        ReadOnlySpan<byte> bgra,
+        int width,
+        int height,
+        PixelRect rect,
+        int maxSamplePixels,
+        CancellationToken cancellationToken)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxSamplePixels, 1);
+
         if (width <= 0 || height <= 0 || rect.Width <= 0 || rect.Height <= 0)
         {
             return null;
         }
-        if ((long)width * height * 4 > bgra.Length)
+        if ((long)width * height > bgra.Length / 4L)
         {
             return null;
         }
@@ -64,24 +84,41 @@ internal static class ContrastAnalyzer
         // Clamp the region to the buffer bounds.
         var x0 = Math.Max(0, rect.X);
         var y0 = Math.Max(0, rect.Y);
-        var x1 = Math.Min(width, rect.X + rect.Width);
-        var y1 = Math.Min(height, rect.Y + rect.Height);
+        var x1 = (int)Math.Min(width, (long)rect.X + rect.Width);
+        var y1 = (int)Math.Min(height, (long)rect.Y + rect.Height);
         if (x1 <= x0 || y1 <= y0)
         {
             return null;
         }
 
-        var totalRectPixels = (x1 - x0) * (y1 - y0);
+        var regionWidth = x1 - x0;
+        var regionHeight = y1 - y0;
+        var (sampleWidth, sampleHeight) = GetSampleGridSize(
+            regionWidth,
+            regionHeight,
+            maxSamplePixels);
+        var totalSamples = sampleWidth * sampleHeight;
 
-        // Collect luminances of opaque pixels only. Transparent/layered pixels are skipped so a
-        // transparent overlay is never scored as its raw (often black) RGB.
-        var luminances = new double[totalRectPixels];
+        // Accumulate exact luminance sums in a fixed-size histogram. The stratified grid bounds
+        // CPU while preserving deterministic coverage across the full rectangle; the histogram
+        // bounds memory and avoids sorting one value per pixel.
+        Span<int> counts = stackalloc int[LuminanceBinCount];
+        Span<double> sums = stackalloc double[LuminanceBinCount];
+        counts.Clear();
+        sums.Clear();
         var opaqueCount = 0;
-        for (var y = y0; y < y1; y++)
+        var totalLuminance = 0.0;
+        var minLuminance = double.MaxValue;
+        var maxLuminance = double.MinValue;
+
+        for (var sampleY = 0; sampleY < sampleHeight; sampleY++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
+            var y = y0 + (int)(((2L * sampleY + 1) * regionHeight) / (2L * sampleHeight));
             var rowOffset = y * width * 4;
-            for (var x = x0; x < x1; x++)
+            for (var sampleX = 0; sampleX < sampleWidth; sampleX++)
             {
+                var x = x0 + (int)(((2L * sampleX + 1) * regionWidth) / (2L * sampleWidth));
                 var p = rowOffset + x * 4;
                 // BGRA order.
                 var b = bgra[p];
@@ -92,21 +129,28 @@ internal static class ContrastAnalyzer
                 {
                     continue;
                 }
-                luminances[opaqueCount++] = RelativeLuminance(r, g, b);
+
+                var luminance = RelativeLuminance(r, g, b);
+                var bin = Math.Min(
+                    LuminanceBinCount - 1,
+                    (int)(luminance * (LuminanceBinCount - 1)));
+                counts[bin]++;
+                sums[bin] += luminance;
+                opaqueCount++;
+                totalLuminance += luminance;
+                minLuminance = Math.Min(minLuminance, luminance);
+                maxLuminance = Math.Max(maxLuminance, luminance);
             }
         }
 
         // Mostly transparent (or fully) → not measured.
-        if (opaqueCount == 0 || (double)opaqueCount / totalRectPixels < MinOpaqueFraction)
+        if (opaqueCount == 0 || (double)opaqueCount / totalSamples < MinOpaqueFraction)
         {
             return null;
         }
 
-        var opaque = luminances.AsSpan(0, opaqueCount);
-        opaque.Sort();
-
         // Effectively uniform region (a solid fill, not text) → not measured.
-        if (opaque[opaqueCount - 1] - opaque[0] < UniformLuminanceEpsilon)
+        if (maxLuminance - minLuminance < UniformLuminanceEpsilon)
         {
             return null;
         }
@@ -114,7 +158,13 @@ internal static class ContrastAnalyzer
         // Separate a background cluster from a foreground (glyph) cluster via a 1D Otsu split that
         // maximizes between-class variance, then require the minority (glyph) cluster to clear a
         // small coverage floor. This stops short text from collapsing to a fabricated ~1:1.
-        var (lowMean, lowCount, highMean, highCount) = OtsuSplit(opaque);
+        var split = OtsuSplit(counts, sums, opaqueCount, totalLuminance);
+        if (split is not { } clusters)
+        {
+            return null;
+        }
+
+        var (lowMean, lowCount, highMean, highCount) = clusters;
         var minorityCount = Math.Min(lowCount, highCount);
         var floor = Math.Max(MinForegroundPixels, (int)Math.Ceiling(opaqueCount * MinForegroundFraction));
         if (minorityCount < floor)
@@ -126,48 +176,81 @@ internal static class ContrastAnalyzer
     }
 
     /// <summary>
-    /// 1D two-class split (Otsu) over a sorted span of luminances. Returns the mean and pixel
-    /// count of the low and high clusters using the split index that maximizes between-class
-    /// variance.
+    /// Return the deterministic sample-grid dimensions for a region. The product never exceeds
+    /// <paramref name="maxSamplePixels"/> and tracks the source aspect ratio.
     /// </summary>
-    private static (double LowMean, int LowCount, double HighMean, int HighCount) OtsuSplit(ReadOnlySpan<double> sorted)
+    internal static (int Width, int Height) GetSampleGridSize(
+        int width,
+        int height,
+        int maxSamplePixels = MaxSamplePixels)
     {
-        var n = sorted.Length;
-        var total = 0.0;
-        for (var i = 0; i < n; i++)
+        ArgumentOutOfRangeException.ThrowIfLessThan(maxSamplePixels, 1);
+        if (width <= 0 || height <= 0)
         {
-            total += sorted[i];
+            return (0, 0);
         }
 
-        var sumLow = 0.0;
-        var bestBetween = -1.0;
-        var bestIdx = 0; // low cluster = [0..bestIdx]
-        for (var i = 0; i < n - 1; i++)
+        if ((long)width * height <= maxSamplePixels)
         {
-            sumLow += sorted[i];
-            var wLow = i + 1;
-            var wHigh = n - wLow;
-            var meanLow = sumLow / wLow;
-            var meanHigh = (total - sumLow) / wHigh;
+            return (width, height);
+        }
+
+        var idealWidth = (int)Math.Round(
+            Math.Sqrt(maxSamplePixels * (double)width / height));
+        var sampleWidth = Math.Clamp(idealWidth, 1, Math.Min(width, maxSamplePixels));
+        var sampleHeight = Math.Clamp(maxSamplePixels / sampleWidth, 1, height);
+        return (sampleWidth, sampleHeight);
+    }
+
+    /// <summary>
+    /// 1D two-class split (Otsu) over fixed luminance bins. Returns exact means from the sampled
+    /// luminance sums and counts using the split that maximizes between-class variance.
+    /// </summary>
+    private static (double LowMean, int LowCount, double HighMean, int HighCount)? OtsuSplit(
+        ReadOnlySpan<int> counts,
+        ReadOnlySpan<double> sums,
+        int totalCount,
+        double totalSum)
+    {
+        var sumLow = 0.0;
+        var countLow = 0;
+        var bestBetween = -1.0;
+        var bestLowSum = 0.0;
+        var bestLowCount = 0;
+
+        for (var i = 0; i < counts.Length - 1; i++)
+        {
+            countLow += counts[i];
+            sumLow += sums[i];
+            var countHigh = totalCount - countLow;
+            if (countLow == 0 || countHigh == 0)
+            {
+                continue;
+            }
+
+            var meanLow = sumLow / countLow;
+            var meanHigh = (totalSum - sumLow) / countHigh;
             var diff = meanLow - meanHigh;
-            var between = (double)wLow * wHigh * diff * diff;
+            var between = (double)countLow * countHigh * diff * diff;
             if (between > bestBetween)
             {
                 bestBetween = between;
-                bestIdx = i;
+                bestLowSum = sumLow;
+                bestLowCount = countLow;
             }
         }
 
-        var lowCount = bestIdx + 1;
-        var highCount = n - lowCount;
-        var lowSum = 0.0;
-        for (var i = 0; i < lowCount; i++)
+        if (bestLowCount == 0 || bestLowCount == totalCount)
         {
-            lowSum += sorted[i];
+            return null;
         }
-        var lowMean = lowSum / lowCount;
-        var highMean = (total - lowSum) / highCount;
-        return (lowMean, lowCount, highMean, highCount);
+
+        var highCount = totalCount - bestLowCount;
+        return (
+            bestLowSum / bestLowCount,
+            bestLowCount,
+            (totalSum - bestLowSum) / highCount,
+            highCount);
     }
 
     /// <summary>
@@ -192,5 +275,5 @@ internal static class ContrastAnalyzer
     }
 
     private static double Linearize(double c)
-        => c <= 0.03928 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
+        => c <= 0.04045 ? c / 12.92 : Math.Pow((c + 0.055) / 1.055, 2.4);
 }

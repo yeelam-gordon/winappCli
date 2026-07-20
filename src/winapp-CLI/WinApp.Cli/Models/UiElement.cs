@@ -67,6 +67,10 @@ internal sealed class UiElement
     /// <summary>HWND of the window this element belongs to. Set on flat result lists; null on nested output (window context is the parent in the tree).</summary>
     public long? WindowHandle { get; set; }
 
+    /// <summary>Native HWND boundary exposed by the UIA provider; audit tree walks inherit the nearest ancestor boundary when absent.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    public long? NativeWindowHandle { get; set; }
+
     /// <summary>
     /// Nearest ancestor that supports an invoke pattern (InvokePattern, TogglePattern, etc.).
     /// Populated during search when the matched element itself is not invokable.

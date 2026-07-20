@@ -206,15 +206,22 @@ winapp ui audit -a myapp --json -o audit.json
 # Scope to specific areas (repeatable). Areas: names, keyboard, screen-reader, contrast, roles
 winapp ui audit -a myapp --area names --area keyboard
 
-# Go deeper: 'thorough' adds heuristic rules (e.g. tab-order coherence) and applies WCAG AAA contrast
+# Go deeper: 'thorough' (alias: 'aaa') adds heuristic rules and applies WCAG AAA contrast
 winapp ui audit -a myapp --level thorough
 
-# Contrast only, at the default basic level (WCAG AA thresholds)
-winapp ui audit -a myapp --area contrast
+# Contrast only, at the default basic level (alias: 'aa'; WCAG AA thresholds)
+winapp ui audit -a myapp --area contrast --level aa
 ```
 - `--area` selects one or more audit areas (default: all). Contrast requires a window pixel capture; it is measured only when the `contrast` area is selected.
-- `--level basic` (default) runs fast essential rules with WCAG **AA** contrast thresholds (normal 4.5, large 3.0); `--level thorough` adds heuristic/deeper rules (e.g. keyboard tab-order) and applies WCAG **AAA** contrast thresholds (normal 7.0, large 4.5).
-- Non-client chrome (title-bar caption buttons, scrollbar parts) is suppressed, and the same defect surfaced by multiple areas is de-duplicated, so counts aren't inflated. Elements on a different window/HWND than the captured one are reported as "not measured" for contrast rather than mis-scored.
+- `--level basic` (default; alias `aa`) runs fast essential rules with WCAG **AA** contrast thresholds (normal 4.5, large 3.0); `--level thorough` (alias `aaa`) adds heuristic/deeper rules (e.g. keyboard tab-order) and applies WCAG **AAA** contrast thresholds (normal 7.0, large 4.5).
+- Non-client chrome (title-bar caption buttons, scrollbar parts) is suppressed from locale-invariant UIA `ControlType` ancestry rather than English accessible names, including for selector-scoped audits. Providers that flatten or omit those relationships remain auditable instead of being guessed from localized text. The same defect surfaced by multiple areas is de-duplicated, so counts aren't inflated.
+- The audit is a static snapshot of the UI Automation elements currently exposed by the target window. The `screen-reader` area checks static UIA name, role, and focus readiness; it does not drive a screen reader or navigate application states.
+- A supplied selector that no longer resolves returns `element_not_found`; the audit never widens to the root window. UIA traversal and app-window discovery are cooperatively cancellable and bounded. Provider child/sibling failures, depth truncation, and element/time limits become explicit audit failures. Checks occur between provider/native calls; a call already in progress cannot be forcibly interrupted.
+- Contrast capture uses Windows.Graphics.Capture only, rejects captures above 16,777,216 pixels before large frame/buffer allocations, and shares a 10-second cooperative capture-and-analysis budget. The audit does not use the potentially blocking `PrintWindow` fallback retained by the standalone screenshot command, so unavailable or failed capture is fail-closed.
+- Contrast analysis uses at most 65,536 deterministic samples per candidate and 4,194,304 samples per audit with a fixed luminance histogram. It considers provider `Text` nodes plus common controls that render their own accessible `Name`/`Value` (including populated edits and leaf/interactive UIA `Custom` controls), while preferring visible child `Text` nodes to avoid duplicates. Visible provider text with zero/invalid bounds remains eligible and fails as unmeasured. The audit uses the normal-text threshold because UIA bounds do not reliably expose glyph size.
+- Human output and JSON `summary.contrast` report `attempted`, `measured`, and `unmeasured` candidate counts. Source-window boundaries prevent pixels from another top-level window from being substituted, while child native HWND controls remain eligible for the root capture. Detailed contrast findings are capped at 100 plus an aggregate omission finding, while coverage counts remain complete. Every unmeasured eligible candidate is a failure and exits non-zero. A view with no eligible visible text candidates is reported explicitly and is not itself a failure.
+- If no UIA elements are found, the audit reports a failure instead of a clean result.
+- Summary `pass` counts are successful individual rule checks, not elements. This command is quick heuristic lint, not WCAG or accessibility certification. Supplement it with manual testing and maintained tools such as [Accessibility Insights for Windows](https://accessibilityinsights.io/docs/windows/overview/) or [Axe.Windows](https://github.com/microsoft/axe-windows) for comprehensive rule coverage.
 
 ## Tips
 - Use `--interactive` with `inspect` as your first command — it shows only what you can click

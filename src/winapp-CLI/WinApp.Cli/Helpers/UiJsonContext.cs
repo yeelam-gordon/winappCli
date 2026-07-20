@@ -41,6 +41,7 @@ namespace WinApp.Cli.Helpers;
 [JsonSerializable(typeof(WindowInfo[]))]
 [JsonSerializable(typeof(UiAuditResult))]
 [JsonSerializable(typeof(UiAuditSummary))]
+[JsonSerializable(typeof(UiAuditContrastSummary))]
 [JsonSerializable(typeof(UiAuditIssue))]
 [JsonSerializable(typeof(UiAuditIssue[]))]
 [JsonSourceGenerationOptions(
@@ -193,7 +194,9 @@ internal sealed class UiGetValueResult
 {
     public string ElementId { get; set; } = "";
     public string? Text { get; set; }
-}internal sealed class UiScrollResult
+}
+
+internal sealed class UiScrollResult
 {
     public string ElementId { get; set; } = "";
     public string? Direction { get; set; }
@@ -262,18 +265,31 @@ internal sealed class UiAuditResult
 /// <summary>Roll-up counts across all evaluated rule checks.</summary>
 internal sealed class UiAuditSummary
 {
-    /// <summary>Number of individual rule checks that passed.</summary>
+    /// <summary>Number of individual rule checks that passed (not the number of elements).</summary>
     public int Pass { get; set; }
     /// <summary>Number of warn-severity issues.</summary>
     public int Warn { get; set; }
     /// <summary>Number of fail-severity issues (drives the non-zero CI exit code).</summary>
     public int Fail { get; set; }
+    /// <summary>Contrast measurement coverage, present only when the contrast area runs.</summary>
+    public UiAuditContrastSummary? Contrast { get; set; }
+}
+
+/// <summary>Coverage accounting for eligible visible text considered by the contrast area.</summary>
+internal sealed class UiAuditContrastSummary
+{
+    /// <summary>Number of eligible text candidates for which measurement was attempted.</summary>
+    public int Attempted { get; set; }
+    /// <summary>Number of candidates that produced a reliable contrast ratio.</summary>
+    public int Measured { get; set; }
+    /// <summary>Number of candidates that could not be reliably measured.</summary>
+    public int Unmeasured { get; set; }
 }
 
 /// <summary>A single accessibility/contrast finding.</summary>
 internal sealed class UiAuditIssue
 {
-    /// <summary>Rule identifier: names, keyboard, roles, tab-order, contrast.</summary>
+    /// <summary>Rule identifier: audit, names, keyboard, screen-reader, roles, tab-order, or contrast.</summary>
     public string RuleId { get; set; } = "";
     /// <summary>"fail" or "warn".</summary>
     public string Severity { get; set; } = "";

@@ -420,6 +420,28 @@ winapp ui list-windows                                      # all windows (no fi
 winapp ui list-windows --show-hidden                        # include invisible zero-size windows
 ```
 
+### audit
+Run quick heuristic lint against the UI Automation elements currently exposed by the target window.
+```bash
+winapp ui audit -a myapp                                    # all areas, basic/AA level
+winapp ui audit -a myapp --area names --area keyboard
+winapp ui audit -a myapp --area contrast --level aaa --json -o audit.json
+```
+
+- Areas are `names`, `keyboard`, `screen-reader`, `contrast`, `roles`, or `all`; repeat `--area` to combine them.
+- Levels are `basic`/`aa` (WCAG AA contrast thresholds) and `thorough`/`aaa` (deeper heuristic checks and WCAG AAA contrast thresholds).
+- The `screen-reader` area statically checks UIA name, role, and focus readiness. It does not drive assistive technology or navigate application states.
+- Title-bar and scrollbar machinery is suppressed using locale-invariant UIA `ControlType` ancestry, never English accessible-name text. Selector-scoped audits preserve that ancestor context. If a provider flattens or omits the structural relationship, the element remains auditable rather than being guessed from a localized name.
+- A supplied selector scopes the audit to that element. If it no longer resolves, the command returns `element_not_found`; it never widens the audit to the root window.
+- UIA traversal and related app-window discovery are cooperatively cancellable and bounded to 10,000 elements, 30 seconds, and 32 detailed traversal diagnostics. Reaching a bound, depth truncation, or a provider child/sibling enumeration failure is reported as an explicit audit failure rather than a clean partial result. Cancellation and deadline checks occur between provider/native calls; a call already in progress cannot be forcibly interrupted.
+- Contrast capture uses Windows.Graphics.Capture only. It rejects captures above 16,777,216 pixels before frame-pool, staging-texture, or managed-buffer allocation, and capture plus analysis has a 10-second cooperative budget. The audit deliberately does not enter the potentially blocking `PrintWindow` fallback used by the standalone screenshot command; unavailable, over-limit, or failed capture is reported fail-closed.
+- Contrast analysis uses at most 65,536 deterministic samples per candidate and 4,194,304 samples per audit, plus a fixed luminance histogram instead of allocating or sorting every pixel. The audit uses the normal-text threshold because UIA bounds do not reliably expose glyph size.
+- Eligible contrast content includes provider-exposed `Text` plus common controls that render their own accessible `Name`/`Value` (for example buttons, populated edits, and leaf/interactive UIA `Custom` controls). When a provider also exposes a visible child `Text` node, only that child is sampled to avoid duplicate scoring. Visible provider text with zero or invalid bounds remains eligible and is reported unmeasured rather than disappearing from coverage.
+- Human output and JSON `summary.contrast` expose `attempted`, `measured`, and `unmeasured` eligible-text counts. Source-window boundaries are preserved, so a candidate from another top-level window is never sampled against the captured buffer, while child native HWND controls remain eligible for the root capture. Detailed contrast findings are capped at 100 plus an aggregate omission finding, while coverage counts remain complete. Every unmeasured eligible candidate is a failure and makes the command exit non-zero; this includes capture, bounds, cross-window, reliability, and bounded-analysis failures.
+- Having no eligible visible text candidates is reported explicitly and is not itself a failure. Discovering no UIA elements at all remains an incomplete audit and exits non-zero. Summary `pass` counts are successful rule checks, not elements.
+
+Provider exposure, pixel clustering, rendered-state timing, and bounding-box font-size estimation remain heuristics. This command is a current-view linting aid, not WCAG or accessibility certification. Supplement it with manual testing and maintained tools such as [Accessibility Insights for Windows](https://accessibilityinsights.io/docs/windows/overview/) or [Axe.Windows](https://github.com/microsoft/axe-windows) for comprehensive rule coverage.
+
 ## Framework Support
 
 | Framework | inspect | search | invoke | set-value | screenshot |

@@ -23,6 +23,12 @@ internal interface IUiAutomationService
     List<(nint Hwnd, int Pid, string Title)> FindWindowsByPid(int pid);
     
     Task<UiElement[]> InspectAsync(UiSessionInfo session, string? elementId, int depth, CancellationToken ct);
+    Task<UiInspectionResult> InspectAsync(
+        UiSessionInfo session,
+        string? elementId,
+        int depth,
+        UiInspectionOptions options,
+        CancellationToken ct);
     Task<UiElement[]> InspectAncestorsAsync(UiSessionInfo session, string elementId, CancellationToken ct);
     Task<UiElement[]> SearchAsync(UiSessionInfo session, SelectorExpression selector, int maxResults, CancellationToken ct);
     Task<UiElement?> FindSingleElementAsync(UiSessionInfo session, SelectorExpression selector, CancellationToken ct);

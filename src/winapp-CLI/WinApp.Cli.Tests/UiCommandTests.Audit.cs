@@ -3,6 +3,7 @@
 
 using WinApp.Cli.Commands;
 using WinApp.Cli.Models;
+using WinApp.Cli.Services;
 
 namespace WinApp.Cli.Tests;
 
@@ -14,6 +15,54 @@ public partial class UiCommandTests
         var command = GetRequiredService<UiAuditCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["--json"]);
         Assert.AreEqual(1, exitCode);
+    }
+
+    [TestMethod]
+    public async Task Audit_MissingSelectorTarget_HumanReturnsElementNotFound()
+    {
+        _fakeUia.InspectResult = [];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command,
+            ["#Missing", "-a", "TestApp"]);
+
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(
+            ConsoleStdErr.ToString(),
+            "No element found matching '#Missing'. The UI may have changed");
+        Assert.AreEqual(string.Empty, TestAnsiConsole.Output);
+    }
+
+    [TestMethod]
+    [DoNotParallelize]
+    public async Task Audit_MissingSelectorTarget_JsonReturnsExactElementNotFound()
+    {
+        _fakeUia.InspectResult = [];
+        var originalError = Console.Error;
+        using var jsonError = new StringWriter();
+        try
+        {
+            Console.SetError(jsonError);
+            var command = GetRequiredService<UiAuditCommand>();
+            var exitCode = await ParseAndInvokeWithCaptureAsync(
+                command,
+                ["#Missing", "-a", "TestApp", "--json"]);
+
+            Assert.AreEqual(1, exitCode);
+            using var payload = System.Text.Json.JsonDocument.Parse(jsonError.ToString());
+            var error = payload.RootElement.GetProperty("error");
+            Assert.AreEqual("element_not_found", error.GetProperty("code").GetString());
+            Assert.AreEqual(
+                "No element found matching '#Missing'",
+                error.GetProperty("message").GetString());
+            Assert.AreEqual("#Missing", error.GetProperty("selector").GetString());
+            Assert.AreEqual(string.Empty, TestAnsiConsole.Output);
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
     }
 
     [TestMethod]
@@ -52,11 +101,23 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
     public async Task Audit_InvalidLevel_ReturnsError()
     {
-        var command = GetRequiredService<UiAuditCommand>();
-        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--level", "deep", "--json"]);
-        Assert.AreEqual(1, exitCode);
+        var originalError = Console.Error;
+        using var jsonError = new StringWriter();
+        try
+        {
+            Console.SetError(jsonError);
+            var command = GetRequiredService<UiAuditCommand>();
+            var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--level", "deep", "--json"]);
+            Assert.AreEqual(1, exitCode);
+            StringAssert.Contains(jsonError.ToString(), "\"code\": \"invalid_arguments\"");
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
     }
 
     [TestMethod]
@@ -78,7 +139,7 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
-    public async Task Audit_ContrastCaptureUnavailable_SkipsContrastGracefully()
+    public async Task Audit_ContrastCaptureUnavailable_FailsClosed()
     {
         _fakeUia.InspectResult =
         [
@@ -89,9 +150,103 @@ public partial class UiCommandTests
         var command = GetRequiredService<UiAuditCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "contrast", "--json"]);
 
-        // No fail-severity issues since contrast could not be measured.
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "\"fail\": 1");
+        StringAssert.Contains(TestAnsiConsole.Output, "window capture or bounded pixel analysis did not complete");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"attempted\": 1");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"measured\": 0");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"unmeasured\": 1");
+    }
+
+    [TestMethod]
+    public async Task Audit_ContrastVisibleTextWithInvalidBounds_FailsClosed()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement
+            {
+                Id = "e0", Type = "Text", Name = "Hello", Width = 0, Height = 16, Selector = "hello",
+            },
+        ];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command, ["-a", "TestApp", "--area", "contrast", "--json"]);
+
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "\"selector\": \"hello\"");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"attempted\": 1");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"measured\": 0");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"unmeasured\": 1");
+    }
+
+    [TestMethod]
+    public async Task Audit_ContrastSuccessfulCaptureWithNoMeasurableRatios_FailsClosed()
+    {
+        _fakeSession.SessionResult = new UiSessionInfo
+        {
+            ProcessId = 1234,
+            ProcessName = "TestApp",
+            WindowTitle = "Test Window",
+            WindowHandle = 100,
+        };
+
+        const int w = 20, h = 20;
+        var buf = new byte[w * h * 4];
+        for (var i = 0; i < w * h; i++)
+        {
+            buf[i * 4 + 0] = 255;
+            buf[i * 4 + 1] = 255;
+            buf[i * 4 + 2] = 255;
+            buf[i * 4 + 3] = 255;
+        }
+        _fakeUia.WindowCaptureResult = (buf, w, h, 0, 0);
+        _fakeUia.InspectResult =
+        [
+            new UiElement
+            {
+                Id = "e0", Type = "Text", Name = "Uniform", Width = w, Height = h,
+                WindowHandle = 100, Selector = "uniform",
+            },
+        ];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command, ["-a", "TestApp", "--area", "contrast", "--json"]);
+
+        var output = TestAnsiConsole.Output;
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(output, "\"fail\": 1");
+        StringAssert.Contains(output, "\"warn\": 0");
+        StringAssert.Contains(output, "\"attempted\": 1");
+        StringAssert.Contains(output, "\"measured\": 0");
+        StringAssert.Contains(output, "\"unmeasured\": 1");
+        StringAssert.Contains(output, "\"selector\": \"uniform\"");
+        StringAssert.Contains(output, "unsuitable for reliable analysis");
+    }
+
+    [TestMethod]
+    public async Task Audit_ContrastWithNoEligibleTextCandidates_IsComplete()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement { Id = "e0", Type = "Window", Name = "App", IsEnabled = true },
+            new UiElement { Id = "e1", Type = "Image", Name = "Logo", Width = 100, Height = 30 },
+        ];
+        _fakeUia.WindowCaptureException = new InvalidOperationException("capture should not be needed");
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command, ["-a", "TestApp", "--area", "contrast"]);
+        var jsonExitCode = await ParseAndInvokeWithCaptureAsync(
+            command, ["-a", "TestApp", "--area", "contrast", "--json"]);
+
         Assert.AreEqual(0, exitCode);
-        StringAssert.Contains(TestAnsiConsole.Output, "\"fail\": 0");
+        Assert.AreEqual(0, jsonExitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "Contrast coverage: no eligible visible text candidates.");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"attempted\": 0");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"measured\": 0");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"unmeasured\": 0");
     }
 
     [TestMethod]
@@ -144,11 +299,225 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
     public async Task Audit_InvalidArea_ReturnsError()
     {
+        var originalError = Console.Error;
+        using var jsonError = new StringWriter();
+        try
+        {
+            Console.SetError(jsonError);
+            var command = GetRequiredService<UiAuditCommand>();
+            var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "bogus", "--json"]);
+            Assert.AreEqual(1, exitCode);
+            StringAssert.Contains(jsonError.ToString(), "\"code\": \"invalid_arguments\"");
+        }
+        finally
+        {
+            Console.SetError(originalError);
+        }
+    }
+
+    [TestMethod]
+    public async Task Audit_LevelAliases_AreAccepted()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement { Id = "e0", Type = "Window", Name = "App", IsEnabled = true },
+        ];
+
         var command = GetRequiredService<UiAuditCommand>();
-        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "bogus", "--json"]);
+        var aaExit = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "names", "--level", "aa", "--json"]);
+        var aaaExit = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "names", "--level", "aaa", "--json"]);
+
+        Assert.AreEqual(0, aaExit);
+        Assert.AreEqual(0, aaaExit);
+    }
+
+    [TestMethod]
+    public async Task Audit_ZeroElements_FailsInsteadOfReportingClean()
+    {
+        _fakeUia.InspectResult = [];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "names", "--json"]);
+
         Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "\"ruleId\": \"audit\"");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"fail\": 1");
+        StringAssert.Contains(TestAnsiConsole.Output, "No UI Automation elements were discovered");
+    }
+
+    [TestMethod]
+    public async Task Audit_TraversalDiagnostics_FailAndAreDeterministicallyOrdered()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement { Id = "e0", Type = "Window", Name = "App", IsEnabled = true },
+        ];
+        _fakeUia.InspectIssues =
+        [
+            new UiInspectionIssue
+            {
+                Code = UiInspectionIssueCodes.SiblingEnumeration,
+                Message = "Sibling enumeration failed.",
+                Selector = "z-selector",
+            },
+            new UiInspectionIssue
+            {
+                Code = UiInspectionIssueCodes.ChildEnumeration,
+                Message = "Child enumeration failed.",
+                Selector = "a-selector",
+            },
+        ];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command,
+            ["-a", "TestApp", "--area", "names", "--json"]);
+
+        Assert.AreEqual(1, exitCode);
+        var output = TestAnsiConsole.Output;
+        StringAssert.Contains(output, "\"fail\": 2");
+        var childIndex = output.IndexOf("Child enumeration failed.", StringComparison.Ordinal);
+        var siblingIndex = output.IndexOf("Sibling enumeration failed.", StringComparison.Ordinal);
+        Assert.IsTrue(childIndex >= 0 && siblingIndex > childIndex);
+        Assert.AreEqual(UiAuditCommand.AuditMaxElements, _fakeUia.LastInspectOptions!.MaxElements);
+        Assert.AreEqual(UiAuditCommand.AuditMaxTraversalDuration, _fakeUia.LastInspectOptions.MaxDuration);
+        Assert.IsFalse(_fakeUia.LastInspectOptions.PromoteUniqueAutomationIds);
+        Assert.IsTrue(_fakeUia.LastInspectOptions.IncludeScopedAncestorContext);
+    }
+
+    [TestMethod]
+    public async Task Audit_Contrast_ButtonProviderText_IsNotFalselyClean()
+    {
+        _fakeSession.SessionResult = new UiSessionInfo
+        {
+            ProcessId = 1234,
+            ProcessName = "TestApp",
+            WindowTitle = "Test Window",
+            WindowHandle = 100,
+        };
+
+        const int w = 20, h = 20;
+        var buf = new byte[w * h * 4];
+        for (var i = 0; i < w * h; i++)
+        {
+            var value = i < 100 ? (byte)0x99 : (byte)0xFF;
+            buf[i * 4 + 0] = value;
+            buf[i * 4 + 1] = value;
+            buf[i * 4 + 2] = value;
+            buf[i * 4 + 3] = 255;
+        }
+        _fakeUia.WindowCaptureResult = (buf, w, h, 0, 0);
+        _fakeUia.InspectResult =
+        [
+            new UiElement
+            {
+                Id = "e0", Type = "Button", Name = "Save", Width = w, Height = h,
+                WindowHandle = 100, Selector = "save-button",
+            },
+        ];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command,
+            ["-a", "TestApp", "--area", "contrast", "--json"]);
+
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "\"attempted\": 1");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"selector\": \"save-button\"");
+        StringAssert.Contains(TestAnsiConsole.Output, "\"fail\": 1");
+    }
+
+    [TestMethod]
+    public async Task Audit_Contrast_PartialCoverageFailsClosed()
+    {
+        _fakeSession.SessionResult = new UiSessionInfo
+        {
+            ProcessId = 1234,
+            ProcessName = "TestApp",
+            WindowTitle = "Test Window",
+            WindowHandle = 100,
+        };
+
+        const int w = 20, h = 20;
+        var buf = new byte[w * h * 4];
+        for (var i = 0; i < w * h; i++)
+        {
+            var value = i < 100 ? (byte)0x00 : (byte)0xFF;
+            buf[i * 4 + 0] = value;
+            buf[i * 4 + 1] = value;
+            buf[i * 4 + 2] = value;
+            buf[i * 4 + 3] = 255;
+        }
+        _fakeUia.WindowCaptureResult = (buf, w, h, 0, 0);
+        _fakeUia.InspectResult =
+        [
+            new UiElement
+            {
+                Id = "e0", Type = "Text", Name = "Measured", Width = w, Height = 16,
+                WindowHandle = 100, Selector = "measured",
+            },
+            new UiElement
+            {
+                Id = "e1", Type = "Text", Name = "Popup", Width = w, Height = 16,
+                WindowHandle = 200, Selector = "popup",
+            },
+        ];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(
+            command,
+            ["-a", "TestApp", "--area", "contrast", "--json"]);
+
+        Assert.AreEqual(1, exitCode);
+        var output = TestAnsiConsole.Output;
+        StringAssert.Contains(output, "\"pass\": 1");
+        StringAssert.Contains(output, "\"fail\": 1");
+        StringAssert.Contains(output, "\"attempted\": 2");
+        StringAssert.Contains(output, "\"measured\": 1");
+        StringAssert.Contains(output, "\"unmeasured\": 1");
+        StringAssert.Contains(output, "\"selector\": \"popup\"");
+    }
+
+    [TestMethod]
+    public async Task Audit_HumanOutput_ReportsIncompleteContrast()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement { Id = "e0", Type = "Text", Name = "Hello", Width = 100, Height = 16 },
+        ];
+        _fakeUia.WindowCaptureException = new InvalidOperationException("no capture");
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "contrast"]);
+
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "contrast was not measured because window capture");
+        StringAssert.Contains(TestAnsiConsole.Output, "or bounded pixel analysis did not complete.");
+        StringAssert.Contains(TestAnsiConsole.Output, "Contrast coverage: 1 attempted, 0 measured, 1 unmeasured.");
+        StringAssert.Contains(TestAnsiConsole.Output, "0 checks passed");
+    }
+
+    [TestMethod]
+    public async Task Audit_HumanOutput_EscapesSpectreMarkup()
+    {
+        _fakeUia.InspectResult =
+        [
+            new UiElement
+            {
+                Id = "e0", Type = "Button", Name = null, IsEnabled = true,
+                IsKeyboardFocusable = true, Selector = "[btn-x]",
+            },
+        ];
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "names"]);
+
+        Assert.AreEqual(1, exitCode);
+        StringAssert.Contains(TestAnsiConsole.Output, "[btn-x]");
+        StringAssert.Contains(TestAnsiConsole.Output, "Summary:");
     }
 
     [TestMethod]
@@ -176,21 +545,10 @@ public partial class UiCommandTests
     }
 
     [TestMethod]
-    public async Task Audit_AreaEvents_ReturnsError()
+    public async Task Audit_Contrast_ChildNativeHwnd_IsMeasuredAgainstRoot()
     {
-        // events is a reserved no-op area, not user-selectable for now.
-        var command = GetRequiredService<UiAuditCommand>();
-        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "events", "--json"]);
-        Assert.AreEqual(1, exitCode);
-    }
-
-    [TestMethod]
-    public async Task Audit_Contrast_OutOfWindowElement_IsNotMeasured()
-    {
-        // The captured buffer belongs to the session's root window (HWND 100). An element on a
-        // different HWND (a popup, 200) must be marked "not measured" rather than sampled against
-        // the wrong pixels — so it produces no contrast failure even though the buffer is low
-        // contrast. The in-window element IS scored (and fails).
+        // Both elements came from the root inspection (source HWND 100). The provider's child
+        // HWND 200 is still composited into the root capture, so both elements are scored.
         _fakeSession.SessionResult = new UiSessionInfo
         {
             ProcessId = 1234,
@@ -214,19 +572,30 @@ public partial class UiCommandTests
 
         _fakeUia.InspectResult =
         [
-            new UiElement { Id = "e0", Type = "Text", Name = "InWin", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 100, Selector = "in-win" },
-            new UiElement { Id = "e1", Type = "Text", Name = "Popup", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 200, Selector = "popup" },
+            new UiElement { Id = "e0", Type = "Text", Name = "InWin", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 100, NativeWindowHandle = 100, Selector = "in-win" },
+            new UiElement { Id = "e1", Type = "Text", Name = "Hosted", Width = w, Height = 16, X = 0, Y = 0, WindowHandle = 100, NativeWindowHandle = 100, Selector = "hosted" },
         ];
 
         var command = GetRequiredService<UiAuditCommand>();
         var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "contrast", "--json"]);
 
         var output = TestAnsiConsole.Output;
-        Assert.AreEqual(1, exitCode, "the in-window low-contrast text should fail");
-        StringAssert.Contains(output, "\"fail\": 1");
+        Assert.AreEqual(1, exitCode, "both low-contrast candidates should fail");
+        StringAssert.Contains(output, "\"fail\": 2");
+        StringAssert.Contains(output, "\"warn\": 0");
         StringAssert.Contains(output, "\"selector\": \"in-win\"");
-        // The out-of-window popup element must NOT appear as a contrast finding.
-        StringAssert.DoesNotMatch(output, new System.Text.RegularExpressions.Regex("\"selector\":\\s*\"popup\""));
+        StringAssert.Contains(output, "\"selector\": \"hosted\"");
+        StringAssert.Contains(output, "\"attempted\": 2");
+        StringAssert.Contains(output, "\"measured\": 2");
+        StringAssert.Contains(output, "\"unmeasured\": 0");
+    }
+
+    [TestMethod]
+    public void Audit_CaptureWindowCompatibility_DistinguishesChildrenAndModals()
+    {
+        Assert.IsTrue(UiAuditCommand.Handler.IsCaptureCompatibleWindow(100, true, 100));
+        Assert.IsFalse(UiAuditCommand.Handler.IsCaptureCompatibleWindow(100, false, 100));
+        Assert.IsFalse(UiAuditCommand.Handler.IsCaptureCompatibleWindow(200, true, 100));
     }
 
     // A 20x20 buffer whose glyph pixels are mid-grey (#696969, ~5.5:1 on white) — above the AA
@@ -287,5 +656,27 @@ public partial class UiCommandTests
         StringAssert.Contains(output, "\"fail\": 1");
         StringAssert.Contains(output, "AAA");
         StringAssert.Contains(output, "7.0:1");
+    }
+
+    [TestMethod]
+    public async Task Audit_HumanReport_ContrastUnavailable_RendersReadableOutput()
+    {
+        // Without --json the command renders BuildHumanReport. A capture failure must be shown
+        // as an incomplete contrast audit rather than a clean result.
+        _fakeUia.InspectResult =
+        [
+            new UiElement { Id = "e0", Type = "Text", Name = "Hello", Width = 100, Height = 16 },
+        ];
+        _fakeUia.WindowCaptureException = new InvalidOperationException("no capture");
+
+        var command = GetRequiredService<UiAuditCommand>();
+        var exitCode = await ParseAndInvokeWithCaptureAsync(command, ["-a", "TestApp", "--area", "contrast"]);
+
+        Assert.AreEqual(1, exitCode);
+        var output = TestAnsiConsole.Output;
+        StringAssert.Contains(output, "Accessibility audit:");
+        StringAssert.Contains(output, "Contrast coverage: 1 attempted, 0 measured, 1 unmeasured.");
+        StringAssert.Contains(output, "contrast was not measured because");
+        StringAssert.Contains(output, "bounded pixel analysis did not complete");
     }
 }

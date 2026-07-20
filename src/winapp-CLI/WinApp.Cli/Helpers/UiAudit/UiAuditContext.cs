@@ -24,6 +24,9 @@ internal sealed class UiAuditContext
     /// <summary>WCAG contrast threshold for large text.</summary>
     public double LargeContrast { get; init; } = 3.0;
 
+    /// <summary>Target window DPI scale relative to 96 DPI, used to normalize physical UIA bounds.</summary>
+    public double DpiScale { get; init; } = 1.0;
+
     /// <summary>Informational WCAG level ("AA"/"AAA") echoed into messages.</summary>
     public string WcagLevel { get; init; } = "AA";
 
@@ -33,9 +36,4 @@ internal sealed class UiAuditContext
     /// consult it.
     /// </summary>
     public Func<UiElement, double?>? ContrastProvider { get; init; }
-
-    // TODO(time-budget): Carry an optional per-run/per-area time budget here so dynamic areas
-    // (screen-reader, events) can bound how long they interact with the live UI. Plumbed as a
-    // nullable so today's synchronous engines can ignore it.
-    public TimeSpan? TimeBudget { get; init; }
 }

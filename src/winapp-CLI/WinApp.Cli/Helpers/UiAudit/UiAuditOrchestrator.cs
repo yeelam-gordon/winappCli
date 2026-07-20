@@ -20,9 +20,6 @@ internal sealed class UiAuditOrchestrator
         _engines = engines.ToDictionary(e => e.Area, StringComparer.OrdinalIgnoreCase);
     }
 
-    /// <summary>Areas that have a registered engine.</summary>
-    public IReadOnlyCollection<string> AvailableAreas => _engines.Keys;
-
     /// <summary>Whether any of <paramref name="areas"/> needs a contrast pixel capture.</summary>
     public bool AnyRequiresContrastCapture(IEnumerable<string> areas)
         => areas.Any(a => _engines.TryGetValue(a, out var e) && e.RequiresContrastCapture);
@@ -35,6 +32,8 @@ internal sealed class UiAuditOrchestrator
     {
         var issues = new List<UiAuditIssue>();
         var pass = 0;
+        var fail = 0;
+        UiAuditContrastSummary? contrast = null;
 
         foreach (var area in areas)
         {
@@ -46,6 +45,14 @@ internal sealed class UiAuditOrchestrator
             var result = engine.Evaluate(context);
             issues.AddRange(result.Issues);
             pass += result.Summary.Pass;
+            fail += result.Summary.Fail;
+            if (result.Summary.Contrast is { } areaContrast)
+            {
+                contrast ??= new UiAuditContrastSummary();
+                contrast.Attempted += areaContrast.Attempted;
+                contrast.Measured += areaContrast.Measured;
+                contrast.Unmeasured += areaContrast.Unmeasured;
+            }
         }
 
         // Cross-area de-duplication: when several areas surface the SAME underlying defect for the
@@ -57,11 +64,18 @@ internal sealed class UiAuditOrchestrator
         var deduped = Deduplicate(issues);
 
         var warn = deduped.Count(i => i.Severity == UiAuditEngine.SeverityWarn);
-        var fail = deduped.Count(i => i.Severity == UiAuditEngine.SeverityFail);
+        fail -= issues.Count(i => i.Severity == UiAuditEngine.SeverityFail)
+            - deduped.Count(i => i.Severity == UiAuditEngine.SeverityFail);
 
         return new UiAuditResult
         {
-            Summary = new UiAuditSummary { Pass = pass, Warn = warn, Fail = fail },
+            Summary = new UiAuditSummary
+            {
+                Pass = pass,
+                Warn = warn,
+                Fail = fail,
+                Contrast = contrast,
+            },
             Issues = deduped.ToArray(),
         };
     }

@@ -43,8 +43,11 @@ internal static class UiAuditEngine
         /// <summary>WCAG contrast threshold for normal-size text.</summary>
         public double NormalContrast { get; init; } = 4.5;
 
-        /// <summary>WCAG contrast threshold for large text (>= ~24px, or ~18.66px bold).</summary>
+        /// <summary>WCAG contrast threshold for large UIA Text elements (estimated from DPI-normalized bounds).</summary>
         public double LargeContrast { get; init; } = 3.0;
+
+        /// <summary>Target window DPI scale relative to 96 DPI.</summary>
+        public double DpiScale { get; init; } = 1.0;
 
         /// <summary>Informational: "AA" or "AAA".</summary>
         public string WcagLevel { get; init; } = "AA";
@@ -58,10 +61,32 @@ internal static class UiAuditEngine
         "TreeItem", "DataItem", "Slider"
     };
 
-    // ControlTypes that carry visible text worth contrast-checking.
-    private static readonly HashSet<string> TextTypes = new(StringComparer.OrdinalIgnoreCase)
+    // Leaf text providers expose the rendered content directly.
+    private static readonly HashSet<string> LeafTextTypes = new(StringComparer.OrdinalIgnoreCase)
     {
-        "Text", "Document", "Hyperlink"
+        "Text"
+    };
+
+    // Providers differ on whether rendered labels appear as child Text nodes or directly on the
+    // control. These common controls are eligible when they expose non-empty Name/Value content
+    // and no visible Text descendant already represents that content.
+    private static readonly HashSet<string> NamedTextControlTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Button", "CheckBox", "ComboBox", "DataItem", "Document", "Header", "HeaderItem",
+        "Hyperlink", "ListItem", "MenuItem", "RadioButton", "SplitButton", "Tab", "TabItem",
+        "ToolTip", "TreeItem"
+    };
+
+    private static readonly HashSet<string> ValueTextControlTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Edit", "TextBox"
+    };
+
+    // Structural containers can expose InvokePattern as a framework implementation detail. Treat
+    // them as actionable only when they are also keyboard-focusable.
+    private static readonly HashSet<string> ContainerTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "Pane", "Group", "Window"
     };
 
     // Non-client / chrome ControlTypes that are structurally part of the window frame or scroll
@@ -71,34 +96,18 @@ internal static class UiAuditEngine
         "ScrollBar", "Thumb", "TitleBar"
     };
 
-    // System-provided accessible names for scrollbar increment/decrement parts. These are
-    // framework-generated, unambiguous, and effectively never real user-facing control names, so
-    // flagging them is noise. Only unambiguous part names are listed — caption buttons and the
-    // ambiguous bare part names (e.g. "Close", "Page Down") are intentionally left out and covered
-    // structurally by ChromeTypes (ScrollBar/Thumb) + TitleBar ancestry instead. This is only a
-    // fallback for parts exposed as generic Buttons.
-    private static readonly HashSet<string> ChromePartNames = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "Vertical Small Increase", "Vertical Small Decrease",
-        "Vertical Large Increase", "Vertical Large Decrease",
-        "Horizontal Small Increase", "Horizontal Small Decrease",
-        "Horizontal Large Increase", "Horizontal Large Decrease",
-    };
-
-    private const string TitleBarType = "TitleBar";
-
-    /// <summary>Large-text px threshold (WCAG large text ≈ 18pt ≈ 24px).</summary>
-    private const double LargeTextHeightPx = 24.0;
+    internal const int MaxDetailedContrastIssues = 100;
 
     public static bool IsInteractive(UiElement el)
-        => el.IsInvokable || InteractiveTypes.Contains(el.Type);
+        => InteractiveTypes.Contains(el.Type)
+        || (el.IsInvokable && (!ContainerTypes.Contains(el.Type) || el.IsKeyboardFocusable));
 
     /// <summary>
     /// True when the element is non-client window chrome (title-bar / caption buttons) or scroll-bar
     /// part machinery, which the accessibility rules should not flag: these are framework-owned
     /// affordances, keyboard-reachable via the scrollbar/window as a whole, not app content. Detected
-    /// primarily by ControlType (ScrollBar/Thumb/TitleBar) and TitleBar ancestry, with a fallback on
-    /// system-generated part names.
+    /// from locale-invariant ControlType and ancestor relationships. Accessible names are deliberately
+    /// excluded because providers localize them and app controls can legitimately use the same text.
     /// </summary>
     public static bool IsNonClientChrome(UiElement el)
     {
@@ -111,16 +120,11 @@ internal static class UiAuditEngine
         {
             foreach (var ancestor in path)
             {
-                if (string.Equals(ancestor, TitleBarType, StringComparison.OrdinalIgnoreCase))
+                if (ChromeTypes.Contains(ancestor))
                 {
                     return true;
                 }
             }
-        }
-
-        if (!string.IsNullOrWhiteSpace(el.Name) && ChromePartNames.Contains(el.Name.Trim()))
-        {
-            return true;
         }
 
         return false;
@@ -129,7 +133,7 @@ internal static class UiAuditEngine
     /// <summary>
     /// Run the enabled rules over <paramref name="elements"/>. <paramref name="contrastProvider"/>
     /// returns the measured contrast ratio for a text element, or <c>null</c> when it could not be
-    /// measured (in which case the contrast rule is skipped for that element).
+    /// measured.
     /// </summary>
     public static UiAuditResult Run(
         IReadOnlyList<UiElement> elements,
@@ -138,6 +142,28 @@ internal static class UiAuditEngine
     {
         var issues = new List<UiAuditIssue>();
         var pass = 0;
+        var checkContrast = options.Checks.Contains(CheckContrast);
+        var contrastAttempted = 0;
+        var contrastMeasured = 0;
+        var contrastUnmeasured = 0;
+        var contrastCandidates = checkContrast ? GetContrastCandidates(elements) : null;
+        var detailedContrastIssues = 0;
+        var omittedContrastIssues = 0;
+        var contrastFailures = 0;
+
+        void AddContrastIssue(UiAuditIssue issue)
+        {
+            contrastFailures++;
+            if (detailedContrastIssues < MaxDetailedContrastIssues)
+            {
+                issues.Add(issue);
+                detailedContrastIssues++;
+            }
+            else
+            {
+                omittedContrastIssues++;
+            }
+        }
 
         foreach (var el in elements)
         {
@@ -171,13 +197,7 @@ internal static class UiAuditEngine
 
                 if (!string.IsNullOrWhiteSpace(el.Name))
                 {
-                    if (!string.IsNullOrWhiteSpace(el.AutomationId)
-                        && string.Equals(el.Name, el.AutomationId, StringComparison.OrdinalIgnoreCase))
-                    {
-                        issues.Add(Issue(CheckNames, SeverityWarn, el,
-                            $"{Describe(el)} uses its AutomationId as its accessible name. Provide a user-facing label instead of a control identifier."));
-                    }
-                    else if (!string.IsNullOrWhiteSpace(el.ClassName)
+                    if (!string.IsNullOrWhiteSpace(el.ClassName)
                         && string.Equals(el.Name, el.ClassName, StringComparison.OrdinalIgnoreCase))
                     {
                         issues.Add(Issue(CheckNames, SeverityWarn, el,
@@ -230,7 +250,7 @@ internal static class UiAuditEngine
             }
 
             // roles: actionable elements should expose a sensible ControlType (not Custom/Unknown).
-            if (options.Checks.Contains(CheckRoles) && el.IsInvokable && visible)
+            if (options.Checks.Contains(CheckRoles) && interactive && visible)
             {
                 if (HasUnknownRole(el.Type))
                 {
@@ -260,7 +280,9 @@ internal static class UiAuditEngine
 
             if (options.Checks.Contains(CheckScreenReader) && !chrome)
             {
-                if ((interactive || el.IsKeyboardFocusable) && visible && string.IsNullOrWhiteSpace(el.Name))
+                var issueCountBeforeScreenReader = issues.Count;
+                var hasScreenReaderCheck = visible && (interactive || el.IsKeyboardFocusable);
+                if (hasScreenReaderCheck && string.IsNullOrWhiteSpace(el.Name))
                 {
                     issues.Add(Issue(CheckScreenReader, SeverityFail, el,
                         $"{Describe(el)} is reachable by assistive technology but has no accessible name. A screen reader would announce little or nothing useful.",
@@ -289,20 +311,41 @@ internal static class UiAuditEngine
                     issues.Add(Issue(CheckScreenReader, SeverityWarn, el,
                         $"{Describe(el)} has a low-value accessible name that duplicates its role. Screen-reader users need a descriptive label."));
                 }
+
+                if (hasScreenReaderCheck && issues.Count == issueCountBeforeScreenReader)
+                {
+                    pass++;
+                }
             }
 
-            // contrast: text elements must meet the WCAG ratio for their size.
-            if (options.Checks.Contains(CheckContrast) && visible && contrastProvider is not null && IsTextElement(el))
+            // contrast: eligible visible text elements must either be measured or explicitly
+            // reported as unmeasured. This prevents an incomplete contrast run from looking clean.
+            if (checkContrast && contrastCandidates!.Contains(el))
             {
-                var ratio = contrastProvider(el);
-                if (ratio is { } r)
+                contrastAttempted++;
+                var ratio = contrastProvider?.Invoke(el);
+                if (ratio is not { } r)
                 {
-                    var isLarge = el.Height >= LargeTextHeightPx;
+                    contrastUnmeasured++;
+                    var reason = contrastProvider is null
+                        ? "window capture or bounded pixel analysis did not complete"
+                        : "its pixels were outside the capture, unsuitable for reliable analysis, or exceeded the bounded sampling budget";
+                    AddContrastIssue(Issue(CheckContrast, SeverityFail, el,
+                        $"{Describe(el)} contrast was not measured because {reason}."));
+                }
+                else
+                {
+                    contrastMeasured++;
+                    // UIA bounds describe an element, not its glyph metrics: multiline normal text
+                    // can be tall enough to look "large". Without a reliable font-size attribute,
+                    // use the normal-text threshold to avoid false passes.
+                    var isLarge = false;
                     var threshold = isLarge ? options.LargeContrast : options.NormalContrast;
-                    if (r + 0.05 < threshold) // small epsilon so exact-threshold passes
+                    if (r < threshold)
                     {
-                        issues.Add(Issue(CheckContrast, SeverityFail, el,
-                            $"{Describe(el)} contrast ratio {r:0.00}:1 is below the WCAG {options.WcagLevel} threshold {threshold:0.0}:1 for {(isLarge ? "large" : "normal")} text."));
+                        var displayedRatio = Math.Floor(r * 100) / 100;
+                        AddContrastIssue(Issue(CheckContrast, SeverityFail, el,
+                            $"{Describe(el)} contrast ratio {displayedRatio:0.00}:1 is below the WCAG {options.WcagLevel} threshold {threshold:0.0}:1 for {(isLarge ? "large" : "normal")} text."));
                     }
                     else
                     {
@@ -312,6 +355,16 @@ internal static class UiAuditEngine
             }
         }
 
+        if (omittedContrastIssues > 0)
+        {
+            issues.Add(new UiAuditIssue
+            {
+                RuleId = CheckContrast,
+                Severity = SeverityFail,
+                Message = $"{omittedContrastIssues} additional contrast failures were omitted from the detailed report; summary.contrast retains the complete coverage counts.",
+            });
+        }
+
         // tab-order: coherence heuristic over the focusable elements in walk order.
         if (options.Checks.Contains(CheckTabOrder))
         {
@@ -319,11 +372,25 @@ internal static class UiAuditEngine
         }
 
         var warn = issues.Count(i => i.Severity == SeverityWarn);
-        var fail = issues.Count(i => i.Severity == SeverityFail);
+        var fail = issues.Count(i => i.Severity == SeverityFail && i.RuleId != CheckContrast)
+            + contrastFailures;
 
         return new UiAuditResult
         {
-            Summary = new UiAuditSummary { Pass = pass, Warn = warn, Fail = fail },
+            Summary = new UiAuditSummary
+            {
+                Pass = pass,
+                Warn = warn,
+                Fail = fail,
+                Contrast = checkContrast
+                    ? new UiAuditContrastSummary
+                    {
+                        Attempted = contrastAttempted,
+                        Measured = contrastMeasured,
+                        Unmeasured = contrastUnmeasured,
+                    }
+                    : null,
+            },
             Issues = issues.ToArray(),
         };
     }
@@ -340,9 +407,23 @@ internal static class UiAuditEngine
         UiElement? prev = null;
         foreach (var el in elements)
         {
-            if (el.Type == "---" || el.IsOffscreen || !el.IsKeyboardFocusable)
+            if (el.Type == "---")
+            {
+                prev = null;
+                continue;
+            }
+
+            if (el.IsOffscreen || !el.IsKeyboardFocusable)
             {
                 continue;
+            }
+
+            if (prev is not null
+                && el.WindowHandle is { } windowHandle and not 0
+                && prev.WindowHandle is { } previousWindowHandle and not 0
+                && windowHandle != previousWindowHandle)
+            {
+                prev = null;
             }
 
             if (prev is not null)
@@ -367,8 +448,111 @@ internal static class UiAuditEngine
         }
     }
 
-    private static bool IsTextElement(UiElement el)
-        => TextTypes.Contains(el.Type) && !string.IsNullOrWhiteSpace(el.Name) && el.Width > 0 && el.Height > 0;
+    internal static HashSet<UiElement> GetContrastCandidates(IReadOnlyList<UiElement> elements)
+    {
+        var candidates = new HashSet<UiElement>(ReferenceEqualityComparer.Instance);
+        for (var i = 0; i < elements.Count; i++)
+        {
+            var el = elements[i];
+            if (!HasVisibleProviderText(el))
+            {
+                continue;
+            }
+
+            if (el.Type.Equals("Custom", StringComparison.OrdinalIgnoreCase)
+                && !IsInteractive(el)
+                && HasAnyDescendant(elements, i, el.Depth))
+            {
+                continue;
+            }
+
+            if (LeafTextTypes.Contains(el.Type)
+                || !HasVisibleTextDescendant(elements, i, el.Depth))
+            {
+                candidates.Add(el);
+            }
+        }
+
+        return candidates;
+    }
+
+    private static bool HasVisibleProviderText(UiElement el)
+    {
+        if (el.Type == "---"
+            || el.IsOffscreen
+            || IsNonClientChrome(el))
+        {
+            return false;
+        }
+
+        if (LeafTextTypes.Contains(el.Type))
+        {
+            return !string.IsNullOrWhiteSpace(el.Name)
+                || !string.IsNullOrWhiteSpace(el.Value);
+        }
+
+        if (ValueTextControlTypes.Contains(el.Type))
+        {
+            return !string.IsNullOrWhiteSpace(el.Value);
+        }
+
+        if (NamedTextControlTypes.Contains(el.Type))
+        {
+            return !string.IsNullOrWhiteSpace(el.Name)
+                || !string.IsNullOrWhiteSpace(el.Value);
+        }
+
+        return el.Type.Equals("Custom", StringComparison.OrdinalIgnoreCase)
+            && (!string.IsNullOrWhiteSpace(el.Name) || !string.IsNullOrWhiteSpace(el.Value));
+    }
+
+    private static bool HasVisibleTextDescendant(
+        IReadOnlyList<UiElement> elements,
+        int parentIndex,
+        int? parentDepth)
+    {
+        if (parentDepth is null)
+        {
+            return false;
+        }
+
+        for (var i = parentIndex + 1; i < elements.Count; i++)
+        {
+            var candidate = elements[i];
+            if (candidate.Type == "---")
+            {
+                break;
+            }
+
+            if (candidate.Depth is not { } depth || depth <= parentDepth.Value)
+            {
+                break;
+            }
+
+            if (LeafTextTypes.Contains(candidate.Type) && HasVisibleProviderText(candidate))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool HasAnyDescendant(
+        IReadOnlyList<UiElement> elements,
+        int parentIndex,
+        int? parentDepth)
+    {
+        if (parentDepth is null || parentIndex + 1 >= elements.Count)
+        {
+            return false;
+        }
+
+        var next = elements[parentIndex + 1];
+        return next.Type != "---"
+            && next.Depth is { } depth
+            && depth > parentDepth.Value;
+    }
 
     private static bool HasUnknownRole(string type)
         => string.IsNullOrWhiteSpace(type)

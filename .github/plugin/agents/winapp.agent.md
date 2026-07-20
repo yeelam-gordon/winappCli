@@ -56,6 +56,7 @@ Want to inspect or interact with a running app's UI?
 ├─ Read element properties → winapp ui get-property <selector> -a <appname>
 ├─ Set a value on an element → winapp ui set-value <selector> "value" -a <appname>
 ├─ Wait for UI state → winapp ui wait-for <selector> -a <appname> --timeout 5000
+├─ Audit current-view accessibility → winapp ui audit -a <appname>
 └─ List app windows → winapp ui list-windows -a <appname> [--show-hidden]
 ```
 
@@ -221,6 +222,7 @@ Want to inspect or interact with a running app's UI?
 - `ui wait-for <selector> -a <app> --timeout <ms> [--gone] [--value Y] [--property X --value Y]` — wait for element value or property match
 - `ui list-windows -a <app> [--show-hidden]` — list windows, popups, and dialogs with HWNDs (untitled zero-size windows hidden by default)
 - `ui get-focused -a <app>` — show the element with keyboard focus
+- `ui audit -a <app> [--area <area>] [--level basic|aa|thorough|aaa] [--json]` — run quick heuristic accessibility lint against the current UI view. Checks names, keyboard behavior, static screen-reader readiness, contrast, and roles; exits non-zero on failures. This is not accessibility certification.
 
 ## Framework-specific guidance
 

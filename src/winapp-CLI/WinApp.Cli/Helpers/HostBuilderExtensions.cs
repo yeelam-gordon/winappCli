@@ -64,7 +64,6 @@ internal static class StoreHostBuilderExtensions
             .AddSingleton<IUiAuditAreaEngine, ScreenReaderAreaEngine>()
             .AddSingleton<IUiAuditAreaEngine, ContrastAreaEngine>()
             .AddSingleton<IUiAuditAreaEngine, RolesAreaEngine>()
-            .AddSingleton<IUiAuditAreaEngine, EventsAreaEngine>()
             .AddSingleton<UiAuditOrchestrator>();
     }
 
