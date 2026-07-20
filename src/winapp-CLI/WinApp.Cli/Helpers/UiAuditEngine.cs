@@ -343,8 +343,9 @@ internal static class UiAuditEngine
                     var threshold = isLarge ? options.LargeContrast : options.NormalContrast;
                     if (r < threshold)
                     {
+                        var displayedRatio = Math.Floor(r * 100) / 100;
                         AddContrastIssue(Issue(CheckContrast, SeverityFail, el,
-                            $"{Describe(el)} contrast ratio {r:0.00}:1 is below the WCAG {options.WcagLevel} threshold {threshold:0.0}:1 for {(isLarge ? "large" : "normal")} text."));
+                            $"{Describe(el)} contrast ratio {displayedRatio:0.00}:1 is below the WCAG {options.WcagLevel} threshold {threshold:0.0}:1 for {(isLarge ? "large" : "normal")} text."));
                     }
                     else
                     {
@@ -406,9 +407,23 @@ internal static class UiAuditEngine
         UiElement? prev = null;
         foreach (var el in elements)
         {
-            if (el.Type == "---" || el.IsOffscreen || !el.IsKeyboardFocusable)
+            if (el.Type == "---")
+            {
+                prev = null;
+                continue;
+            }
+
+            if (el.IsOffscreen || !el.IsKeyboardFocusable)
             {
                 continue;
+            }
+
+            if (prev is not null
+                && el.WindowHandle is { } windowHandle and not 0
+                && prev.WindowHandle is { } previousWindowHandle and not 0
+                && windowHandle != previousWindowHandle)
+            {
+                prev = null;
             }
 
             if (prev is not null)

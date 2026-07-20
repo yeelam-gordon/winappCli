@@ -411,6 +411,22 @@ public class UiAuditEngineTests
             _ => 4.49);
 
         Assert.AreEqual(1, result.Summary.Fail);
+        StringAssert.Contains(result.Issues.Single().Message, "4.49:1");
+    }
+
+    [TestMethod]
+    public void TabOrder_DoesNotCompareAcrossWindowSeparators()
+    {
+        var elements = new[]
+        {
+            new UiElement { Id = "e0", Type = "Button", Name = "First", IsKeyboardFocusable = true, X = 10, Y = 100, WindowHandle = 100 },
+            new UiElement { Type = "---" },
+            new UiElement { Id = "e1", Type = "Button", Name = "Second", IsKeyboardFocusable = true, X = 10, Y = 10, WindowHandle = 200 },
+        };
+
+        var result = UiAuditEngine.Run(elements, Opts(UiAuditEngine.CheckTabOrder));
+
+        Assert.IsFalse(result.Issues.Any(i => i.RuleId == UiAuditEngine.CheckTabOrder));
     }
 
     [TestMethod]
