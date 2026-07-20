@@ -438,6 +438,24 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
+    public void Contrast_ExcessFailuresAreSummarizedWithoutLosingCoverageCounts()
+    {
+        var elements = Enumerable.Range(0, UiAuditEngine.MaxDetailedContrastIssues + 2)
+            .Select(i => new UiElement
+            {
+                Id = $"e{i}", Type = "Text", Name = $"Text {i}", Width = 100, Height = 16,
+            })
+            .ToArray();
+
+        var result = UiAuditEngine.Run(elements, Opts(UiAuditEngine.CheckContrast), _ => null);
+
+        Assert.AreEqual(elements.Length, result.Summary.Contrast!.Attempted);
+        Assert.AreEqual(elements.Length, result.Summary.Contrast.Unmeasured);
+        Assert.AreEqual(UiAuditEngine.MaxDetailedContrastIssues + 1, result.Issues.Length);
+        StringAssert.Contains(result.Issues[^1].Message, "2 additional contrast failures were omitted");
+    }
+
+    [TestMethod]
     public void Contrast_MissingProvider_ReportsCaptureOrAnalysisFailure()
     {
         var text = new UiElement

@@ -98,6 +98,7 @@ internal static class UiAuditEngine
 
     /// <summary>Large-text height estimate at 96 DPI (WCAG large text ≈ 18pt ≈ 24px).</summary>
     private const double LargeTextHeightAt96Dpi = 24.0;
+    internal const int MaxDetailedContrastIssues = 100;
 
     public static bool IsInteractive(UiElement el)
         => InteractiveTypes.Contains(el.Type)
@@ -148,6 +149,21 @@ internal static class UiAuditEngine
         var contrastMeasured = 0;
         var contrastUnmeasured = 0;
         var contrastCandidates = checkContrast ? GetContrastCandidates(elements) : null;
+        var detailedContrastIssues = 0;
+        var omittedContrastIssues = 0;
+
+        void AddContrastIssue(UiAuditIssue issue)
+        {
+            if (detailedContrastIssues < MaxDetailedContrastIssues)
+            {
+                issues.Add(issue);
+                detailedContrastIssues++;
+            }
+            else
+            {
+                omittedContrastIssues++;
+            }
+        }
 
         foreach (var el in elements)
         {
@@ -314,7 +330,7 @@ internal static class UiAuditEngine
                     var reason = contrastProvider is null
                         ? "window capture or bounded pixel analysis did not complete"
                         : "its pixels were outside the capture, unsuitable for reliable analysis, or exceeded the bounded sampling budget";
-                    issues.Add(Issue(CheckContrast, SeverityFail, el,
+                    AddContrastIssue(Issue(CheckContrast, SeverityFail, el,
                         $"{Describe(el)} contrast was not measured because {reason}."));
                 }
                 else
@@ -326,7 +342,7 @@ internal static class UiAuditEngine
                     var threshold = isLarge ? options.LargeContrast : options.NormalContrast;
                     if (r < threshold)
                     {
-                        issues.Add(Issue(CheckContrast, SeverityFail, el,
+                        AddContrastIssue(Issue(CheckContrast, SeverityFail, el,
                             $"{Describe(el)} contrast ratio {r:0.00}:1 is below the WCAG {options.WcagLevel} threshold {threshold:0.0}:1 for {(isLarge ? "large" : "normal")} text."));
                     }
                     else
@@ -335,6 +351,16 @@ internal static class UiAuditEngine
                     }
                 }
             }
+        }
+
+        if (omittedContrastIssues > 0)
+        {
+            issues.Add(new UiAuditIssue
+            {
+                RuleId = CheckContrast,
+                Severity = SeverityFail,
+                Message = $"{omittedContrastIssues} additional contrast failures were omitted from the detailed report; summary.contrast retains the complete coverage counts.",
+            });
         }
 
         // tab-order: coherence heuristic over the focusable elements in walk order.
