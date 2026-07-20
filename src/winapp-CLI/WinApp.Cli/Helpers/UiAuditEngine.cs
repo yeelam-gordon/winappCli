@@ -265,7 +265,8 @@ internal static class UiAuditEngine
             if (options.Checks.Contains(CheckScreenReader) && !chrome)
             {
                 var issueCountBeforeScreenReader = issues.Count;
-                if ((interactive || el.IsKeyboardFocusable) && visible && string.IsNullOrWhiteSpace(el.Name))
+                var hasScreenReaderCheck = visible && (interactive || el.IsKeyboardFocusable);
+                if (hasScreenReaderCheck && string.IsNullOrWhiteSpace(el.Name))
                 {
                     issues.Add(Issue(CheckScreenReader, SeverityFail, el,
                         $"{Describe(el)} is reachable by assistive technology but has no accessible name. A screen reader would announce little or nothing useful.",
@@ -295,7 +296,7 @@ internal static class UiAuditEngine
                         $"{Describe(el)} has a low-value accessible name that duplicates its role. Screen-reader users need a descriptive label."));
                 }
 
-                if (visible && issues.Count == issueCountBeforeScreenReader)
+                if (hasScreenReaderCheck && issues.Count == issueCountBeforeScreenReader)
                 {
                     pass++;
                 }

@@ -233,6 +233,20 @@ public class UiAuditEngineTests
     }
 
     [TestMethod]
+    public void ScreenReader_StaticTextDoesNotCountPass()
+    {
+        var elements = new[]
+        {
+            new UiElement { Id = "e0", Type = "Text", Name = "Status", IsEnabled = true },
+        };
+
+        var result = UiAuditEngine.Run(elements, Opts(UiAuditEngine.CheckScreenReader));
+
+        Assert.AreEqual(0, result.Issues.Length);
+        Assert.AreEqual(0, result.Summary.Pass);
+    }
+
+    [TestMethod]
     public void Contrast_LowRatioTextElement_ProducesFailure()
     {
         var text = new UiElement { Id = "e0", Type = "Text", Name = "Hello", Width = 100, Height = 16 };

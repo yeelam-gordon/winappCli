@@ -283,8 +283,24 @@ internal class UiAuditCommand : Command, IShortDescription
                     }
 
                     // The capture belongs to the source window. NativeWindowHandle can be a child
-                    // control hosted inside that window, so it must not exclude its pixels.
-                    if (el.WindowHandle is { } elHwnd && elHwnd != 0 && elHwnd != session.WindowHandle)
+                    // control hosted inside that window, but a modal's native root is a separate
+                    // top-level window even when its UIA elements appear in the source tree.
+                    var hasDifferentNativeRoot = false;
+                    if (el.NativeWindowHandle is { } nativeHwnd
+                        && nativeHwnd != 0
+                        && nativeHwnd != session.WindowHandle)
+                    {
+                        var root = Windows.Win32.PInvoke.GetAncestor(
+                            new Windows.Win32.Foundation.HWND((nint)nativeHwnd),
+                            Windows.Win32.UI.WindowsAndMessaging.GET_ANCESTOR_FLAGS.GA_ROOT);
+                        hasDifferentNativeRoot = !root.IsNull
+                            && root != new Windows.Win32.Foundation.HWND((nint)session.WindowHandle);
+                    }
+
+                    if (!IsCaptureCompatibleWindow(
+                        el.WindowHandle,
+                        hasDifferentNativeRoot,
+                        session.WindowHandle))
                     {
                         ratios[el] = null;
                         continue;
@@ -378,6 +394,21 @@ internal class UiAuditCommand : Command, IShortDescription
                 },
             ];
             result.Summary.Fail++;
+            }
+
+        internal static bool IsCaptureCompatibleWindow(
+            long? sourceWindowHandle,
+            bool hasDifferentNativeRoot,
+            long capturedWindowHandle)
+        {
+            if (sourceWindowHandle is { } source
+                && source != 0
+                && source != capturedWindowHandle)
+            {
+                return false;
+            }
+
+            return !hasDifferentNativeRoot;
         }
 
         private static (string Markup, string PlainText) BuildHumanReport(

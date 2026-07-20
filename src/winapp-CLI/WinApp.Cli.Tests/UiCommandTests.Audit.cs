@@ -590,6 +590,14 @@ public partial class UiCommandTests
         StringAssert.Contains(output, "\"unmeasured\": 0");
     }
 
+    [TestMethod]
+    public void Audit_CaptureWindowCompatibility_DistinguishesChildrenAndModals()
+    {
+        Assert.IsTrue(UiAuditCommand.Handler.IsCaptureCompatibleWindow(100, false, 100));
+        Assert.IsFalse(UiAuditCommand.Handler.IsCaptureCompatibleWindow(100, true, 100));
+        Assert.IsFalse(UiAuditCommand.Handler.IsCaptureCompatibleWindow(200, false, 100));
+    }
+
     // A 20x20 buffer whose glyph pixels are mid-grey (#696969, ~5.5:1 on white) — above the AA
     // normal-text threshold (4.5) but below AAA (7.0).
     private static (byte[] Pixels, int W, int H, int OX, int OY) MidGreyOnWhiteCapture()
