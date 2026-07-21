@@ -10,4 +10,18 @@
         <type fullname="ABI.Windows.Graphics.DirectX.Direct3D11.IDirect3DDevice" preserve="all" />
         <type fullname="ABI.Windows.Graphics.DirectX.Direct3D11.IDirect3DSurface" preserve="all" />
     </assembly>
+    <!--
+      Experimental (PR #601 spike): Axe.Windows discovers its accessibility rules at runtime via
+      reflection (RuleFactory: Assembly.GetExecutingAssembly().GetTypes() + Activator.CreateInstance),
+      and reads rule metadata from embedded resources. Under TrimMode=full these rule types are not
+      statically reachable and would be trimmed, so the scanner would silently find zero issues.
+      Rooting the engine assemblies preserves the rule types, their [RuleInfo] attributes, and their
+      parameterless constructors. This is a targeted root set, not a global trimming opt-out.
+    -->
+    <assembly fullname="Axe.Windows.Rules" preserve="all" />
+    <assembly fullname="Axe.Windows.Core" preserve="all" />
+    <assembly fullname="Axe.Windows.Desktop" preserve="all" />
+    <assembly fullname="Axe.Windows.Actions" preserve="all" />
+    <assembly fullname="Axe.Windows.RuleSelection" preserve="all" />
+    <assembly fullname="Axe.Windows.Automation" preserve="all" />
 </linker>

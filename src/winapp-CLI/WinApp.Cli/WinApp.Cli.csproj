@@ -66,6 +66,8 @@
     <PackageReference Include="System.Drawing.Common" />
     <PackageReference Include="Microsoft.Diagnostics.Runtime" />
     <PackageReference Include="Microsoft.Diagnostics.Runtime.Utilities" />
+    <!-- Experimental (PR #601 spike): direct in-process Axe.Windows scanner engine integration. -->
+    <PackageReference Include="Axe.Windows" />
   </ItemGroup>
 
   <ItemGroup>

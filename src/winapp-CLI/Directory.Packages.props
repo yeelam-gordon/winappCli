@@ -12,5 +12,7 @@
     <PackageVersion Include="System.Drawing.Common" Version="10.0.5" />
     <PackageVersion Include="Microsoft.Diagnostics.Runtime" Version="3.1.512801" />
     <PackageVersion Include="Microsoft.Diagnostics.Runtime.Utilities" Version="3.0.442202" />
+    <!-- Experimental (PR #601 spike): official Microsoft Axe.Windows accessibility scanner engine. Pinned. -->
+    <PackageVersion Include="Axe.Windows" Version="2.4.2" />
   </ItemGroup>
 </Project>
