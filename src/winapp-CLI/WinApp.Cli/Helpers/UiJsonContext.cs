@@ -258,6 +258,12 @@ internal sealed class UiDragResult
 /// <summary>Top-level result for <c>ui audit</c>. Shape: { summary, issues }.</summary>
 internal sealed class UiAuditResult
 {
+    /// <summary>
+    /// Identifies the engine that produced this result when it is not WinApp's built-in heuristic
+    /// audit (e.g. "axe-windows 2.4.2.0"). Null/omitted for the default heuristic engine.
+    /// </summary>
+    public string? Engine { get; set; }
+
     public UiAuditSummary Summary { get; set; } = new();
     public UiAuditIssue[] Issues { get; set; } = [];
 }

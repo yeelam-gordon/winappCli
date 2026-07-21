@@ -22,6 +22,7 @@ internal class UiAuditCommand : Command, IShortDescription
     public static Option<string[]> AreaOption { get; }
     public static Option<string> LevelOption { get; }
     public static Option<string?> OutputOption { get; }
+    public static Option<string> EngineOption { get; }
 
     // Depth deep enough to walk an entire window's element tree.
     private const int AuditDepth = 40;
@@ -56,6 +57,15 @@ internal class UiAuditCommand : Command, IShortDescription
         {
             Description = "Write the text or JSON audit report to a file."
         };
+
+        EngineOption = new Option<string>("--experimental-engine")
+        {
+            Description = "Experimental accessibility engine: 'heuristic' (default, built-in) or " +
+                          "'axe' (direct in-process Microsoft Axe.Windows scanner). The 'axe' engine " +
+                          "runs its own full rule set and ignores --area/--level.",
+            DefaultValueFactory = _ => "heuristic",
+            Hidden = true,
+        };
     }
 
     public UiAuditCommand()
@@ -75,12 +85,14 @@ internal class UiAuditCommand : Command, IShortDescription
         Options.Add(OutputOption);
         Options.Add(AreaOption);
         Options.Add(LevelOption);
+        Options.Add(EngineOption);
     }
 
     public class Handler(
         IUiSessionService sessionService,
         IUiAutomationService uiAutomation,
         UiAuditOrchestrator orchestrator,
+        IAxeWindowsScanService axeService,
         IAnsiConsole ansiConsole,
         ILogger<UiAuditCommand> logger) : AsynchronousCommandLineAction
     {
@@ -98,6 +110,16 @@ internal class UiAuditCommand : Command, IShortDescription
             }
 
             var output = parseResult.GetValue(OutputOption);
+
+            // Experimental (PR #601 spike): route to the direct in-process Axe.Windows scanner
+            // engine when requested. The built-in heuristic engine below remains the default and
+            // is left fully intact.
+            var engine = parseResult.GetValue(EngineOption);
+            if (string.Equals(engine, "axe", StringComparison.OrdinalIgnoreCase))
+            {
+                return await RunAxeAuditAsync(selector, app, window, json, output, cancellationToken);
+            }
+
             var rawAreas = parseResult.GetValue(AreaOption) ?? [];
 
             // Resolve the selected areas (WHAT to audit).
@@ -236,6 +258,82 @@ internal class UiAuditCommand : Command, IShortDescription
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
+            }
+            catch (System.Runtime.InteropServices.COMException comEx)
+            {
+                logger.LogDebug("COM error: {HResult} {StackTrace}", comEx.HResult, comEx.StackTrace);
+                UiErrors.StaleElement(logger, json);
+                return 1;
+            }
+            catch (Exception ex)
+            {
+                UiErrors.GenericError(logger, ex, json);
+                return 1;
+            }
+        }
+
+        /// <summary>
+        /// Experimental (PR #601 spike): run the direct in-process Axe.Windows scanner engine
+        /// against the resolved target window and emit the results through WinApp's existing audit
+        /// output path. Reuses target resolution, the JSON issue model, and the report writers.
+        /// </summary>
+        private async Task<int> RunAxeAuditAsync(
+            string? selector,
+            string? app,
+            long? window,
+            bool json,
+            string? output,
+            CancellationToken cancellationToken)
+        {
+            if (!string.IsNullOrEmpty(selector))
+            {
+                logger.LogDebug(
+                    "Axe.Windows engine scans the whole target window subtree; ignoring selector '{Selector}'.",
+                    selector);
+            }
+
+            try
+            {
+                var session = await sessionService.ResolveSessionAsync(app, window, cancellationToken);
+                var result = await axeService.ScanAsync(session, cancellationToken);
+
+                var exitCode = result.Summary.Fail > 0 ? 1 : 0;
+
+                if (json)
+                {
+                    var payload = JsonSerializer.Serialize(result, UiJsonContext.Default.UiAuditResult);
+                    ansiConsole.Profile.Out.Writer.WriteLine(payload);
+                    if (!string.IsNullOrEmpty(output))
+                    {
+                        await WriteReportFileAsync(output, payload, cancellationToken);
+                    }
+                }
+                else
+                {
+                    var report = BuildHumanReport(result, session, "(axe rule set)", ["axe-windows"]);
+                    ansiConsole.Markup(report.Markup);
+                    if (!string.IsNullOrEmpty(output))
+                    {
+                        await WriteReportFileAsync(output, report.PlainText, cancellationToken);
+                        ansiConsole.MarkupLine($"[grey]Report written to {Markup.Escape(Path.GetFullPath(output))}[/]");
+                    }
+                }
+
+                logger.LogDebug("Axe.Windows audit complete: {Engine}, fail={Fail}",
+                    result.Engine, result.Summary.Fail);
+                return exitCode;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Axe.Windows.Automation.AxeWindowsAutomationException axeEx)
+            {
+                logger.LogDebug(axeEx, "Axe.Windows automation error");
+                var msg = $"Axe.Windows scan failed: {axeEx.Message}";
+                logger.LogError("{Symbol} {Message}", UiSymbols.Error, msg);
+                UiJsonError.Emit(json, UiJsonError.CodeInternalError, msg);
+                return 1;
             }
             catch (System.Runtime.InteropServices.COMException comEx)
             {
@@ -431,6 +529,11 @@ internal class UiAuditCommand : Command, IShortDescription
             var scopeText = string.Join(", ", scope);
             Line($"[grey]Areas: {scopeText} · Level: {level}[/]",
                  $"Areas: {scopeText} · Level: {level}");
+
+            if (result.Engine is { } engine)
+            {
+                Line($"[grey]Engine: {Markup.Escape(engine)}[/]", $"Engine: {engine}");
+            }
 
             if (result.Summary.Contrast is { } contrast)
             {

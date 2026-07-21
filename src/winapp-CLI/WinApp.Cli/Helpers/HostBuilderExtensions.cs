@@ -58,6 +58,9 @@ internal static class StoreHostBuilderExtensions
             .AddSingleton<ISelectorService, SelectorService>()
             .AddSingleton<IUiSessionService, UiSessionService>()
             .AddSingleton<IUiAutomationService, UiAutomationService>()
+
+            // Experimental (PR #601 spike): direct in-process Axe.Windows scanner engine.
+            .AddSingleton<IAxeWindowsScanService, AxeWindowsScanService>()
             // UI audit area engines + orchestrator (one engine per --area).
             .AddSingleton<IUiAuditAreaEngine, NamesAreaEngine>()
             .AddSingleton<IUiAuditAreaEngine, KeyboardAreaEngine>()
