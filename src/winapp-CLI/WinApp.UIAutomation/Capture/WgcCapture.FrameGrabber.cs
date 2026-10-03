@@ -56,7 +56,7 @@ internal static partial class WgcCapture
                 numberOfBuffers: 2,
                 item.Size);
             uiTarget = pool.CreateCaptureSession(item);
-            uiTarget.IsCursorCaptureEnabled = false;
+            ConfigureSession(uiTarget, logger);
 
             return new FrameGrabber(device, context, pool, uiTarget, item, logger, fps);
         }

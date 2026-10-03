@@ -23,6 +23,7 @@ internal static partial class WgcCapture
     private static readonly Guid Direct3DDxgiInterfaceAccessGuid = new("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1");
     private static readonly Guid DxgiDeviceGuid = new("54EC77FA-1377-44E6-8C32-88FD5F44C84C");
     private static readonly Guid D3D11Texture2DGuid = new("6F15AAF2-D208-4E89-9AB4-489535D34F9C");
+    private static readonly Guid GraphicsCaptureSession6Guid = new("D7419236-BE20-5E9F-BCD6-C4E98FD6AFDC");
 
     // D3D11_SDK_VERSION — must be 7 per d3d11.h. CsWin32 doesn't project the
     // numeric constant for this header, so it's defined here.
@@ -75,7 +76,7 @@ internal static partial class WgcCapture
                 numberOfBuffers: 2,
                 item.Size);
             using var uiTarget = pool.CreateCaptureSession(item);
-            uiTarget.IsCursorCaptureEnabled = false;
+            ConfigureSession(uiTarget, logger);
 
             using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
             using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
@@ -329,6 +330,40 @@ internal static partial class WgcCapture
             {
                 ComInterfaceMarshaller<IDirect3DDxgiInterfaceAccess>.Free((void*)accessPtr);
             }
+        }
+    }
+
+    private static void ConfigureSession(GraphicsCaptureSession session, ILogger logger)
+    {
+        session.IsCursorCaptureEnabled = false;
+        if (!TryIncludeSecondaryWindows(((IWinRTObject)session).NativeObject.ThisPtr))
+        {
+            logger.LogDebug("Secondary-window capture is unavailable on this Windows version; capturing only the selected window.");
+        }
+    }
+
+    internal static unsafe bool TryIncludeSecondaryWindows(nint session)
+    {
+        var hr = Marshal.QueryInterface(session, in GraphicsCaptureSession6Guid, out var secondarySession);
+        if (hr == unchecked((int)0x80004002)) // E_NOINTERFACE on Windows before 11 24H2.
+        {
+            return false;
+        }
+        hr.ThrowIfFailed("GraphicsCaptureSession.QueryInterface(IGraphicsCaptureSession6)");
+
+        try
+        {
+            // The 19041 WinRT projection lacks this 26100 API. IGraphicsCaptureSession6 inherits
+            // IInspectable (six slots); its Boolean getter and setter occupy slots 6 and 7.
+            var vtable = *(nint**)secondarySession;
+            var setIncludeSecondaryWindows = (delegate* unmanaged[Stdcall]<nint, byte, int>)vtable[7];
+            setIncludeSecondaryWindows(secondarySession, 1)
+                .ThrowIfFailed("GraphicsCaptureSession.IncludeSecondaryWindows");
+            return true;
+        }
+        finally
+        {
+            Marshal.Release(secondarySession);
         }
     }
 

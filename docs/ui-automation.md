@@ -505,9 +505,32 @@ With `--on sandbox`, `--output` names the host destination. Successful plain out
 
 The default capture path uses **Windows.Graphics.Capture (WGC)**, reading the actual DWM-composited surface — preserving rounded corners, transparency, and working even while the window is occluded by other windows. If WGC is unavailable (older Windows builds) the CLI falls back to **PrintWindow**.
 
-Use `--capture-screen -w <hwnd>` when you need visible popups or tooltips in their on-screen positions, including overlays that aren't owned by the target window. It reads that window's screen region rather than composing labeled panels, and brings the window to the foreground first. With `-a`, it requires exactly one matching window; if several top-level or owned windows match, use `winapp ui list-windows -a <app>` and retry with `-w <hwnd>`. Use `--focus` if you just want to foreground the window without switching capture modes (e.g., to ensure the screenshot matches what the user is currently looking at).
+Use `--capture-screen -w <hwnd>` when you need the visible screen region instead of labeled panels, including overlays that aren't included by window capture. It brings the window to the foreground first and may capture overlapping windows from other apps. With `-a`, it requires exactly one matching window; if several top-level or owned windows match, use `winapp ui list-windows -a <app>` and retry with `-w <hwnd>`. Use `--focus` if you just want to foreground the window without switching capture modes (e.g., to ensure the screenshot matches what the user is currently looking at).
 
 > Because the screen DC captures whatever is actually in front, `--capture-screen` **verifies the target reached the foreground immediately before capturing** and fails with **`foreground_not_target`** if it didn't (focus-stealing prevention, a UAC prompt, or another window activating itself). No image is written in that case — previously the command exited 0 and handed back a picture of the wrong window. `ui record --capture-screen` applies the same check before the first frame.
+
+#### Menus and flyouts in captures
+
+```powershell
+winapp ui screenshot --app myapp --output menu.png
+winapp ui record --app myapp --duration-sec 10 --output menu.mp4
+```
+
+On **Windows 11 24H2 or newer**, default Windows Graphics Capture includes overlapping
+secondary windows, such as WinUI flyouts, dropdown menus, and tooltips, in both screenshots
+and recordings. No extra flag is needed. These controls can have their own native window
+even when they look embedded in the app.
+
+Secondary-window content is clipped to the captured window's bounds; an element selector
+crops it further. Screenshots still include separately discovered owned windows as labeled
+panels, so a flyout can also appear in its own panel. Recording keeps the selected window's
+frame rather than expanding to include every app window.
+
+On older Windows versions, or if an overlay is still absent, use
+`--capture-screen --window <hwnd>` to capture the visible region instead. Keep that window
+uncovered: screen capture can include other apps. A recording in either mode stays within
+the selected window's bounds; select the popup's HWND directly when you need to record it
+in full.
 
 ### record
 Record a window or element region to an H.264 MP4. Prefer a positive `--duration-sec`
@@ -570,7 +593,7 @@ including default outputs when `--output` is omitted. See
 recordings and whole-desktop capture.
 
 **Capture modes** (reported in the JSON `mode` field):
-- `wgc` — Windows Graphics Capture (default; works while the window is occluded).
+- `wgc` — Windows Graphics Capture (default; works while the window is occluded). See [Menus and flyouts in captures](#menus-and-flyouts-in-captures) for secondary-window support and clipping.
 - `printwindow` — GDI PrintWindow (fallback when WGC is unavailable on this system/session; re-run with `--capture-screen` to use screen DC instead).
 - `screen` — Screen DC via `--capture-screen` (includes overlays/popups; brings the window to the foreground).
 

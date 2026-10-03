@@ -190,7 +190,7 @@ winapp ui screenshot -w <hwnd> --capture-screen --output with-popups.png
 winapp ui screenshot -a myapp --focus --output focused.png
 ```
 
-Default capture includes owned windows even with an explicit main HWND; it produces one labeled composite, not separate image files. For scope and on-screen overlay placement, see [Screenshot](https://github.com/microsoft/WinAppCli/blob/main/docs/ui-automation.md#screenshot). With `--on sandbox`, the reported screenshot path is the delivered host destination.
+Default capture includes owned windows even with an explicit main HWND; it produces one labeled composite, not separate image files. For scope and on-screen overlay placement, see [Screenshot](https://github.com/microsoft/WinAppCli/blob/main/docs/ui-automation.md#screenshot). Before switching to screen capture for a missing menu, check [Menus and flyouts in captures](https://github.com/microsoft/WinAppCli/blob/main/docs/ui-automation.md#menus-and-flyouts-in-captures), which applies to screenshots and recordings. With `--on sandbox`, the reported screenshot path is the delivered host destination.
 
 ### Record video (H.264 MP4)
 Record a window or element region to MP4. Prefer a positive `--duration-sec N` for
