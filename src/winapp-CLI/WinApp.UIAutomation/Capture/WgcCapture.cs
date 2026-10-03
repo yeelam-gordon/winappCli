@@ -48,17 +48,33 @@ internal static partial class WgcCapture
     public static async Task<(byte[] Pixels, int Width, int Height)> CaptureAsync(HWND hwnd, ILogger logger, CancellationToken ct)
     {
         using var grabber = s_startGrabber(hwnd, logger, 0);
+        var deadline = Environment.TickCount64 + 2000;
         if (!await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false))
         {
             throw new TimeoutException("WGC did not produce a root and owned-popup frame.");
         }
         var frame = grabber.TryGetLatest() ??
             throw new InvalidOperationException("The capture window changed before its frame could be read.");
-        for (var attempt = 1; IsBlankCapture(frame.Pixels) && attempt < 5; attempt++)
+        var framesSeen = 1;
+        while (IsBlankCapture(frame.Pixels))
         {
+            if (framesSeen >= 5)
+            {
+                throw new InvalidOperationException("WGC returned five blank capture frames.");
+            }
+            var remaining = deadline - Environment.TickCount64;
+            if (remaining <= 0)
+            {
+                throw new TimeoutException("WGC did not produce fresh nonblank pixels within the capture deadline.");
+            }
             logger.LogDebug("WGC returned blank frame; waiting for next frame");
-            await Task.Delay(50, ct).ConfigureAwait(false);
-            frame = grabber.TryGetLatest() ?? frame;
+            await Task.Delay((int)Math.Min(50, remaining), ct).ConfigureAwait(false);
+            var next = grabber.TryGetLatest();
+            if (next is { } fresh && fresh.Version > frame.Version)
+            {
+                frame = fresh;
+                framesSeen++;
+            }
         }
         return (frame.Pixels, frame.Width, frame.Height);
     }
