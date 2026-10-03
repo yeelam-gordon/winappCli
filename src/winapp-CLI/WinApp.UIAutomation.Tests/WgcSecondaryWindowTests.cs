@@ -40,6 +40,7 @@ public class WgcSecondaryWindowTests
                     control.Hide();
                 }
                 fx.Form.BackColor = System.Drawing.Color.Red;
+                fx.Form.TopMost = true;
             });
 
             if (continuous)
