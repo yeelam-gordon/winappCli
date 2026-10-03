@@ -12,7 +12,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 
 internal sealed partial class PrintWindowPopupFrameGrabber(HWND hwnd,
     Func<(byte[] Pixels, int Width, int Height)>? capture = null,
-    Func<long>? clock = null, ILogger? logger = null) : IFrameGrabber
+    Func<long>? clock = null, ILogger? logger = null, int? expectedPid = null) : IFrameGrabber
 {
     private bool _disposed;
     private long _version;
@@ -21,8 +21,23 @@ internal sealed partial class PrintWindowPopupFrameGrabber(HWND hwnd,
     private long _started;
     private readonly Func<long> _clock = clock ?? (() => Environment.TickCount64);
     private readonly ILogger _logger = logger ?? NullLogger.Instance;
+    private readonly int _expectedPid = expectedPid ?? RealOwnedWindowFinder.s_getWindowProcessId(hwnd);
+    private volatile bool _closed;
 
-    public bool IsClosed => !RealOwnedWindowFinder.s_isWindowVisible(hwnd);
+    public bool IsClosed
+    {
+        get
+        {
+            if (!_closed && (_expectedPid == 0 ||
+                !OwnedPopupFrameGrabber.RootIsValid(hwnd, _expectedPid) ||
+                !RealOwnedWindowFinder.s_isWindowVisible(hwnd)))
+            {
+                _closed = true;
+            }
+            return _closed;
+        }
+    }
+    internal nint WindowHandle => (nint)hwnd;
 
     public (byte[] Pixels, int Width, int Height, long Version)? TryGetLatest()
     {
@@ -35,7 +50,13 @@ internal sealed partial class PrintWindowPopupFrameGrabber(HWND hwnd,
         if (_pending is null)
         {
             _started = _clock();
-            _pending = Task.Run(capture ?? CaptureWithPhysicalCoordinates);
+            _pending = Task.Run(() =>
+            {
+                EnsureCurrentTarget();
+                var frame = (capture ?? CaptureWithPhysicalCoordinates)();
+                EnsureCurrentTarget();
+                return frame;
+            });
             _ = _pending.ContinueWith(task =>
                 _logger.LogError(task.Exception, "Window-only capture failed for owned popup {Hwnd}.", (nint)hwnd),
                 CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
@@ -51,6 +72,10 @@ internal sealed partial class PrintWindowPopupFrameGrabber(HWND hwnd,
         }
         var frame = _pending.GetAwaiter().GetResult();
         _pending = null;
+        if (IsClosed)
+        {
+            return _latest;
+        }
         if (_latest is not null && _latest.Value.Width == frame.Width &&
             _latest.Value.Height == frame.Height && frame.Pixels.AsSpan().SequenceEqual(_latest.Value.Pixels))
         {
@@ -62,6 +87,7 @@ internal sealed partial class PrintWindowPopupFrameGrabber(HWND hwnd,
 
     private (byte[] Pixels, int Width, int Height) CaptureWithPhysicalCoordinates()
     {
+        EnsureCurrentTarget();
         EnsureCaptureAllowed(hwnd);
         var previous = SetThreadDpiAwarenessContext(-4); // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
         if (previous == 0)
@@ -110,6 +136,7 @@ internal sealed partial class PrintWindowPopupFrameGrabber(HWND hwnd,
             }
             sourceWidth = checked(logical.right - logical.left);
             sourceHeight = checked(logical.bottom - logical.top);
+            EnsureCurrentTarget();
             source = UiAutomationService.CapturePopupFromWindow(hwnd, sourceWidth, sourceHeight);
         }
         finally
@@ -130,6 +157,7 @@ internal sealed partial class PrintWindowPopupFrameGrabber(HWND hwnd,
                 }
             }
         }
+        EnsureCurrentTarget();
         EnsureCaptureAllowed(hwnd);
         var bounds = OwnedPopupFrameGrabber.GetBounds(hwnd);
         var left = bounds.Left - rect.left;
@@ -166,6 +194,14 @@ internal sealed partial class PrintWindowPopupFrameGrabber(HWND hwnd,
     }
 
     public void Dispose() => _disposed = true;
+
+    private void EnsureCurrentTarget()
+    {
+        if (IsClosed)
+        {
+            throw new InvalidOperationException($"Popup HWND {(nint)hwnd} is no longer the visible window of expected PID {_expectedPid}.");
+        }
+    }
 
     [LibraryImport("user32.dll", SetLastError = true)]
     private static partial nint SetThreadDpiAwarenessContext(nint context);

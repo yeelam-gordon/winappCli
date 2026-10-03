@@ -22,6 +22,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
     private readonly Func<long> _clock;
     private readonly Func<bool> _isRootValid;
     private readonly ILogger _logger;
+    private readonly int? _expectedPid;
     private readonly Dictionary<nint, IFrameGrabber> _children = [];
     private readonly Dictionary<nint, long> _firstFrameDeadlines = [];
     private readonly Lock _lock = new();
@@ -35,7 +36,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
 
     internal OwnedPopupFrameGrabber(IFrameGrabber root, Func<PointerRect> rootBounds,
         Func<List<Popup>> discover, Func<nint, IFrameGrabber> start,
-        Func<long>? clock = null, Func<bool>? isRootValid = null, ILogger? logger = null)
+        Func<long>? clock = null, Func<bool>? isRootValid = null, ILogger? logger = null, int? expectedPid = null)
     {
         _root = root;
         _rootBounds = rootBounds;
@@ -44,15 +45,60 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         _clock = clock ?? (() => Environment.TickCount64);
         _isRootValid = isRootValid ?? (() => true);
         _logger = logger ?? NullLogger.Instance;
+        _expectedPid = expectedPid;
     }
 
-    internal static OwnedPopupFrameGrabber Start(HWND hwnd, ILogger logger, int fps)
+    internal static OwnedPopupFrameGrabber Start(HWND hwnd, ILogger logger, int fps,
+        Func<HWND, ILogger, int, IFrameGrabber>? startWindow = null)
     {
+        startWindow ??= (window, log, rate) => WgcCapture.StartSingleWindowGrabber(window, log, rate);
         var pid = RealOwnedWindowFinder.s_getWindowProcessId(hwnd);
-        return new(WgcCapture.StartSingleWindowGrabber(hwnd, logger, fps),
+        IFrameGrabber root;
+        try
+        {
+            root = startWindow(hwnd, logger, fps);
+        }
+        catch (WgcCapture.UnsupportedCaptureWindowException ex) when (IsVisibleOwnedPopupTarget(hwnd, pid))
+        {
+            root = StartPrintWindowFallback(hwnd, logger, ex, pid);
+        }
+        return new(root,
             () => GetBounds(hwnd), () => Discover(hwnd, pid, logger),
-            child => WgcCapture.StartSingleWindowGrabber(new HWND(child), logger, fps),
-            isRootValid: () => RootIsValid(hwnd, pid), logger: logger);
+            child => startWindow(new HWND(child), logger, fps),
+            isRootValid: () => RootIsValid(hwnd, pid), logger: logger, expectedPid: pid);
+    }
+
+    private static bool IsVisibleOwnedPopupTarget(HWND hwnd, int pid)
+    {
+        if (pid == 0 || !RootIsValid(hwnd, pid) || !RealOwnedWindowFinder.s_isWindowVisible(hwnd))
+        {
+            return false;
+        }
+        var owner = RealOwnedWindowFinder.s_getWindowOwner(hwnd);
+        if (owner.IsNull || !RootIsValid(owner, pid))
+        {
+            return false;
+        }
+        return ((uint)GetWindowLong((nint)hwnd, -16) & 0x80000000) != 0 ||
+            ((uint)GetWindowLong((nint)hwnd, -20) & 0x00000080) != 0;
+    }
+
+    private static PrintWindowPopupFrameGrabber StartPrintWindowFallback(HWND hwnd, ILogger logger, Exception cause, int? expectedPid = null)
+    {
+        logger.LogWarning(cause, "WGC rejected owned popup {Hwnd}; using window-only PrintWindow capture.", (nint)hwnd);
+        return new PrintWindowPopupFrameGrabber(hwnd, logger: logger, expectedPid: expectedPid);
+    }
+
+    private (byte[] Pixels, int Width, int Height, long Version)? ReadRootFrame()
+    {
+        try
+        {
+            return _root.TryGetLatest();
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException && _root is PrintWindowPopupFrameGrabber popup)
+        {
+            throw new OwnedPopupCaptureException(popup.WindowHandle, ex);
+        }
     }
 
     public bool IsClosed => _closed || _root.IsClosed || !_isRootValid();
@@ -88,7 +134,11 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         }
         _closed = true;
         DisposeChildren();
-        var finalRoot = _root.TryGetLatest();
+        if (_root is PrintWindowPopupFrameGrabber)
+        {
+            return _latest;
+        }
+        var finalRoot = ReadRootFrame();
         if (finalRoot is not null && (_latest is null || finalRoot.Value.Version != _rootVersion))
         {
             _rootVersion = finalRoot.Value.Version;
@@ -137,8 +187,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
                     {
                         if (ex is WgcCapture.UnsupportedCaptureWindowException)
                         {
-                            _logger.LogWarning(ex, "WGC rejected owned popup {Hwnd}; using window-only PrintWindow capture.", popup.Handle);
-                            _children.Add(popup.Handle, new PrintWindowPopupFrameGrabber(new HWND(popup.Handle), logger: _logger));
+                            _children.Add(popup.Handle, StartPrintWindowFallback(new HWND(popup.Handle), _logger, ex, _expectedPid));
                             _firstFrameDeadlines.Add(popup.Handle, _clock() + 2000);
                             continue;
                         }
@@ -151,7 +200,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
             }
         }
 
-        var root = _root.TryGetLatest();
+        var root = ReadRootFrame();
         if (root is null)
         {
             return null;
@@ -241,7 +290,12 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         }
         lock (_lock)
         {
-            if (!IsClosed && _root.TryGetLatest() is not null)
+            if (!IsClosed && _root is PrintWindowPopupFrameGrabber popupRoot && ReadRootFrame() is null)
+            {
+                throw new OwnedPopupCaptureException(popupRoot.WindowHandle,
+                    new TimeoutException("The targeted popup did not produce a frame before the capture deadline."));
+            }
+            if (!IsClosed && ReadRootFrame() is not null)
             {
                 var popups = _discover();
                 if (popups.Count != 0)
@@ -273,7 +327,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         return false;
     }
 
-    private static bool RootIsValid(HWND root, int pid)
+    internal static bool RootIsValid(HWND root, int pid)
         => IsWindow((nint)root) && RealOwnedWindowFinder.s_getWindowProcessId(root) == pid;
 
     internal static List<Popup> Discover(HWND root, int pid, ILogger logger,

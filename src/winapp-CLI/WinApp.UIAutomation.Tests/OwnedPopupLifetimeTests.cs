@@ -691,6 +691,275 @@ public class OwnedPopupLifetimeTests
         Assert.IsFalse(await missingRoot.WaitForFirstFrameAsync(TimeSpan.Zero, CancellationToken.None));
     }
 
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task TargetedOwnedToolPopup_ItemRejectionCapturesExactPixelsForScreenshotAndRecordingStartup(bool recording)
+    {
+        if (ForegroundGuard.NoInteractiveDesktop())
+        {
+            Assert.Inconclusive("Native popup capture requires an interactive desktop.");
+        }
+        using var fixture = new UiaTestFixture();
+        PopupWindow? popup = null;
+        var start = WgcCapture.s_startGrabber;
+        var screen = UiAutomationService.s_captureFromScreenScaled;
+        var foreground = UiAutomationService.s_foregroundWindowForBlankRetry;
+        var blankRetry = UiAutomationService.s_sleepForBlankRetry;
+        IFrameGrabber? grabber = null;
+        try
+        {
+            nint handle = 0;
+            fixture.OnUiThread(() =>
+            {
+                popup = new PopupWindow
+                {
+                    FormBorderStyle = FormBorderStyle.None,
+                    Size = new(48, 48),
+                    BackColor = System.Drawing.Color.Lime
+                };
+                popup.Show(fixture.Form);
+                popup.Refresh();
+                handle = popup.Handle;
+            });
+            var starts = 0;
+            WgcCapture.s_startGrabber = (window, logger, fps) => OwnedPopupFrameGrabber.Start(window, logger, fps,
+                (candidate, _, rate) =>
+                {
+                    Assert.AreEqual(handle, (nint)candidate);
+                    Assert.AreEqual(recording ? 15 : 0, rate);
+                    starts++;
+                    WgcCapture.CheckCreateForWindowResult(candidate, unchecked((int)0x80070057));
+                    throw new AssertFailedException();
+                });
+            UiAutomationService.s_captureFromScreenScaled = (_, _, _, _, _, _) => throw new AssertFailedException("Screen capture is forbidden.");
+            UiAutomationService.s_foregroundWindowForBlankRetry = _ => Assert.Fail("Foreground retry is forbidden.");
+            UiAutomationService.s_sleepForBlankRetry = _ => Assert.Fail("Blank retry is forbidden.");
+            if (recording)
+            {
+                var backend = new WgcWindowCapture(NullLogger<WgcWindowCapture>.Instance);
+                grabber = backend.StartFrameGrabber(handle, 15);
+                Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
+            }
+            var bounds = OwnedPopupFrameGrabber.GetBounds(new HWND(handle));
+            var deadline = Environment.TickCount64 + 2000;
+            byte[] pixels;
+            int width;
+            int height;
+            do
+            {
+                if (grabber is null)
+                {
+                    (pixels, width, height) = await WgcCapture.CaptureAsync(new HWND(handle), NullLogger.Instance, CancellationToken.None);
+                }
+                else
+                {
+                    var frame = grabber.TryGetLatest()!.Value;
+                    (pixels, width, height) = (frame.Pixels, frame.Width, frame.Height);
+                }
+                if (InteriorIsGreen(pixels, width, height))
+                {
+                    break;
+                }
+                await Task.Delay(20);
+            } while (Environment.TickCount64 < deadline);
+            Assert.AreEqual(bounds.Right - bounds.Left, width);
+            Assert.AreEqual(bounds.Bottom - bounds.Top, height);
+            Assert.IsTrue(InteriorIsGreen(pixels, width, height), "All central 8x8 physical pixels must be opaque lime.");
+            Assert.IsTrue(starts > 0);
+            if (recording)
+            {
+                Assert.AreEqual(1, starts);
+                fixture.OnUiThread(() => popup!.Close());
+                Assert.IsTrue(grabber!.IsClosed);
+                Assert.IsNotNull(grabber.TryGetLatest());
+            }
+        }
+        finally
+        {
+            grabber?.Dispose();
+            WgcCapture.s_startGrabber = start;
+            UiAutomationService.s_captureFromScreenScaled = screen;
+            UiAutomationService.s_foregroundWindowForBlankRetry = foreground;
+            UiAutomationService.s_sleepForBlankRetry = blankRetry;
+            fixture.OnUiThread(() => popup?.Dispose());
+        }
+
+        static bool InteriorIsGreen(byte[] pixels, int width, int height)
+        {
+            for (var y = height / 2 - 4; y < height / 2 + 4; y++)
+            {
+                for (var x = width / 2 - 4; x < width / 2 + 4; x++)
+                {
+                    var index = (y * width + x) * 4;
+                    if (pixels[index] != 0 || pixels[index + 1] != 255 || pixels[index + 2] != 0 || pixels[index + 3] != 255)
+                    {
+                        return false;
+                    }
+                }
+            }
+            return true;
+        }
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(1)]
+    [DataRow(2)]
+    public void TargetedRoot_OrdinaryWindowRejectionAndGenericPopupInvalidArgumentStillPropagate(int kind)
+    {
+        if (ForegroundGuard.NoInteractiveDesktop())
+        {
+            Assert.Inconclusive("Native popup classification requires an interactive desktop.");
+        }
+        using var fixture = new UiaTestFixture();
+        PopupWindow? popup = null;
+        try
+        {
+            var window = new HWND(fixture.Hwnd);
+            if (kind != 0)
+            {
+                fixture.OnUiThread(() =>
+                {
+                    popup = new PopupWindow { FormBorderStyle = FormBorderStyle.None };
+                    if (kind == 2)
+                    {
+                        popup.Show(fixture.Form);
+                    }
+                    else
+                    {
+                        popup.Show();
+                    }
+                    window = new HWND(popup.Handle);
+                });
+            }
+            COMException failure = kind == 2
+                ? new COMException("Device conversion E_INVALIDARG", unchecked((int)0x80070057))
+                : new WgcCapture.UnsupportedCaptureWindowException(window);
+            if (kind == 2)
+            {
+                Assert.AreSame(failure, Assert.ThrowsExactly<COMException>(() =>
+                    OwnedPopupFrameGrabber.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
+            }
+            else
+            {
+                Assert.AreSame(failure, Assert.ThrowsExactly<WgcCapture.UnsupportedCaptureWindowException>(() =>
+                    OwnedPopupFrameGrabber.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
+            }
+        }
+        finally
+        {
+            fixture.OnUiThread(() => popup?.Dispose());
+        }
+    }
+
+    [TestMethod]
+    public void RootClosure_StrictGdiDrainsCachedFrameWithoutSchedulingAnotherCapture()
+    {
+        WithOwnedPopup((_, child, _) =>
+        {
+            var calls = 0;
+            var valid = true;
+            using var root = new PrintWindowPopupFrameGrabber(child,
+                () => (new byte[] { (byte)Interlocked.Increment(ref calls), 0, 0, 255 }, 1, 1));
+            using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+                () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
+            var deadline = Environment.TickCount64 + 2000;
+            var healthy = composite.TryGetLatest();
+            while (healthy is null && Environment.TickCount64 < deadline)
+            {
+                Thread.Sleep(5);
+                healthy = composite.TryGetLatest();
+            }
+            Assert.IsNotNull(healthy);
+            Assert.AreEqual(1, calls);
+            Assert.IsFalse(root.IsClosed, "The native HWND remains visible while the compositor identity is invalidated.");
+            valid = false;
+            Assert.IsTrue(composite.IsClosed);
+            var final = composite.TryGetLatest()!.Value;
+            Assert.AreEqual(1, calls);
+            Assert.AreEqual(healthy.Value.Version, final.Version);
+            Assert.AreSame(healthy.Value.Pixels, final.Pixels);
+            Assert.AreEqual(final.Version, composite.TryGetLatest()!.Value.Version);
+            Assert.AreEqual(1, calls);
+        });
+    }
+
+    [TestMethod]
+    public void PrintWindow_CompletedResultFromChangedPidIsDiscardedWithoutAdvancingCache()
+    {
+        WithOwnedPopup((_, child, pid) =>
+        {
+            using var started = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var finished = new ManualResetEventSlim();
+            var calls = 0;
+            var getPid = RealOwnedWindowFinder.s_getWindowProcessId;
+            using var root = new PrintWindowPopupFrameGrabber(child, () =>
+            {
+                var value = Interlocked.Increment(ref calls);
+                if (value == 2)
+                {
+                    started.Set();
+                    release.Wait();
+                    finished.Set();
+                }
+                return (new byte[] { (byte)value, 0, 0, 255 }, 1, 1);
+            });
+            try
+            {
+                var deadline = Environment.TickCount64 + 2000;
+                var healthy = root.TryGetLatest();
+                while (healthy is null && Environment.TickCount64 < deadline)
+                {
+                    Thread.Sleep(5);
+                    healthy = root.TryGetLatest();
+                }
+                Assert.IsNotNull(healthy);
+                root.TryGetLatest();
+                Assert.IsTrue(started.Wait(TimeSpan.FromSeconds(2)));
+                RealOwnedWindowFinder.s_getWindowProcessId = window => window == child ? pid + 1 : getPid(window);
+                release.Set();
+                Assert.IsTrue(finished.Wait(TimeSpan.FromSeconds(2)));
+                var final = root.TryGetLatest()!.Value;
+                Assert.IsTrue(root.IsClosed);
+                Assert.AreEqual(healthy.Value.Version, final.Version);
+                Assert.AreSame(healthy.Value.Pixels, final.Pixels);
+                Assert.AreEqual((byte)1, final.Pixels[0]);
+                root.TryGetLatest();
+                Assert.AreEqual(2, calls);
+            }
+            finally
+            {
+                release.Set();
+                if (started.IsSet)
+                {
+                    Assert.IsTrue(finished.Wait(TimeSpan.FromSeconds(2)));
+                }
+                RealOwnedWindowFinder.s_getWindowProcessId = getPid;
+            }
+        });
+    }
+
+    [TestMethod]
+    public void RootClosure_WgcStyleFinalFrameStillDrainsAndAdvancesVersion()
+    {
+        var reads = 0;
+        var valid = true;
+        var root = new Grabber { OnSample = () => reads++ };
+        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+            () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
+        var healthy = composite.TryGetLatest()!.Value;
+        Assert.AreEqual(1, reads);
+        root.Version++;
+        root.Pixels[0] = 42;
+        valid = false;
+        var final = composite.TryGetLatest()!.Value;
+        Assert.AreEqual(2, reads);
+        Assert.AreEqual(healthy.Version + 1, final.Version);
+        Assert.AreEqual((byte)42, final.Pixels[0]);
+    }
+
     private static void WithOwnedPopup(Action<HWND, HWND, int> test)
     {
         if (ForegroundGuard.NoInteractiveDesktop())
