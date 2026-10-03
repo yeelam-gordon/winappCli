@@ -239,8 +239,8 @@ internal static partial class WgcCapture
             _pendingFrame = null;
             try
             {
-                var (pixels, width, height) = CopyFrame(_device, _context, frame);
                 _lastSampleMs = Environment.TickCount64;
+                var (pixels, width, height) = CopyFrame(_device, _context, frame);
                 lock (_lock)
                 {
                     _latestPixels = pixels;
