@@ -7,16 +7,16 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 
 [TestClass]
 [DoNotParallelize]
-public class OwnedPopupCompositionTests
+public class WindowCaptureIncludingMenusAndTooltipsTests
 {
     [TestMethod]
     public void Blend_PreservesPremultipliedAlpha()
     {
         byte[] root = [0, 0, 128, 128];
-        OwnedPopupComposition.Blend(root, 1, 1, [0, 128, 0, 128], 1, 1, 0, 0);
+        WindowCaptureIncludingMenusAndTooltips.IncludeMenuOrTooltipInWindowImage(root, 1, 1, [0, 128, 0, 128], 1, 1, 0, 0);
         CollectionAssert.AreEqual(new byte[] { 0, 128, 64, 192 }, root);
         var before = (byte[])root.Clone();
-        OwnedPopupComposition.Blend(root, 1, 1, [0, 0, 0, 0], 1, 1, 0, 0);
+        WindowCaptureIncludingMenusAndTooltips.IncludeMenuOrTooltipInWindowImage(root, 1, 1, [0, 0, 0, 0], 1, 1, 0, 0);
         CollectionAssert.AreEqual(before, root);
     }
 
@@ -25,10 +25,10 @@ public class OwnedPopupCompositionTests
     {
         var root = new byte[16];
         byte[] popup = [1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255];
-        OwnedPopupComposition.Blend(root, 2, 2, popup, 2, 2, -1, -1);
+        WindowCaptureIncludingMenusAndTooltips.IncludeMenuOrTooltipInWindowImage(root, 2, 2, popup, 2, 2, -1, -1);
         CollectionAssert.AreEqual(new byte[] { 10, 11, 12, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, root);
         var before = (byte[])root.Clone();
-        OwnedPopupComposition.Blend(root, 2, 2, popup, 2, 2, int.MaxValue, int.MinValue);
+        WindowCaptureIncludingMenusAndTooltips.IncludeMenuOrTooltipInWindowImage(root, 2, 2, popup, 2, 2, int.MaxValue, int.MinValue);
         CollectionAssert.AreEqual(before, root);
     }
 
@@ -42,10 +42,10 @@ public class OwnedPopupCompositionTests
             {
                 3 => 2, 2 => 1, 4 => 0, 5 => 6, 6 => 5, 9 => 1, _ => 0
             });
-            Assert.IsTrue(OwnedPopupFrameGrabber.IsOwnedBy(new HWND(3), new HWND(1), 1));
-            Assert.IsFalse(OwnedPopupFrameGrabber.IsOwnedBy(new HWND(4), new HWND(1), 1));
-            Assert.IsFalse(OwnedPopupFrameGrabber.IsOwnedBy(new HWND(5), new HWND(1), 1));
-            Assert.IsFalse(OwnedPopupFrameGrabber.IsOwnedBy(new HWND(9), new HWND(1), 1));
+            Assert.IsTrue(WindowCaptureIncludingMenusAndTooltips.IsOwnedBy(new HWND(3), new HWND(1), 1));
+            Assert.IsFalse(WindowCaptureIncludingMenusAndTooltips.IsOwnedBy(new HWND(4), new HWND(1), 1));
+            Assert.IsFalse(WindowCaptureIncludingMenusAndTooltips.IsOwnedBy(new HWND(5), new HWND(1), 1));
+            Assert.IsFalse(WindowCaptureIncludingMenusAndTooltips.IsOwnedBy(new HWND(9), new HWND(1), 1));
         }
         finally
         {
@@ -58,8 +58,8 @@ public class OwnedPopupCompositionTests
     {
         var root = new FakeGrabber([0, 0, 255, 255]);
         var started = new List<FakeGrabber>();
-        var popups = new List<OwnedPopupFrameGrabber.Popup>();
-        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        var popups = new List<WindowCaptureIncludingMenusAndTooltips.Popup>();
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () => popups.ToList(), _ =>
             {
                 var child = new FakeGrabber([0, 255, 0, 255]);
@@ -87,7 +87,7 @@ public class OwnedPopupCompositionTests
         var root = new FakeGrabber([0, 0, 255, 255]);
         var top = new FakeGrabber([128, 0, 0, 128]);
         var bottom = new FakeGrabber([0, 255, 0, 255]);
-        var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () => [new(2, new(0, 0, 1, 1)), new(3, new(0, 0, 1, 1))],
             handle => handle == 2 ? top : bottom);
         try
@@ -108,7 +108,7 @@ public class OwnedPopupCompositionTests
     public void Sampling_UnchangedInputsRetainVersionAndPixelReference()
     {
         var root = new FakeGrabber([0, 0, 255, 255]);
-        using var empty = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var empty = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () => [], _ => throw new AssertFailedException("No popup session should be started."));
         var first = empty.TryGetLatest()!.Value;
         var repeated = empty.TryGetLatest()!.Value;
@@ -117,7 +117,7 @@ public class OwnedPopupCompositionTests
         Assert.AreEqual(first.Version, repeated.Version);
 
         var child = new FakeGrabber([0, 255, 0, 255]);
-        using var composed = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var composed = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () => [new(2, new(0, 0, 1, 1))], _ => child);
         first = composed.TryGetLatest()!.Value;
         repeated = composed.TryGetLatest()!.Value;
@@ -132,8 +132,8 @@ public class OwnedPopupCompositionTests
         var root = new FakeGrabber([0, 0, 255, 255]);
         var child = new FakeGrabber([0, 255, 0, 255]);
         var bounds = new PointerRect(0, 0, 1, 1);
-        var popups = new List<OwnedPopupFrameGrabber.Popup> { new(2, bounds) };
-        using var composite = new OwnedPopupFrameGrabber(root, () => bounds,
+        var popups = new List<WindowCaptureIncludingMenusAndTooltips.Popup> { new(2, bounds) };
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => bounds,
             () => popups.ToList(), _ => child);
         var version = composite.TryGetLatest()!.Value.Version;
 
@@ -171,7 +171,7 @@ public class OwnedPopupCompositionTests
     {
         var root = new FakeGrabber([0, 0, 255, 255]);
         var child = new FakeGrabber([0, 255, 0, 255]);
-        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () => [new(2, new(0, 0, 1, 1))], _ => child);
         composite.TryGetLatest();
         child.Version++;

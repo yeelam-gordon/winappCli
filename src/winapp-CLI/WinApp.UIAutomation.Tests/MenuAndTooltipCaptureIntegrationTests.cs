@@ -9,7 +9,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 
 [TestClass]
 [DoNotParallelize]
-public class WgcSecondaryWindowTests
+public class MenuAndTooltipCaptureIntegrationTests
 {
     [TestMethod]
     [DataRow(false, 0)]

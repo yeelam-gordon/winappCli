@@ -12,7 +12,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 
 [TestClass]
 [DoNotParallelize]
-public class OwnedPopupLifetimeTests
+public class MenuAndTooltipCaptureTests
 {
     [TestMethod]
     [DataRow(false)]
@@ -22,9 +22,9 @@ public class OwnedPopupLifetimeTests
         long now = 100;
         var root = new Grabber();
         var child = new Grabber { HasFrame = false };
-        var popups = new List<OwnedPopupFrameGrabber.Popup>();
+        var popups = new List<WindowCaptureIncludingMenusAndTooltips.Popup>();
         var logger = new CaptureLogger();
-        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () => popups.ToList(), _ => child, () => now, logger: logger);
         var healthy = composite.TryGetLatest()!.Value;
         popups.Add(new(42, new(0, 0, 1, 1)));
@@ -42,7 +42,7 @@ public class OwnedPopupLifetimeTests
         else
         {
             now = 2100;
-            var error = Assert.ThrowsExactly<OwnedPopupCaptureException>(() => composite.TryGetLatest());
+            var error = Assert.ThrowsExactly<MenuOrTooltipCaptureException>(() => composite.TryGetLatest());
             Assert.IsInstanceOfType<TimeoutException>(error.InnerException);
             StringAssert.Contains(error.Message, "42");
             Assert.IsTrue(logger.Messages.Any(m => m.Level == LogLevel.Error && m.Text.Contains("42")));
@@ -66,7 +66,7 @@ public class OwnedPopupLifetimeTests
         var starts = 0;
         var logger = new CaptureLogger();
         var root = new Grabber();
-        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () =>
             {
                 if (!duringStart && ++discoveries > 1)
@@ -94,9 +94,9 @@ public class OwnedPopupLifetimeTests
     {
         var failure = new COMException("Non-classified WGC startup failure", hresult);
         var logger = new CaptureLogger();
-        using var composite = new OwnedPopupFrameGrabber(new Grabber(), () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(new Grabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))], _ => throw failure, logger: logger);
-        Assert.AreSame(failure, Assert.ThrowsExactly<OwnedPopupCaptureException>(() => composite.TryGetLatest()).InnerException);
+        Assert.AreSame(failure, Assert.ThrowsExactly<MenuOrTooltipCaptureException>(() => composite.TryGetLatest()).InnerException);
         Assert.IsTrue(logger.Messages.Any(m => m.Level == LogLevel.Error));
     }
 
@@ -135,7 +135,7 @@ public class OwnedPopupLifetimeTests
             var visible = true;
             var starts = 0;
             var logger = new CaptureLogger();
-            var bounds = OwnedPopupFrameGrabber.GetBounds(new HWND(handle));
+            var bounds = WindowCaptureIncludingMenusAndTooltips.GetBounds(new HWND(handle));
             var width = bounds.Right - bounds.Left;
             var height = bounds.Bottom - bounds.Top;
             var root = new Grabber { Width = width, Height = height, Pixels = new byte[width * height * 4] };
@@ -144,7 +144,7 @@ public class OwnedPopupLifetimeTests
                 root.Pixels[i + 2] = 255;
                 root.Pixels[i + 3] = 255;
             }
-            using var composite = new OwnedPopupFrameGrabber(root, () => bounds,
+            using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => bounds,
                 () => visible ? [new(handle, bounds)] : [],
                 _ =>
                 {
@@ -218,7 +218,7 @@ public class OwnedPopupLifetimeTests
     [TestMethod]
     public void PrintWindow_InvalidWindowFailsExplicitly()
     {
-        Assert.ThrowsExactly<Win32Exception>(() => UiAutomationService.CapturePopupFromWindow(new HWND(-1), 2, 2));
+        Assert.ThrowsExactly<Win32Exception>(() => UiAutomationService.RenderMenuOrTooltipWindowForCapture(new HWND(-1), 2, 2));
     }
 
     [TestMethod]
@@ -232,7 +232,7 @@ public class OwnedPopupLifetimeTests
         WithOwnedPopup((_, window, _) =>
         {
             var attempts = 0;
-            byte[] Capture() => UiAutomationService.CapturePopupFromWindow(window, 16, 16, (_, dc) =>
+            byte[] Capture() => UiAutomationService.RenderMenuOrTooltipWindowForCapture(window, 16, 16, (_, dc) =>
             {
                 attempts++;
                 for (var y = 0; y < (full ? 16 : 1); y++)
@@ -281,7 +281,7 @@ public class OwnedPopupLifetimeTests
             try
             {
                 var failure = Assert.ThrowsExactly<InvalidOperationException>(() =>
-                    PrintWindowPopupFrameGrabber.EnsureCaptureAllowed(child));
+                    MenuAndTooltipCaptureFallback.EnsureCaptureAllowed(child));
                 StringAssert.Contains(failure.Message, "protected from capture");
             }
             finally
@@ -301,7 +301,7 @@ public class OwnedPopupLifetimeTests
             using var finished = new ManualResetEventSlim();
             long now = 0;
             var calls = 0;
-            using var grabber = new PrintWindowPopupFrameGrabber(child, () =>
+            using var grabber = new MenuAndTooltipCaptureFallback(child, () =>
             {
                 Interlocked.Increment(ref calls);
                 started.Set();
@@ -355,7 +355,7 @@ public class OwnedPopupLifetimeTests
                 popup.Refresh();
                 handle = popup.Handle;
             });
-            using var grabber = new PrintWindowPopupFrameGrabber(new HWND(handle));
+            using var grabber = new MenuAndTooltipCaptureFallback(new HWND(handle));
             Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             var frame = grabber.TryGetLatest()!.Value;
             var renderDeadline = Environment.TickCount64 + 2000;
@@ -368,7 +368,7 @@ public class OwnedPopupLifetimeTests
             Assert.AreNotEqual((nint)0, previous);
             try
             {
-                var bounds = OwnedPopupFrameGrabber.GetBounds(new HWND(handle));
+                var bounds = WindowCaptureIncludingMenusAndTooltips.GetBounds(new HWND(handle));
                 Assert.AreEqual(bounds.Right - bounds.Left, frame.Width);
                 Assert.AreEqual(bounds.Bottom - bounds.Top, frame.Height);
                 var clientOrigin = new System.Drawing.Point();
@@ -408,7 +408,7 @@ public class OwnedPopupLifetimeTests
     {
         var visible = true;
         var failure = new Win32Exception(1400);
-        using var composite = new OwnedPopupFrameGrabber(new Grabber(), () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(new Grabber(), () => new(0, 0, 1, 1),
             () => visible ? [new(42, new(0, 0, 1, 1))] : [],
             _ => new Grabber
             {
@@ -425,7 +425,7 @@ public class OwnedPopupLifetimeTests
         }
         else
         {
-            Assert.AreSame(failure, Assert.ThrowsExactly<OwnedPopupCaptureException>(() => composite.TryGetLatest()).InnerException);
+            Assert.AreSame(failure, Assert.ThrowsExactly<MenuOrTooltipCaptureException>(() => composite.TryGetLatest()).InnerException);
         }
     }
 
@@ -457,7 +457,7 @@ public class OwnedPopupLifetimeTests
                 handle = popup.Handle;
             });
             var attempts = 0;
-            byte[] Capture() => UiAutomationService.CapturePopupFromWindow(new HWND(handle), 16, 16,
+            byte[] Capture() => UiAutomationService.RenderMenuOrTooltipWindowForCapture(new HWND(handle), 16, 16,
                 (_, _) => { attempts++; return reportsSuccess; });
             if (reportsSuccess)
             {
@@ -502,8 +502,8 @@ public class OwnedPopupLifetimeTests
             var logger = new CaptureLogger();
             var root = new Grabber();
             RealOwnedWindowFinder.s_findNextTopLevelWindow = after => after.IsNull ? childHandle : HWND.Null;
-            using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
-                () => OwnedPopupFrameGrabber.Discover(rootHandle, pid, logger, _ => new(0, 0, 10, 10)),
+            using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+                () => WindowCaptureIncludingMenusAndTooltips.Discover(rootHandle, pid, logger, _ => new(0, 0, 10, 10)),
                 hwnd =>
                 {
                     fixture.OnUiThread(() => popup!.Dispose());
@@ -530,14 +530,14 @@ public class OwnedPopupLifetimeTests
         var valid = true;
         var closeOnDiscovery = false;
         var logger = new CaptureLogger();
-        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () =>
             {
                 if (closeOnDiscovery)
                 {
                     valid = false;
                     root.IsClosed = nativeEvent;
-                    return OwnedPopupFrameGrabber.Discover(HWND.Null, 0, logger);
+                    return WindowCaptureIncludingMenusAndTooltips.Discover(HWND.Null, 0, logger);
                 }
                 return [new(42, new(0, 0, 1, 1))];
             }, _ => child, isRootValid: () => valid, logger: logger);
@@ -559,7 +559,7 @@ public class OwnedPopupLifetimeTests
     {
         var valid = true;
         var root = new Grabber();
-        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
         var first = composite.TryGetLatest()!.Value;
         valid = false;
@@ -575,7 +575,7 @@ public class OwnedPopupLifetimeTests
         var root = new Grabber();
         var valid = true;
         var failBounds = false;
-        using var composite = new OwnedPopupFrameGrabber(root, () =>
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () =>
             {
                 if (failBounds)
                 {
@@ -599,7 +599,7 @@ public class OwnedPopupLifetimeTests
     {
         var root = new Grabber();
         var failure = new InvalidOperationException("Unexpected discovery defect");
-        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () =>
             {
                 root.IsClosed = close;
@@ -613,7 +613,7 @@ public class OwnedPopupLifetimeTests
     {
         var root = new Grabber();
         var failure = new COMException("Unrelated discovery failure");
-        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () =>
             {
                 root.IsClosed = true;
@@ -629,8 +629,8 @@ public class OwnedPopupLifetimeTests
     {
         WithOwnedPopup((root, popup, pid) =>
         {
-            var results = new Func<List<OwnedPopupFrameGrabber.Popup>>(() =>
-                OwnedPopupFrameGrabber.Discover(root, pid, NullLogger.Instance,
+            var results = new Func<List<WindowCaptureIncludingMenusAndTooltips.Popup>>(() =>
+                WindowCaptureIncludingMenusAndTooltips.Discover(root, pid, NullLogger.Instance,
                     hwnd => hwnd == (emptyRoot ? root : popup) ? new(0, 0, 0, 0) : new(0, 0, 10, 10)));
             if (emptyRoot)
             {
@@ -652,8 +652,8 @@ public class OwnedPopupLifetimeTests
         {
             var logger = new CaptureLogger();
             var failure = new Win32Exception(1400);
-            var results = new Func<List<OwnedPopupFrameGrabber.Popup>>(() =>
-                OwnedPopupFrameGrabber.Discover(root, pid, logger, hwnd =>
+            var results = new Func<List<WindowCaptureIncludingMenusAndTooltips.Popup>>(() =>
+                WindowCaptureIncludingMenusAndTooltips.Discover(root, pid, logger, hwnd =>
                 {
                     if (hwnd == popup)
                     {
@@ -672,7 +672,7 @@ public class OwnedPopupLifetimeTests
             }
             else
             {
-                Assert.AreSame(failure, Assert.ThrowsExactly<OwnedPopupCaptureException>(() => results()).InnerException);
+                Assert.AreSame(failure, Assert.ThrowsExactly<MenuOrTooltipCaptureException>(() => results()).InnerException);
             }
         });
     }
@@ -680,13 +680,13 @@ public class OwnedPopupLifetimeTests
     [TestMethod]
     public async Task FirstFrame_OverallDeadlineDistinguishesPendingPopupFromMissingRootFrame()
     {
-        using var composite = new OwnedPopupFrameGrabber(new Grabber(), () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(new Grabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))], _ => new Grabber { HasFrame = false }, () => 100);
-        var failure = await Assert.ThrowsExactlyAsync<OwnedPopupCaptureException>(() =>
+        var failure = await Assert.ThrowsExactlyAsync<MenuOrTooltipCaptureException>(() =>
             composite.WaitForFirstFrameAsync(TimeSpan.Zero, CancellationToken.None));
         Assert.IsInstanceOfType<TimeoutException>(failure.InnerException);
 
-        using var missingRoot = new OwnedPopupFrameGrabber(new Grabber { HasFrame = false },
+        using var missingRoot = new WindowCaptureIncludingMenusAndTooltips(new Grabber { HasFrame = false },
             () => new(0, 0, 1, 1), () => [], _ => throw new AssertFailedException());
         Assert.IsFalse(await missingRoot.WaitForFirstFrameAsync(TimeSpan.Zero, CancellationToken.None));
     }
@@ -723,7 +723,7 @@ public class OwnedPopupLifetimeTests
                 handle = popup.Handle;
             });
             var starts = 0;
-            WgcCapture.s_startGrabber = (window, logger, fps) => OwnedPopupFrameGrabber.Start(window, logger, fps,
+            WgcCapture.s_startGrabber = (window, logger, fps) => WindowCaptureIncludingMenusAndTooltips.Start(window, logger, fps,
                 (candidate, _, rate) =>
                 {
                     Assert.AreEqual(handle, (nint)candidate);
@@ -741,7 +741,7 @@ public class OwnedPopupLifetimeTests
                 grabber = backend.StartFrameGrabber(handle, 15);
                 Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             }
-            var bounds = OwnedPopupFrameGrabber.GetBounds(new HWND(handle));
+            var bounds = WindowCaptureIncludingMenusAndTooltips.GetBounds(new HWND(handle));
             var deadline = Environment.TickCount64 + 2000;
             byte[] pixels;
             int width;
@@ -839,12 +839,12 @@ public class OwnedPopupLifetimeTests
             if (kind == 2)
             {
                 Assert.AreSame(failure, Assert.ThrowsExactly<COMException>(() =>
-                    OwnedPopupFrameGrabber.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
+                    WindowCaptureIncludingMenusAndTooltips.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
             }
             else
             {
                 Assert.AreSame(failure, Assert.ThrowsExactly<WgcCapture.UnsupportedCaptureWindowException>(() =>
-                    OwnedPopupFrameGrabber.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
+                    WindowCaptureIncludingMenusAndTooltips.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
             }
         }
         finally
@@ -860,9 +860,9 @@ public class OwnedPopupLifetimeTests
         {
             var calls = 0;
             var valid = true;
-            using var root = new PrintWindowPopupFrameGrabber(child,
+            using var root = new MenuAndTooltipCaptureFallback(child,
                 () => (new byte[] { (byte)Interlocked.Increment(ref calls), 0, 0, 255 }, 1, 1));
-            using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+            using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
                 () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
             var deadline = Environment.TickCount64 + 2000;
             var healthy = composite.TryGetLatest();
@@ -895,7 +895,7 @@ public class OwnedPopupLifetimeTests
             using var finished = new ManualResetEventSlim();
             var calls = 0;
             var getPid = RealOwnedWindowFinder.s_getWindowProcessId;
-            using var root = new PrintWindowPopupFrameGrabber(child, () =>
+            using var root = new MenuAndTooltipCaptureFallback(child, () =>
             {
                 var value = Interlocked.Increment(ref calls);
                 if (value == 2)
@@ -947,7 +947,7 @@ public class OwnedPopupLifetimeTests
         var reads = 0;
         var valid = true;
         var root = new Grabber { OnSample = () => reads++ };
-        using var composite = new OwnedPopupFrameGrabber(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
             () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
         var healthy = composite.TryGetLatest()!.Value;
         Assert.AreEqual(1, reads);

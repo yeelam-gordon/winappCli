@@ -27,7 +27,7 @@ internal static partial class WgcCapture
     /// real HWND, which requires native GPU/WinRT resources unavailable in deterministic headless runs.
     /// </remarks>
     public static IFrameGrabber StartGrabber(HWND hwnd, ILogger logger, int fps = 0)
-        => OwnedPopupFrameGrabber.Start(hwnd, logger, fps);
+        => WindowCaptureIncludingMenusAndTooltips.Start(hwnd, logger, fps);
 
     internal static FrameGrabber StartSingleWindowGrabber(HWND hwnd, ILogger logger, int fps = 0)
     {

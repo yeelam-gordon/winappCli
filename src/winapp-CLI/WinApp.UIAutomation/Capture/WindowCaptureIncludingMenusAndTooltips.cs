@@ -11,7 +11,12 @@ using Windows.Win32.Foundation;
 
 namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 
-internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
+/// <summary>
+/// Includes existing dropdown menus, flyouts, and tooltips in a window's captured image.
+/// Uses Windows graphics capture first and <see cref="MenuAndTooltipCaptureFallback"/> when
+/// Windows rejects an owned UI window. Does not create or display UI.
+/// </summary>
+internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGrabber
 {
     internal readonly record struct Popup(nint Handle, PointerRect Bounds);
     private readonly record struct PopupInput(Popup Popup, IFrameGrabber Grabber, long Version, int Width, int Height);
@@ -34,7 +39,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
     private PopupInput[] _popupInputs = [];
     private (byte[] Pixels, int Width, int Height, long Version)? _latest;
 
-    internal OwnedPopupFrameGrabber(IFrameGrabber root, Func<PointerRect> rootBounds,
+    internal WindowCaptureIncludingMenusAndTooltips(IFrameGrabber root, Func<PointerRect> rootBounds,
         Func<List<Popup>> discover, Func<nint, IFrameGrabber> start,
         Func<long>? clock = null, Func<bool>? isRootValid = null, ILogger? logger = null, int? expectedPid = null)
     {
@@ -48,7 +53,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         _expectedPid = expectedPid;
     }
 
-    internal static OwnedPopupFrameGrabber Start(HWND hwnd, ILogger logger, int fps,
+    internal static WindowCaptureIncludingMenusAndTooltips Start(HWND hwnd, ILogger logger, int fps,
         Func<HWND, ILogger, int, IFrameGrabber>? startWindow = null)
     {
         startWindow ??= (window, log, rate) => WgcCapture.StartSingleWindowGrabber(window, log, rate);
@@ -83,10 +88,10 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
             ((uint)GetWindowLong((nint)hwnd, -20) & 0x00000080) != 0;
     }
 
-    private static PrintWindowPopupFrameGrabber StartPrintWindowFallback(HWND hwnd, ILogger logger, Exception cause, int? expectedPid = null)
+    private static MenuAndTooltipCaptureFallback StartPrintWindowFallback(HWND hwnd, ILogger logger, Exception cause, int? expectedPid = null)
     {
-        logger.LogWarning(cause, "WGC rejected owned popup {Hwnd}; using window-only PrintWindow capture.", (nint)hwnd);
-        return new PrintWindowPopupFrameGrabber(hwnd, logger: logger, expectedPid: expectedPid);
+        logger.LogWarning(cause, "Windows graphics capture rejected menu or tooltip window {Hwnd}; using window-only rendering (PrintWindow).", (nint)hwnd);
+        return new MenuAndTooltipCaptureFallback(hwnd, logger: logger, expectedPid: expectedPid);
     }
 
     private (byte[] Pixels, int Width, int Height, long Version)? ReadRootFrame()
@@ -95,9 +100,9 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         {
             return _root.TryGetLatest();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && _root is PrintWindowPopupFrameGrabber popup)
+        catch (Exception ex) when (ex is not OperationCanceledException && _root is MenuAndTooltipCaptureFallback popup)
         {
-            throw new OwnedPopupCaptureException(popup.WindowHandle, ex);
+            throw new MenuOrTooltipCaptureException(popup.WindowHandle, ex);
         }
     }
 
@@ -120,7 +125,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
             catch (Exception ex) when (
                 (ex is RootClosedException or Win32Exception) && IsClosed)
             {
-                _logger.LogDebug(ex, "Captured root closed during popup discovery; draining the final frame.");
+                _logger.LogDebug(ex, "Captured root closed during menu and tooltip discovery; draining the final frame.");
                 return DrainClosedRoot();
             }
         }
@@ -130,11 +135,11 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
     {
         if (!_closed)
         {
-            _logger.LogDebug("Captured root is no longer valid; releasing owned-popup sessions.");
+            _logger.LogDebug("Captured root is no longer valid; releasing menu and tooltip capture sessions.");
         }
         _closed = true;
         DisposeChildren();
-        if (_root is PrintWindowPopupFrameGrabber)
+        if (_root is MenuAndTooltipCaptureFallback)
         {
             return _latest;
         }
@@ -162,8 +167,8 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         }
         if (popups.Count > 16)
         {
-            throw new OwnedPopupCaptureException(popups[0].Handle,
-                new InvalidOperationException("More than 16 intersecting owned popups are visible."));
+            throw new MenuOrTooltipCaptureException(popups[0].Handle,
+                new InvalidOperationException("More than 16 intersecting owned menu or tooltip windows are visible."));
         }
         for (var i = popups.Count - 1; i >= 0; i--)
         {
@@ -172,7 +177,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
             {
                 if (!_discover().Any(p => p.Handle == popup.Handle))
                 {
-                    _logger.LogDebug("Owned popup {Hwnd} disappeared before capture startup.", popup.Handle);
+                    _logger.LogDebug("Menu or tooltip window {Hwnd} disappeared before capture startup.", popup.Handle);
                     popups.RemoveAt(i);
                     continue;
                 }
@@ -191,10 +196,10 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
                             _firstFrameDeadlines.Add(popup.Handle, _clock() + 2000);
                             continue;
                         }
-                        _logger.LogError(ex, "WGC startup failed for still-visible owned popup {Hwnd}.", popup.Handle);
-                        throw new OwnedPopupCaptureException(popup.Handle, ex);
+                        _logger.LogError(ex, "Windows graphics capture startup failed for still-visible menu or tooltip window {Hwnd}.", popup.Handle);
+                        throw new MenuOrTooltipCaptureException(popup.Handle, ex);
                     }
-                    _logger.LogDebug(ex, "Owned popup {Hwnd} disappeared during capture startup.", popup.Handle);
+                    _logger.LogDebug(ex, "Menu or tooltip window {Hwnd} disappeared during capture startup.", popup.Handle);
                     popups.RemoveAt(i);
                 }
             }
@@ -221,20 +226,20 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
             {
                 if (!_discover().Any(p => p.Handle == popups[i].Handle))
                 {
-                    _logger.LogDebug(ex, "Owned popup {Hwnd} disappeared during capture.", popups[i].Handle);
+                    _logger.LogDebug(ex, "Menu or tooltip window {Hwnd} disappeared during capture.", popups[i].Handle);
                     return null;
                 }
-                _logger.LogError(ex, "Capture failed for still-visible owned popup {Hwnd}.", popups[i].Handle);
-                throw new OwnedPopupCaptureException(popups[i].Handle, ex);
+                _logger.LogError(ex, "Capture failed for still-visible menu or tooltip window {Hwnd}.", popups[i].Handle);
+                throw new MenuOrTooltipCaptureException(popups[i].Handle, ex);
             }
             if (child is null)
             {
                 if (!_firstFrameDeadlines.TryGetValue(popups[i].Handle, out var deadline) ||
                     _clock() >= deadline)
                 {
-                    _logger.LogError("Owned popup {Hwnd} did not produce a capture frame within 2 seconds.", popups[i].Handle);
-                    throw new OwnedPopupCaptureException(popups[i].Handle,
-                        new TimeoutException($"Owned popup HWND {popups[i].Handle} did not produce a capture frame within 2 seconds."));
+                    _logger.LogError("Menu or tooltip window {Hwnd} did not produce a capture frame within 2 seconds.", popups[i].Handle);
+                    throw new MenuOrTooltipCaptureException(popups[i].Handle,
+                        new TimeoutException($"Menu or tooltip HWND {popups[i].Handle} did not produce a capture frame within 2 seconds."));
                 }
                 return null;
             }
@@ -260,7 +265,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         {
             var popup = popups[i];
             var child = childFrames[i];
-            OwnedPopupComposition.Blend(pixels, result.Width, result.Height,
+            IncludeMenuOrTooltipInWindowImage(pixels, result.Width, result.Height,
                 child.Pixels, child.Width, child.Height,
                 popup.Bounds.Left - bounds.Left, popup.Bounds.Top - bounds.Top);
         }
@@ -290,19 +295,19 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         }
         lock (_lock)
         {
-            if (!IsClosed && _root is PrintWindowPopupFrameGrabber popupRoot && ReadRootFrame() is null)
+            if (!IsClosed && _root is MenuAndTooltipCaptureFallback popupRoot && ReadRootFrame() is null)
             {
-                throw new OwnedPopupCaptureException(popupRoot.WindowHandle,
-                    new TimeoutException("The targeted popup did not produce a frame before the capture deadline."));
+                throw new MenuOrTooltipCaptureException(popupRoot.WindowHandle,
+                    new TimeoutException("The targeted menu or tooltip did not produce a frame before the capture deadline."));
             }
             if (!IsClosed && ReadRootFrame() is not null)
             {
                 var popups = _discover();
                 if (popups.Count != 0)
                 {
-                    var error = new TimeoutException("The owned popup did not produce a stable composite frame before the capture deadline.");
-                    _logger.LogError(error, "Owned popup {Hwnd} prevented the first composite frame.", popups[0].Handle);
-                    throw new OwnedPopupCaptureException(popups[0].Handle, error);
+                    var error = new TimeoutException("The owned menu or tooltip did not produce a stable combined image before the capture deadline.");
+                    _logger.LogError(error, "Menu or tooltip window {Hwnd} prevented the first combined image.", popups[0].Handle);
+                    throw new MenuOrTooltipCaptureException(popups[0].Handle, error);
                 }
             }
         }
@@ -370,11 +375,11 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
                 if (!IsWindow((nint)window) ||
                     !RealOwnedWindowFinder.s_isWindowVisible(window) || !IsOwnedBy(window, root, pid))
                 {
-                    logger.LogDebug(ex, "Owned popup {Hwnd} disappeared during its bounds query.", (nint)window);
+                    logger.LogDebug(ex, "Menu or tooltip window {Hwnd} disappeared during its bounds query.", (nint)window);
                     continue;
                 }
-                logger.LogError(ex, "Cannot query bounds for still-visible owned popup {Hwnd}.", (nint)window);
-                throw new OwnedPopupCaptureException((nint)window, ex);
+                logger.LogError(ex, "Cannot query bounds for still-visible menu or tooltip window {Hwnd}.", (nint)window);
+                throw new MenuOrTooltipCaptureException((nint)window, ex);
             }
             if (bounds.Right > bounds.Left && bounds.Bottom > bounds.Top &&
                 bounds.Left < rootBounds.Right && bounds.Right > rootBounds.Left &&
@@ -405,6 +410,36 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
             throw new InvalidOperationException("The capture window has empty bounds.");
         }
         return new(rect.left, rect.top, rect.right, rect.bottom);
+    }
+
+    // Preserve premultiplied BGRA transparency while clipping the UI image to the captured window.
+    internal static void IncludeMenuOrTooltipInWindowImage(byte[] root, int width, int height, byte[] popup,
+        int popupWidth, int popupHeight, int left, int top)
+    {
+        if (root.Length != checked(width * height * 4) ||
+            popup.Length != checked(popupWidth * popupHeight * 4))
+        {
+            throw new ArgumentException("Capture dimensions do not match the pixel buffers.");
+        }
+
+        var startX = Math.Max(0L, left);
+        var startY = Math.Max(0L, top);
+        var endX = Math.Min((long)width, (long)left + popupWidth);
+        var endY = Math.Min((long)height, (long)top + popupHeight);
+        for (var y = startY; y < endY; y++)
+        {
+            for (var x = startX; x < endX; x++)
+            {
+                var destination = checked((int)((y * width + x) * 4));
+                var source = checked((int)(((y - top) * popupWidth + x - left) * 4));
+                var inverseAlpha = 255 - popup[source + 3];
+                for (var channel = 0; channel < 4; channel++)
+                {
+                    root[destination + channel] = (byte)Math.Min(255,
+                        popup[source + channel] + (root[destination + channel] * inverseAlpha + 127) / 255);
+                }
+            }
+        }
     }
 
     private void DisposeChildren()
@@ -442,6 +477,6 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
     }
 }
 
-internal sealed class OwnedPopupCaptureException(nint hwnd, Exception cause)
-    : InvalidOperationException($"Capture failed for owned popup HWND {hwnd}: {cause.Message}", cause);
+internal sealed class MenuOrTooltipCaptureException(nint hwnd, Exception cause)
+    : InvalidOperationException($"Capture failed for menu or tooltip HWND {hwnd}: {cause.Message}", cause);
 #endif

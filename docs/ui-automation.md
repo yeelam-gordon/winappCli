@@ -516,14 +516,14 @@ winapp ui screenshot --app myapp --output menu.png
 winapp ui record --app myapp --duration-sec 10 --output menu.mp4
 ```
 
-Default Windows Graphics Capture includes visible popup and tool windows owned by the
-selected window in the same process, such as WinUI flyouts, dropdown menus, and tooltips,
-in both screenshots and recordings. No extra flag is needed. These controls can have
+Default capture includes visible WinUI flyouts, dropdown menus, and tooltips owned by the
+selected window in the same process in both screenshots and recordings. No extra flag is
+needed. These controls can have
 their own native window even when they look embedded in the app. Reopening a menu during
 recording captures it again.
 
-Some popup windows use a window-rendering fallback when Windows rejects them for graphics
-capture. This does not read the screen or move focus, but those popup pixels are opaque.
+Some menus or tooltips use a window-rendering fallback when Windows rejects them for graphics
+capture. This does not read the screen or move focus, but their captured pixels are opaque.
 
 Secondary-window content is clipped to the captured window's bounds; an element selector
 crops it further. Screenshots still include separately discovered owned windows as labeled
@@ -534,7 +534,7 @@ When Windows Graphics Capture is unavailable, or an overlay is not owned by the 
 window in the same process, use
 `--capture-screen --window <hwnd>` to capture the visible region instead. Keep that window
 uncovered: screen capture can include other apps. A recording in either mode stays within
-the selected window's bounds; select the popup's HWND directly when you need to record it
+the selected window's bounds; select the menu or tooltip's HWND directly when you need to record it
 in full.
 
 ### record

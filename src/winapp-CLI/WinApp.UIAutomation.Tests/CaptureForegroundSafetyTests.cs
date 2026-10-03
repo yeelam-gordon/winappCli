@@ -43,7 +43,7 @@ public class CaptureForegroundSafetyTests
         };
         long clocks = 0;
         WgcCapture.s_isSupported = () => true;
-        WgcCapture.s_startGrabber = (_, logger, _) => new OwnedPopupFrameGrabber(
+        WgcCapture.s_startGrabber = (_, logger, _) => new WindowCaptureIncludingMenusAndTooltips(
             new ScreenshotGrabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))],
             _ => boundary == 0 ? throw cause : new ScreenshotGrabber
@@ -61,7 +61,7 @@ public class CaptureForegroundSafetyTests
         UiAutomationService.s_foregroundWindowForBlankRetry = _ => foregrounds++;
         UiAutomationService.s_sleepForBlankRetry = _ => Assert.Fail("A failed child must not trigger blank retry.");
 
-        var failure = await Assert.ThrowsExactlyAsync<OwnedPopupCaptureException>(() =>
+        var failure = await Assert.ThrowsExactlyAsync<MenuOrTooltipCaptureException>(() =>
             service.ScreenshotAsync(TargetFor(fixture), null, false, false, CancellationToken.None));
         if (boundary == 3)
         {
