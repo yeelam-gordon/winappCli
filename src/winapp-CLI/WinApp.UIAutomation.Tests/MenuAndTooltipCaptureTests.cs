@@ -292,6 +292,63 @@ public class MenuAndTooltipCaptureTests
     }
 
     [TestMethod]
+    public void PrintWindow_ConsumedFrameStartsNextRenderWithoutAnotherPoll()
+    {
+        WithOwnedPopup((_, child, _) =>
+        {
+            using var started = new ManualResetEventSlim();
+            using var release = new ManualResetEventSlim();
+            using var finished = new ManualResetEventSlim();
+            long now = 0;
+            var calls = 0;
+            using var grabber = new MenuAndTooltipCaptureFallback(child, () =>
+            {
+                var value = Interlocked.Increment(ref calls);
+                if (value == 2)
+                {
+                    started.Set();
+                    try
+                    {
+                        Assert.IsTrue(release.Wait(TimeSpan.FromSeconds(5)));
+                    }
+                    finally
+                    {
+                        finished.Set();
+                    }
+                }
+                return (new byte[] { (byte)value, 0, 0, 255 }, 1, 1);
+            }, () => now);
+            try
+            {
+                var deadline = Environment.TickCount64 + 2000;
+                var frame = grabber.TryGetLatest();
+                while (frame is null && Environment.TickCount64 < deadline)
+                {
+                    Thread.Sleep(5);
+                    frame = grabber.TryGetLatest();
+                }
+                Assert.IsNotNull(frame);
+                Assert.IsTrue(started.Wait(TimeSpan.FromSeconds(2)),
+                    "Publishing the first frame must start the replacement render without another sample.");
+                Assert.AreEqual(2, calls);
+                now = 1999;
+                Assert.AreEqual(frame.Value.Version, grabber.TryGetLatest()!.Value.Version);
+                Assert.AreEqual(2, calls, "Sampling must not start a second concurrent render.");
+                now = 2000;
+                Assert.ThrowsExactly<TimeoutException>(() => grabber.TryGetLatest());
+            }
+            finally
+            {
+                release.Set();
+                if (started.IsSet)
+                {
+                    Assert.IsTrue(finished.Wait(TimeSpan.FromSeconds(2)));
+                }
+            }
+        });
+    }
+
+    [TestMethod]
     public void PrintWindow_SlowNativeCallDoesNotBlockSamplingAndTimesOut()
     {
         WithOwnedPopup((_, child, _) =>
@@ -872,16 +929,17 @@ public class MenuAndTooltipCaptureTests
                 healthy = composite.TryGetLatest();
             }
             Assert.IsNotNull(healthy);
-            Assert.AreEqual(1, calls);
+            Assert.IsTrue(SpinWait.SpinUntil(() => Volatile.Read(ref calls) == 2, TimeSpan.FromSeconds(2)),
+                "One replacement render is already scheduled while the root is still valid.");
             Assert.IsFalse(root.IsClosed, "The native HWND remains visible while the compositor identity is invalidated.");
             valid = false;
             Assert.IsTrue(composite.IsClosed);
             var final = composite.TryGetLatest()!.Value;
-            Assert.AreEqual(1, calls);
+            Assert.AreEqual(2, calls);
             Assert.AreEqual(healthy.Value.Version, final.Version);
             Assert.AreSame(healthy.Value.Pixels, final.Pixels);
             Assert.AreEqual(final.Version, composite.TryGetLatest()!.Value.Version);
-            Assert.AreEqual(1, calls);
+            Assert.AreEqual(2, calls);
         });
     }
 

@@ -55,18 +55,7 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         EnsureCaptureAllowed(hwnd);
         if (_pending is null)
         {
-            _started = _clock();
-            _pending = Task.Run(() =>
-            {
-                EnsureCurrentTarget();
-                var frame = (capture ?? CaptureWithPhysicalCoordinates)();
-                EnsureCurrentTarget();
-                return frame;
-            });
-            _ = _pending.ContinueWith(task =>
-                _logger.LogError(task.Exception, "Window-only capture failed for menu or tooltip window {Hwnd}.", (nint)hwnd),
-                CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
-                TaskScheduler.Default);
+            StartNextCapture();
         }
         if (!_pending.IsCompleted)
         {
@@ -82,6 +71,7 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         {
             return _latest;
         }
+        StartNextCapture();
         if (_latest is not null && _latest.Value.Width == frame.Width &&
             _latest.Value.Height == frame.Height && frame.Pixels.AsSpan().SequenceEqual(_latest.Value.Pixels))
         {
@@ -89,6 +79,22 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         }
         _latest = (frame.Pixels, frame.Width, frame.Height, ++_version);
         return _latest;
+    }
+
+    private void StartNextCapture()
+    {
+        _started = _clock();
+        _pending = Task.Run(() =>
+        {
+            EnsureCurrentTarget();
+            var frame = (capture ?? CaptureWithPhysicalCoordinates)();
+            EnsureCurrentTarget();
+            return frame;
+        });
+        _ = _pending.ContinueWith(task =>
+            _logger.LogError(task.Exception, "Window-only capture failed for menu or tooltip window {Hwnd}.", (nint)hwnd),
+            CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
     }
 
     private (byte[] Pixels, int Width, int Height) CaptureWithPhysicalCoordinates()
