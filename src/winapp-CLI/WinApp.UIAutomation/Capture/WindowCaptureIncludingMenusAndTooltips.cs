@@ -281,7 +281,7 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
     public async Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct)
         => await WaitForFrameAsync(timeout, ct).ConfigureAwait(false) is not null;
 
-    internal async Task<(byte[] Pixels, int Width, int Height, long Version)?> WaitForFrameAsync(
+    public async Task<(byte[] Pixels, int Width, int Height, long Version)?> WaitForFrameAsync(
         TimeSpan timeout, CancellationToken ct)
     {
         var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;

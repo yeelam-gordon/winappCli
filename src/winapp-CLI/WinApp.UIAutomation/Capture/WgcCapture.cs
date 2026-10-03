@@ -59,9 +59,9 @@ internal static partial class WgcCapture
         {
             ct.ThrowIfCancellationRequested();
             var next = grabber.TryGetLatest();
-            if (next is null && grabber is WindowCaptureIncludingMenusAndTooltips combined)
+            if (next is null)
             {
-                next = await combined.WaitForFrameAsync(
+                next = await grabber.WaitForFrameAsync(
                     TimeSpan.FromMilliseconds(Math.Max(0, deadline - Environment.TickCount64)), ct).ConfigureAwait(false);
             }
             if (next is { } fresh && (frame is null || fresh.Version > frame.Value.Version))

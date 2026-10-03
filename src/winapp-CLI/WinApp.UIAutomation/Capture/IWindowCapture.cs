@@ -35,6 +35,37 @@ public interface IFrameGrabber : IDisposable
     /// <paramref name="timeout"/> elapses first.
     /// </summary>
     Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct);
+
+    /// <summary>
+    /// Waits for and returns an available BGRA frame, or <see langword="null"/> if
+    /// <paramref name="timeout"/> elapses. The returned frame remains usable even if a
+    /// subsequent <see cref="TryGetLatest"/> call has no frame available.
+    /// </summary>
+    async Task<(byte[] Pixels, int Width, int Height, long Version)?> WaitForFrameAsync(
+        TimeSpan timeout, CancellationToken ct)
+    {
+        var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
+        ct.ThrowIfCancellationRequested();
+        if (!await WaitForFirstFrameAsync(timeout, ct).ConfigureAwait(false))
+        {
+            return null;
+        }
+        while (true)
+        {
+            ct.ThrowIfCancellationRequested();
+            var frame = TryGetLatest();
+            if (frame is not null)
+            {
+                return frame;
+            }
+            var remaining = deadline - Environment.TickCount64;
+            if (remaining <= 0)
+            {
+                return null;
+            }
+            await Task.Delay((int)Math.Min(30, remaining), ct).ConfigureAwait(false);
+        }
+    }
 }
 
 /// <summary>

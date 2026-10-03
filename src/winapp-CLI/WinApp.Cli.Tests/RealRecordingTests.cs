@@ -179,6 +179,68 @@ public partial class RealRecordingTests
     }
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task RecordAsync_StartupReadTemporarilyUnavailable_WaitsForFrame(bool retarget)
+    {
+        using var fx = new UiaTestFixture();
+        using var popup = new UiaTestFixture();
+        Assert.IsTrue(NewAutomation().TryGetWindowRect(popup.Hwnd, out var bounds));
+        var automation = new FakeUiAutomationService
+        {
+            FindSingleResult = new UiElement
+            {
+                WindowHandle = popup.Hwnd,
+                X = bounds.Left + 1,
+                Y = bounds.Top + 1,
+                Width = 32,
+                Height = 32,
+            },
+        };
+        var pixels = Enumerable.Repeat((byte)0x44, 64 * 64 * 4).ToArray();
+        var racingGrabber = new StartupRaceFrameGrabber(pixels);
+        var started = new List<nint>();
+        var capture = new FakeWindowCapture
+        {
+            Supported = true,
+            StartGrabberCallback = (hwnd, _) =>
+            {
+                started.Add(hwnd);
+                return !retarget || hwnd == popup.Hwnd
+                    ? racingGrabber : new FakeFrameGrabber(pixels, 64, 64);
+            },
+        };
+        Mp4SinkWriterEncoder.s_createNoClobber = (path, width, height, _, _) => new FakeVideoEncoder(path, width, height);
+
+        var result = await NewRecordingService(automation, capture).RecordAsync(SessionFor(fx),
+            retarget ? "popup" : null, new RecordOptions
+            {
+                OutputPath = ScratchOutput("ready-frame.mp4"),
+                DurationSec = 1,
+                Fps = 1,
+                MaxEdge = 64,
+            }, CancellationToken.None);
+
+        CollectionAssert.AreEqual(retarget ? new nint[] { fx.Hwnd, popup.Hwnd } : [fx.Hwnd], started);
+        Assert.AreEqual("wgc", result.Mode);
+        Assert.AreEqual(1, result.Frames);
+        Assert.IsTrue(racingGrabber.Reads >= 3);
+        Assert.IsTrue(racingGrabber.Disposed);
+        Assert.AreEqual(0, capture.CapturedWithBlankRetry.Count);
+    }
+
+    private sealed class StartupRaceFrameGrabber(byte[] pixels) : IFrameGrabber
+    {
+        public bool IsClosed => false;
+        internal int Reads { get; private set; }
+        internal bool Disposed { get; private set; }
+        public Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct) => Task.FromResult(true);
+        public (byte[] Pixels, int Width, int Height, long Version)? TryGetLatest()
+            => ++Reads <= 2 ? null : (pixels, 64, 64, Reads);
+        public void Dispose() => Disposed = true;
+    }
+
+    [TestMethod]
     public async Task RecordAsync_WgcSeams_EncodesTimedFramesAndReportsResult()
     {
         using var fx = new UiaTestFixture();
