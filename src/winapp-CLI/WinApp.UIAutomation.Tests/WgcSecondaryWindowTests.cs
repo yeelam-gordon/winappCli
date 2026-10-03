@@ -14,9 +14,11 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 public class WgcSecondaryWindowTests
 {
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public async Task Capture_IncludesOpenPopupAndRemovesItWhenClosed(bool continuous)
+    [DataRow(false, 0)]
+    [DataRow(true, 0)]
+    [DataRow(true, 15)]
+    [DataRow(true, 1)]
+    public async Task Capture_IncludesOpenPopupAndRemovesItWhenClosed(bool continuous, int fps)
     {
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 26100) || !WgcCapture.IsSupported())
         {
@@ -31,6 +33,7 @@ public class WgcSecondaryWindowTests
         using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         PopupWindow? popup = null;
         WgcCapture.FrameGrabber? grabber = null;
+        long lastMatchedVersion = -1;
         try
         {
             fx.OnUiThread(() =>
@@ -45,7 +48,7 @@ public class WgcSecondaryWindowTests
 
             if (continuous)
             {
-                grabber = WgcCapture.StartGrabber(new HWND(fx.Hwnd), NullLogger.Instance, 15);
+                grabber = WgcCapture.StartGrabber(new HWND(fx.Hwnd), NullLogger.Instance, fps);
                 Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(3), timeout.Token));
             }
 
@@ -74,35 +77,48 @@ public class WgcSecondaryWindowTests
         async Task WaitForPopupPixelsAsync(bool expectedVisible)
         {
             var deadline = Environment.TickCount64 + 3000;
+            long version = -1;
+            var greenPixels = 0;
+            var redPixels = 0;
             do
             {
                 timeout.Token.ThrowIfCancellationRequested();
                 byte[] pixels;
                 if (grabber is not null)
                 {
-                    pixels = grabber.TryGetLatest()!.Value.Pixels;
+                    var latest = grabber.TryGetLatest()!.Value;
+                    pixels = latest.Pixels;
+                    version = latest.Version;
                 }
                 else
                 {
                     pixels = (await WgcCapture.CaptureAsync(new HWND(fx.Hwnd), NullLogger.Instance, timeout.Token)).Pixels;
                 }
-                var greenPixels = 0;
+                greenPixels = 0;
+                redPixels = 0;
                 for (var i = 0; i < pixels.Length; i += 4)
                 {
                     if (pixels[i] == 0 && pixels[i + 1] == 255 && pixels[i + 2] == 0)
                     {
                         greenPixels++;
                     }
+                    if (pixels[i] == 0 && pixels[i + 1] == 0 && pixels[i + 2] == 255)
+                    {
+                        redPixels++;
+                    }
                 }
-                if (expectedVisible ? greenPixels >= 1000 : greenPixels == 0)
+                if (redPixels >= 1000 &&
+                    (expectedVisible ? greenPixels >= 1000 : greenPixels == 0) &&
+                    (grabber is null || version > lastMatchedVersion))
                 {
+                    lastMatchedVersion = version;
                     return;
                 }
                 await Task.Delay(50, timeout.Token);
             }
             while (Environment.TickCount64 < deadline);
 
-            Assert.Fail($"Popup pixels did not become {(expectedVisible ? "visible" : "absent")} in {(continuous ? "recording" : "screenshot")} capture.");
+            Assert.Fail($"Popup pixels did not become {(expectedVisible ? "visible" : "absent")} in {(continuous ? "recording" : "screenshot")} capture (fps={fps}, version={version}, previous={lastMatchedVersion}, green={greenPixels}, red={redPixels}).");
         }
     }
 

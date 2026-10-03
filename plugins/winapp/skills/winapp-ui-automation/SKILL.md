@@ -394,7 +394,7 @@ winapp ui wait-for itm-status-c3d4 -a myapp --value "Complete" --timeout 5000
 - When multiple elements match text search, the error shows slugs for each — pick the right one
 - Use `get-property --property ToggleState` to verify checkbox/toggle state after invoke
 - `scroll` auto-finds the nearest scrollable parent
-- Follow [Screenshot](#screenshot) to select a window with `-w <hwnd> --capture-screen` for popup overlays, dropdown menus, and flyouts
+- Prefer default [Screenshot](#screenshot) capture for dropdown menus and flyouts; check [Menus and flyouts in captures](https://github.com/microsoft/WinAppCli/blob/main/docs/ui-automation.md#menus-and-flyouts-in-captures) before using `-w <hwnd> --capture-screen` for older Windows or an overlay that remains absent
 - Follow [Hover](#hover-for-tooltips-flyouts-hover-states) to capture tooltips and hover-triggered UI in place
 - Use `--focus` to foreground the target window before capture without switching to screen-DC capture (default capture path uses Windows.Graphics.Capture and works while occluded)
 - Use `--hide-disabled` and `--hide-offscreen` to reduce noise
