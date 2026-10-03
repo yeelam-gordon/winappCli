@@ -53,30 +53,38 @@ internal static partial class WgcCapture
         {
             throw new TimeoutException("WGC did not produce a root and owned-popup frame.");
         }
-        var frame = grabber.TryGetLatest() ??
-            throw new InvalidOperationException("The capture window changed before its frame could be read.");
-        var framesSeen = 1;
-        while (IsBlankCapture(frame.Pixels))
+        (byte[] Pixels, int Width, int Height, long Version)? frame = null;
+        var framesSeen = 0;
+        while (true)
         {
-            if (framesSeen >= 5)
+            ct.ThrowIfCancellationRequested();
+            var next = grabber.TryGetLatest();
+            if (next is null && grabber is WindowCaptureIncludingMenusAndTooltips combined)
             {
-                throw new InvalidOperationException("WGC returned five blank capture frames.");
+                next = await combined.WaitForFrameAsync(
+                    TimeSpan.FromMilliseconds(Math.Max(0, deadline - Environment.TickCount64)), ct).ConfigureAwait(false);
+            }
+            if (next is { } fresh && (frame is null || fresh.Version > frame.Value.Version))
+            {
+                frame = fresh;
+                framesSeen++;
+                if (!IsBlankCapture(fresh.Pixels))
+                {
+                    return (fresh.Pixels, fresh.Width, fresh.Height);
+                }
+                if (framesSeen >= 5)
+                {
+                    throw new InvalidOperationException("WGC returned five blank capture frames.");
+                }
+                logger.LogDebug("WGC returned blank frame; waiting for next frame");
             }
             var remaining = deadline - Environment.TickCount64;
             if (remaining <= 0)
             {
                 throw new TimeoutException("WGC did not produce fresh nonblank pixels within the capture deadline.");
             }
-            logger.LogDebug("WGC returned blank frame; waiting for next frame");
             await Task.Delay((int)Math.Min(50, remaining), ct).ConfigureAwait(false);
-            var next = grabber.TryGetLatest();
-            if (next is { } fresh && fresh.Version > frame.Version)
-            {
-                frame = fresh;
-                framesSeen++;
-            }
         }
-        return (frame.Pixels, frame.Width, frame.Height);
     }
 
     /// <remarks>

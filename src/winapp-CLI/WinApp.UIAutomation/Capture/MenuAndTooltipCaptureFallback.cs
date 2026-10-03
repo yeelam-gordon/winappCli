@@ -28,6 +28,8 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
     private readonly int _expectedPid = expectedPid ?? RealOwnedWindowFinder.s_getWindowProcessId(hwnd);
     private volatile bool _closed;
 
+    public string CaptureMode => "printwindow";
+
     public bool IsClosed
     {
         get

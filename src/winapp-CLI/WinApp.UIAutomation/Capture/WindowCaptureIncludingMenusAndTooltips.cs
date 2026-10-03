@@ -106,6 +106,8 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
         }
     }
 
+    public string CaptureMode => _root.CaptureMode;
+
     public bool IsClosed => _closed || _root.IsClosed || !_isRootValid();
 
     public (byte[] Pixels, int Width, int Height, long Version)? TryGetLatest()
@@ -277,21 +279,33 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
     }
 
     public async Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct)
+        => await WaitForFrameAsync(timeout, ct).ConfigureAwait(false) is not null;
+
+    internal async Task<(byte[] Pixels, int Width, int Height, long Version)?> WaitForFrameAsync(
+        TimeSpan timeout, CancellationToken ct)
     {
         var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
         do
         {
             ct.ThrowIfCancellationRequested();
-            if (TryGetLatest() is not null)
+            var frame = TryGetLatest();
+            if (frame is not null)
             {
-                return true;
+                return frame;
             }
-            await Task.Delay(30, ct).ConfigureAwait(false);
+            var remaining = deadline - Environment.TickCount64;
+            if (remaining <= 0)
+            {
+                break;
+            }
+            await Task.Delay((int)Math.Min(30, remaining), ct).ConfigureAwait(false);
         }
         while (Environment.TickCount64 < deadline);
-        if (TryGetLatest() is not null)
+        ct.ThrowIfCancellationRequested();
+        var finalFrame = TryGetLatest();
+        if (finalFrame is not null)
         {
-            return true;
+            return finalFrame;
         }
         lock (_lock)
         {
@@ -311,7 +325,7 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
                 }
             }
         }
-        return false;
+        return null;
     }
 
     internal static bool IsOwnedBy(HWND candidate, HWND root, int pid)

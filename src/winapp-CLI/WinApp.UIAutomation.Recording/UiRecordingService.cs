@@ -165,7 +165,6 @@ internal sealed partial class UiRecordingService(
 
         IFrameGrabber? grabber = null;
         RecordFrameArtifactCoordinator? frameOutput = null;
-        var mode = useScreen ? "screen" : (useWgc ? "wgc" : "printwindow");
 
         try
         {
@@ -300,7 +299,6 @@ internal sealed partial class UiRecordingService(
                             EnsureWgcFallbackConsented(ex, options.CaptureScreen, _logger);
                             useScreen = true;
                             useWgc = false;
-                            mode = "screen";
                         }
                     }
                     else if (!useScreen)
@@ -327,6 +325,7 @@ internal sealed partial class UiRecordingService(
                 cropH = Math.Clamp((int)selectorElement.Height, 1, srcHeight - cropY);
             }
 
+            var mode = useScreen ? "screen" : grabber?.CaptureMode ?? "printwindow";
             var (encoderW, encoderH, displayW, displayH) = ComputeTargetSize(cropW, cropH, options.MaxEdge);
             var coordinates = desktopBounds is { } sourceBounds
                 ? DescribeCoordinates(sourceBounds, encoderW, encoderH, displayW, displayH)

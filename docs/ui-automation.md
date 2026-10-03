@@ -599,8 +599,11 @@ recordings and whole-desktop capture.
 
 **Capture modes** (reported in the JSON `mode` field):
 - `wgc` — Windows Graphics Capture (default; works while the window is occluded). See [Menus and flyouts in captures](#menus-and-flyouts-in-captures) for secondary-window support and clipping.
-- `printwindow` — GDI PrintWindow (fallback when WGC is unavailable on this system/session; re-run with `--capture-screen` to use screen DC instead).
+- `printwindow` — GDI PrintWindow (fallback when WGC is unavailable on this system/session or rejects a directly selected menu or tooltip; re-run with `--capture-screen` to use screen DC instead).
 - `screen` — Screen DC via `--capture-screen` (includes overlays/popups; brings the window to the foreground).
+
+The mode describes the selected window's capture backend. A WGC window recording remains
+`wgc` when an included menu or tooltip uses PrintWindow.
 
 **JSON output (`--json`):**
 - **stdout:** Final recording result, including cadence, stop reason, optional `frameArtifacts`, and warnings.

@@ -16,6 +16,58 @@ public class WgcScreenshotFreshnessTests
         => WgcCapture.s_startGrabber = (hwnd, logger, fps) => WgcCapture.StartGrabber(hwnd, logger, fps);
 
     [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task Capture_MenuOpeningAfterFirstWaitReturnsCombinedImageOrTypedFailure(bool arrives)
+    {
+        var discoveries = 0;
+        var childReads = 0;
+        byte[] menuPixels = [0, 255, 0, 255];
+        var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
+        var child = new Grabber(() => arrives && ++childReads >= 3 ? (menuPixels, 1, 1, 1L) : null);
+        var combined = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+            () => ++discoveries <= 2 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
+        WgcCapture.s_startGrabber = (_, _, _) => combined;
+        var timer = Stopwatch.StartNew();
+
+        if (arrives)
+        {
+            var result = await WgcCapture.CaptureAsync(new HWND(1), NullLogger.Instance, CancellationToken.None);
+            CollectionAssert.AreEqual(menuPixels, result.Pixels);
+            Assert.AreEqual(1, result.Width);
+            Assert.AreEqual(1, result.Height);
+        }
+        else
+        {
+            var error = await Assert.ThrowsExactlyAsync<MenuOrTooltipCaptureException>(() =>
+                WgcCapture.CaptureAsync(new HWND(1), NullLogger.Instance, CancellationToken.None));
+            Assert.IsInstanceOfType<TimeoutException>(error.InnerException);
+            StringAssert.Contains(error.Message, "42");
+        }
+        Assert.IsLessThan(3000L, timer.ElapsedMilliseconds);
+        Assert.IsTrue(root.Disposed);
+        Assert.IsTrue(child.Disposed);
+    }
+
+    [TestMethod]
+    public async Task Capture_CancellationAfterMenuInvalidatesFirstWaitDisposesBothGrabbers()
+    {
+        var discoveries = 0;
+        var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
+        var child = new Grabber(() => null);
+        var combined = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+            () => ++discoveries <= 2 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
+        WgcCapture.s_startGrabber = (_, _, _) => combined;
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
+
+        await Assert.ThrowsExactlyAsync<TaskCanceledException>(() =>
+            WgcCapture.CaptureAsync(new HWND(1), NullLogger.Instance, cancellation.Token));
+
+        Assert.IsTrue(root.Disposed);
+        Assert.IsTrue(child.Disposed);
+    }
+
+    [TestMethod]
     public async Task Capture_WaitsForFreshFrameRatherThanCountingCachedPolls()
     {
         var reads = 0;
@@ -85,7 +137,7 @@ public class WgcScreenshotFreshnessTests
         Assert.IsTrue(grabber.Disposed);
     }
 
-    private sealed class Grabber(Func<(byte[] Pixels, int Width, int Height, long Version)> read) : IFrameGrabber
+    private sealed class Grabber(Func<(byte[] Pixels, int Width, int Height, long Version)?> read) : IFrameGrabber
     {
         internal int Reads { get; private set; }
         internal bool Disposed { get; private set; }

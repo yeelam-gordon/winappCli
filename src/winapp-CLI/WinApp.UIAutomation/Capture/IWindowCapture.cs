@@ -11,6 +11,13 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 public interface IFrameGrabber : IDisposable
 {
     /// <summary>
+    /// The effective root capture backend: <c>wgc</c> or <c>printwindow</c>.
+    /// Including menus or tooltips rendered by another backend does not change this value.
+    /// Defaults to <c>wgc</c> for existing graphics-capture implementations.
+    /// </summary>
+    string CaptureMode => "wgc";
+
+    /// <summary>
     /// <see langword="true"/> once the capture session has ended — typically because the captured
     /// window closed. Callers should stop sampling and finish up.
     /// </summary>

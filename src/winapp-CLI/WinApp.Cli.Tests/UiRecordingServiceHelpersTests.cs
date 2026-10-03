@@ -13,6 +13,21 @@ namespace WinApp.Cli.Tests;
 public class UiRecordingServiceHelpersTests
 {
     [TestMethod]
+    public void FrameGrabber_Backend_DefaultsToWgcAndForwardsOnlyTheRoot()
+    {
+        using IFrameGrabber wgc = new DefaultBackendGrabber();
+        Assert.AreEqual("wgc", wgc.CaptureMode);
+        using var fallback = new MenuAndTooltipCaptureFallback(default, expectedPid: 1);
+        Assert.AreEqual("printwindow", fallback.CaptureMode);
+        using var composedWgc = new WindowCaptureIncludingMenusAndTooltips(wgc, () => default,
+            () => [], _ => fallback);
+        using var composedFallback = new WindowCaptureIncludingMenusAndTooltips(fallback, () => default,
+            () => [], _ => wgc);
+        Assert.AreEqual("wgc", composedWgc.CaptureMode);
+        Assert.AreEqual("printwindow", composedFallback.CaptureMode);
+    }
+
+    [TestMethod]
     public void RecordHelpers_CoverRetargetAndSizingBranches()
     {
         var (encoderW, encoderH, displayW, displayH) = UiRecordingService.ComputeTargetSize(100, 401, 99);
@@ -70,6 +85,14 @@ public class UiRecordingServiceHelpersTests
             UiRecordingService.ClampCropRect(25, 0, 100, 100, 50, 100));
     }
 
+
+    private sealed class DefaultBackendGrabber : IFrameGrabber
+    {
+        public bool IsClosed => false;
+        public (byte[] Pixels, int Width, int Height, long Version)? TryGetLatest() => null;
+        public Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct) => Task.FromResult(false);
+        public void Dispose() { }
+    }
 
     private static string CreateScratchDirectory()
     {

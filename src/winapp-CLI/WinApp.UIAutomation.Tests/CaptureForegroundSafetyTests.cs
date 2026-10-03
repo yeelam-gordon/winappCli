@@ -26,6 +26,39 @@ public class CaptureForegroundSafetyTests
     }
 
     [TestMethod]
+    public async Task ScreenshotAsync_MenuOpeningAfterFirstWaitNeverFallsBackToRootOnlyCapture()
+    {
+        using var fixture = new UiaTestFixture();
+        var service = NewAutomationService();
+        var discoveries = 0;
+        WgcCapture.s_isSupported = () => true;
+        WgcCapture.s_startGrabber = (_, logger, _) => new WindowCaptureIncludingMenusAndTooltips(
+            new ScreenshotGrabber(), () => new(0, 0, 1, 1),
+            () => ++discoveries <= 2 ? [] : [new(42, new(0, 0, 1, 1))],
+            _ => new ScreenshotGrabber { HasFrame = false }, logger: logger);
+        var rootCaptures = 0;
+        UiAutomationService.s_captureFromWindow = (_, width, height) =>
+        {
+            rootCaptures++;
+            var pixels = new byte[width * height * 4];
+            for (var i = 0; i < pixels.Length; i += 4)
+            {
+                pixels[i + 2] = 255;
+                pixels[i + 3] = 255;
+            }
+            return pixels;
+        };
+        UiAutomationService.s_foregroundWindowForBlankRetry = _ => Assert.Fail("Menu failure must not foreground the root.");
+        UiAutomationService.s_sleepForBlankRetry = _ => Assert.Fail("Menu failure must not trigger blank retry.");
+
+        var failure = await Assert.ThrowsExactlyAsync<MenuOrTooltipCaptureException>(() =>
+            service.ScreenshotAsync(TargetFor(fixture), null, false, false, CancellationToken.None));
+
+        Assert.IsInstanceOfType<TimeoutException>(failure.InnerException);
+        Assert.AreEqual(0, rootCaptures);
+    }
+
+    [TestMethod]
     [DataRow(0)]
     [DataRow(1)]
     [DataRow(2)]
