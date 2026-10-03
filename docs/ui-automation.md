@@ -516,21 +516,19 @@ winapp ui screenshot --app myapp --output menu.png
 winapp ui record --app myapp --duration-sec 10 --output menu.mp4
 ```
 
-On **Windows 11 24H2 or newer**, default Windows Graphics Capture includes overlapping
-secondary windows, such as WinUI flyouts, dropdown menus, and tooltips, in both screenshots
-and recordings. No extra flag is needed. These controls can have their own native window
-even when they look embedded in the app.
-
-Windows selects these windows by their popup/tool-window style, overlap, and stacking
-order, not an ownership guarantee. An eligible overlapping popup from another app can
-also be included. Keep unrelated popups away when capturing sensitive content.
+Default Windows Graphics Capture includes visible popup and tool windows owned by the
+selected window in the same process, such as WinUI flyouts, dropdown menus, and tooltips,
+in both screenshots and recordings. No extra flag is needed. These controls can have
+their own native window even when they look embedded in the app. Reopening a menu during
+recording captures it again.
 
 Secondary-window content is clipped to the captured window's bounds; an element selector
 crops it further. Screenshots still include separately discovered owned windows as labeled
 panels, so a flyout can also appear in its own panel. Recording keeps the selected window's
 frame rather than expanding to include every app window.
 
-On older Windows versions, or if an overlay is still absent, use
+When Windows Graphics Capture is unavailable, or an overlay is not owned by the selected
+window in the same process, use
 `--capture-screen --window <hwnd>` to capture the visible region instead. Keep that window
 uncovered: screen capture can include other apps. A recording in either mode stays within
 the selected window's bounds; select the popup's HWND directly when you need to record it

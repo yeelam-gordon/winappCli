@@ -5,12 +5,10 @@ using System.Runtime.InteropServices;
 using System.Runtime.InteropServices.Marshalling;
 using Microsoft.Extensions.Logging;
 using Windows.Graphics.Capture;
-using Windows.Graphics.DirectX;
 using Windows.Graphics.DirectX.Direct3D11;
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using D3D = Windows.Win32.Graphics.Direct3D11;
-using D3DCommon = Windows.Win32.Graphics.Direct3D;
 using DxgiCommon = Windows.Win32.Graphics.Dxgi.Common;
 using WinRT;
 
@@ -23,7 +21,6 @@ internal static partial class WgcCapture
     private static readonly Guid Direct3DDxgiInterfaceAccessGuid = new("A9B3D012-3DF2-4EE3-B8D1-8695F457D3C1");
     private static readonly Guid DxgiDeviceGuid = new("54EC77FA-1377-44E6-8C32-88FD5F44C84C");
     private static readonly Guid D3D11Texture2DGuid = new("6F15AAF2-D208-4E89-9AB4-489535D34F9C");
-    private static readonly Guid GraphicsCaptureSession6Guid = new("D7419236-BE20-5E9F-BCD6-C4E98FD6AFDC");
 
     // D3D11_SDK_VERSION — must be 7 per d3d11.h. CsWin32 doesn't project the
     // numeric constant for this header, so it's defined here.
@@ -50,93 +47,20 @@ internal static partial class WgcCapture
     /// </remarks>
     public static async Task<(byte[] Pixels, int Width, int Height)> CaptureAsync(HWND hwnd, ILogger logger, CancellationToken ct)
     {
-        if (!s_isSupported())
+        using var grabber = StartGrabber(hwnd, logger);
+        if (!await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false))
         {
-            throw new PlatformNotSupportedException("Windows.Graphics.Capture is not supported on this system.");
+            throw new TimeoutException("WGC did not produce a root and owned-popup frame.");
         }
-
-        PInvoke.D3D11CreateDevice(
-            pAdapter: null,
-            D3DCommon.D3D_DRIVER_TYPE.D3D_DRIVER_TYPE_HARDWARE,
-            Software: default,
-            D3D.D3D11_CREATE_DEVICE_FLAG.D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            pFeatureLevels: default,
-            SDKVersion: D3D11_SDK_VERSION,
-            out var device,
-            out _,
-            out var context).ThrowOnFailure();
-
-        try
+        var frame = grabber.TryGetLatest() ??
+            throw new InvalidOperationException("The capture window changed before its frame could be read.");
+        for (var attempt = 1; IsBlankCapture(frame.Pixels) && attempt < 5; attempt++)
         {
-            var winrtDevice = CreateDirect3DDevice(device);
-            var item = CreateItemForWindow(hwnd);
-            using var pool = Direct3D11CaptureFramePool.CreateFreeThreaded(
-                winrtDevice,
-                DirectXPixelFormat.B8G8R8A8UIntNormalized,
-                numberOfBuffers: 2,
-                item.Size);
-            using var uiTarget = pool.CreateCaptureSession(item);
-            ConfigureSession(uiTarget, logger);
-
-            using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-            using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
-
-            var framesSeen = 0;
-            var tcs = new TaskCompletionSource<Direct3D11CaptureFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
-            pool.FrameArrived += (sender, _) =>
-            {
-                Direct3D11CaptureFrame? frame = null;
-                try
-                {
-                    frame = sender.TryGetNextFrame();
-                    if (frame is null)
-                    {
-                        return;
-                    }
-
-                    if (!tcs.TrySetResult(frame))
-                    {
-                        frame.Dispose();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    frame?.Dispose();
-                    tcs.TrySetException(ex);
-                }
-            };
-
-            uiTarget.StartCapture();
-
-            while (true)
-            {
-                linkedCts.Token.ThrowIfCancellationRequested();
-                using var frame = await tcs.Task.WaitAsync(linkedCts.Token).ConfigureAwait(false);
-                var result = CopyFrame(device, context, frame);
-                framesSeen++;
-                if (!IsBlankCapture(result.Pixels) || framesSeen >= 5)
-                {
-                    if (framesSeen > 1)
-                    {
-                        logger.LogDebug("WGC returned non-blank frame after {FrameCount} attempts", framesSeen);
-                    }
-
-                    return result;
-                }
-
-                logger.LogDebug("WGC returned blank frame; waiting for next frame");
-                await Task.Delay(50, linkedCts.Token).ConfigureAwait(false);
-                tcs = new TaskCompletionSource<Direct3D11CaptureFrame>(TaskCreationOptions.RunContinuationsAsynchronously);
-            }
+            logger.LogDebug("WGC returned blank frame; waiting for next frame");
+            await Task.Delay(50, ct).ConfigureAwait(false);
+            frame = grabber.TryGetLatest() ?? frame;
         }
-        finally
-        {
-            // ID3D11Device and ID3D11DeviceContext are COM objects projected by CsWin32
-            // as IDisposable; release the underlying COM refs so repeated captures
-            // don't leak GPU/COM resources.
-            (context as IDisposable)?.Dispose();
-            (device as IDisposable)?.Dispose();
-        }
+        return (frame.Pixels, frame.Width, frame.Height);
     }
 
     /// <remarks>
@@ -333,38 +257,9 @@ internal static partial class WgcCapture
         }
     }
 
-    private static void ConfigureSession(GraphicsCaptureSession session, ILogger logger)
+    private static void ConfigureSession(GraphicsCaptureSession session)
     {
         session.IsCursorCaptureEnabled = false;
-        if (!TryIncludeSecondaryWindows(((IWinRTObject)session).NativeObject.ThisPtr))
-        {
-            logger.LogDebug("Secondary-window capture is unavailable on this Windows version; capturing only the selected window.");
-        }
-    }
-
-    internal static unsafe bool TryIncludeSecondaryWindows(nint session)
-    {
-        var hr = Marshal.QueryInterface(session, in GraphicsCaptureSession6Guid, out var secondarySession);
-        if (hr == unchecked((int)0x80004002)) // E_NOINTERFACE on Windows before 11 24H2.
-        {
-            return false;
-        }
-        hr.ThrowIfFailed("GraphicsCaptureSession.QueryInterface(IGraphicsCaptureSession6)");
-
-        try
-        {
-            // The 19041 WinRT projection lacks this 26100 API. IGraphicsCaptureSession6 inherits
-            // IInspectable (six slots); its Boolean getter and setter occupy slots 6 and 7.
-            var vtable = *(nint**)secondarySession;
-            var setIncludeSecondaryWindows = (delegate* unmanaged[Stdcall]<nint, byte, int>)vtable[7];
-            setIncludeSecondaryWindows(secondarySession, 1)
-                .ThrowIfFailed("GraphicsCaptureSession.IncludeSecondaryWindows");
-            return true;
-        }
-        finally
-        {
-            Marshal.Release(secondarySession);
-        }
     }
 
     internal static bool IsBlankCapture(byte[] pixels) => CapturedFrame.IsBlank(pixels);

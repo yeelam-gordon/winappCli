@@ -26,7 +26,10 @@ internal static partial class WgcCapture
     /// seam. This method itself performs D3D11CreateDevice and WGC FramePool/session creation for a
     /// real HWND, which requires native GPU/WinRT resources unavailable in deterministic headless runs.
     /// </remarks>
-    public static FrameGrabber StartGrabber(HWND hwnd, ILogger logger, int fps = 0)
+    public static IFrameGrabber StartGrabber(HWND hwnd, ILogger logger, int fps = 0)
+        => OwnedPopupFrameGrabber.Start(hwnd, logger, fps);
+
+    internal static FrameGrabber StartSingleWindowGrabber(HWND hwnd, ILogger logger, int fps = 0)
     {
         if (!s_isSupported())
         {
@@ -56,7 +59,7 @@ internal static partial class WgcCapture
                 numberOfBuffers: 2,
                 item.Size);
             uiTarget = pool.CreateCaptureSession(item);
-            ConfigureSession(uiTarget, logger);
+            ConfigureSession(uiTarget);
 
             return new FrameGrabber(device, context, pool, uiTarget, item, logger, fps);
         }
