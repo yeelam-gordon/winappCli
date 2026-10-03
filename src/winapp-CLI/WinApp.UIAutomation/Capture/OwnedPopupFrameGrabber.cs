@@ -112,7 +112,8 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         }
         if (popups.Count > 16)
         {
-            throw new InvalidOperationException("More than 16 intersecting owned popups are visible.");
+            throw new OwnedPopupCaptureException(popups[0].Handle,
+                new InvalidOperationException("More than 16 intersecting owned popups are visible."));
         }
         for (var i = popups.Count - 1; i >= 0; i--)
         {
@@ -130,12 +131,19 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
                     _children.Add(popup.Handle, _start(popup.Handle));
                     _firstFrameDeadlines.Add(popup.Handle, _clock() + 2000);
                 }
-                catch (COMException ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     if (_discover().Any(p => p.Handle == popup.Handle))
                     {
+                        if (ex is WgcCapture.UnsupportedCaptureWindowException)
+                        {
+                            _logger.LogWarning(ex, "WGC rejected owned popup {Hwnd}; using window-only PrintWindow capture.", popup.Handle);
+                            _children.Add(popup.Handle, new PrintWindowPopupFrameGrabber(new HWND(popup.Handle), logger: _logger));
+                            _firstFrameDeadlines.Add(popup.Handle, _clock() + 2000);
+                            continue;
+                        }
                         _logger.LogError(ex, "WGC startup failed for still-visible owned popup {Hwnd}.", popup.Handle);
-                        throw;
+                        throw new OwnedPopupCaptureException(popup.Handle, ex);
                     }
                     _logger.LogDebug(ex, "Owned popup {Hwnd} disappeared during capture startup.", popup.Handle);
                     popups.RemoveAt(i);
@@ -155,14 +163,29 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         for (var i = 0; i < popups.Count; i++)
         {
             var grabber = _children[popups[i].Handle];
-            var child = grabber.TryGetLatest();
+            (byte[] Pixels, int Width, int Height, long Version)? child;
+            try
+            {
+                child = grabber.TryGetLatest();
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                if (!_discover().Any(p => p.Handle == popups[i].Handle))
+                {
+                    _logger.LogDebug(ex, "Owned popup {Hwnd} disappeared during capture.", popups[i].Handle);
+                    return null;
+                }
+                _logger.LogError(ex, "Capture failed for still-visible owned popup {Hwnd}.", popups[i].Handle);
+                throw new OwnedPopupCaptureException(popups[i].Handle, ex);
+            }
             if (child is null)
             {
                 if (!_firstFrameDeadlines.TryGetValue(popups[i].Handle, out var deadline) ||
                     _clock() >= deadline)
                 {
-                    _logger.LogError("Owned popup {Hwnd} did not produce a WGC frame within 2 seconds.", popups[i].Handle);
-                    throw new TimeoutException($"Owned popup HWND {popups[i].Handle} did not produce a WGC frame within 2 seconds.");
+                    _logger.LogError("Owned popup {Hwnd} did not produce a capture frame within 2 seconds.", popups[i].Handle);
+                    throw new OwnedPopupCaptureException(popups[i].Handle,
+                        new TimeoutException($"Owned popup HWND {popups[i].Handle} did not produce a capture frame within 2 seconds."));
                 }
                 return null;
             }
@@ -212,7 +235,24 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
             await Task.Delay(30, ct).ConfigureAwait(false);
         }
         while (Environment.TickCount64 < deadline);
-        return TryGetLatest() is not null;
+        if (TryGetLatest() is not null)
+        {
+            return true;
+        }
+        lock (_lock)
+        {
+            if (!IsClosed && _root.TryGetLatest() is not null)
+            {
+                var popups = _discover();
+                if (popups.Count != 0)
+                {
+                    var error = new TimeoutException("The owned popup did not produce a stable composite frame before the capture deadline.");
+                    _logger.LogError(error, "Owned popup {Hwnd} prevented the first composite frame.", popups[0].Handle);
+                    throw new OwnedPopupCaptureException(popups[0].Handle, error);
+                }
+            }
+        }
+        return false;
     }
 
     internal static bool IsOwnedBy(HWND candidate, HWND root, int pid)
@@ -271,11 +311,16 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
             {
                 bounds = getBounds(window);
             }
-            catch (Win32Exception ex) when (!IsWindow((nint)window) ||
-                !RealOwnedWindowFinder.s_isWindowVisible(window) || !IsOwnedBy(window, root, pid))
+            catch (Win32Exception ex)
             {
-                logger.LogDebug(ex, "Owned popup {Hwnd} disappeared during its bounds query.", (nint)window);
-                continue;
+                if (!IsWindow((nint)window) ||
+                    !RealOwnedWindowFinder.s_isWindowVisible(window) || !IsOwnedBy(window, root, pid))
+                {
+                    logger.LogDebug(ex, "Owned popup {Hwnd} disappeared during its bounds query.", (nint)window);
+                    continue;
+                }
+                logger.LogError(ex, "Cannot query bounds for still-visible owned popup {Hwnd}.", (nint)window);
+                throw new OwnedPopupCaptureException((nint)window, ex);
             }
             if (bounds.Right > bounds.Left && bounds.Bottom > bounds.Top &&
                 bounds.Left < rootBounds.Right && bounds.Right > rootBounds.Left &&
@@ -287,7 +332,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         return result;
     }
 
-    private static unsafe PointerRect GetBounds(HWND hwnd, bool requireNonEmpty = true)
+    internal static unsafe PointerRect GetBounds(HWND hwnd, bool requireNonEmpty = true)
     {
         if (!PInvoke.GetWindowRect(hwnd, out var rect))
         {
@@ -342,4 +387,7 @@ internal sealed partial class OwnedPopupFrameGrabber : IFrameGrabber
         }
     }
 }
+
+internal sealed class OwnedPopupCaptureException(nint hwnd, Exception cause)
+    : InvalidOperationException($"Capture failed for owned popup HWND {hwnd}: {cause.Message}", cause);
 #endif

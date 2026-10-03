@@ -130,6 +130,10 @@ internal sealed partial class UiAutomationService
             {
                 throw;
             }
+            catch (OwnedPopupCaptureException)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "WGC capture failed; falling back to PrintWindow");
@@ -200,24 +204,76 @@ internal sealed partial class UiAutomationService
     /// only safe to exercise against a real visible window.
     /// </remarks>
     private static unsafe byte[] CaptureFromWindow(global::Windows.Win32.Foundation.HWND hwnd, int width, int height)
+        => CaptureFromWindow(hwnd, width, height, strict: false);
+
+    private static unsafe byte[] CaptureFromWindow(global::Windows.Win32.Foundation.HWND hwnd, int width, int height,
+        bool strict, Func<global::Windows.Win32.Foundation.HWND, global::Windows.Win32.Graphics.Gdi.HDC, bool>? print = null)
     {
         var hdcWindow = global::Windows.Win32.PInvoke.GetDC(hwnd);
+        if (strict && hdcWindow.IsNull)
+        {
+            throw PopupCaptureFailure("GetDC");
+        }
         try
         {
             var hdcMem = global::Windows.Win32.PInvoke.CreateCompatibleDC(hdcWindow);
+            if (strict && hdcMem.IsNull)
+            {
+                throw PopupCaptureFailure("CreateCompatibleDC");
+            }
             try
             {
                 var hBitmap = global::Windows.Win32.PInvoke.CreateCompatibleBitmap(hdcWindow, width, height);
+                if (strict && hBitmap.IsNull)
+                {
+                    throw PopupCaptureFailure("CreateCompatibleBitmap");
+                }
                 try
                 {
-                    var hOld = global::Windows.Win32.PInvoke.SelectObject(hdcMem, *(global::Windows.Win32.Graphics.Gdi.HGDIOBJ*)&hBitmap);
-
-                    // PW_RENDERFULLCONTENT = 2
-                    global::Windows.Win32.PInvoke.PrintWindow(hwnd, hdcMem, (global::Windows.Win32.Storage.Xps.PRINT_WINDOW_FLAGS)2);
-
-                    global::Windows.Win32.PInvoke.SelectObject(hdcMem, hOld);
-
-                    return ExtractPixels(hdcWindow, hBitmap, width, height);
+                    byte[]? firstPass = null;
+                    for (var pass = 0; pass < (strict ? 2 : 1); pass++)
+                    {
+                        var marker = pass == 0 ? (byte)0x5A : (byte)0xA5;
+                        if (strict)
+                        {
+                            SeedPopupBitmap(hdcWindow, hBitmap, width, height, marker);
+                        }
+                        var hOld = global::Windows.Win32.PInvoke.SelectObject(hdcMem, *(global::Windows.Win32.Graphics.Gdi.HGDIOBJ*)&hBitmap);
+                        if (strict && (hOld.IsNull || (nint)hOld.Value == -1))
+                        {
+                            throw PopupCaptureFailure("SelectObject");
+                        }
+                        try
+                        {
+                            // PW_RENDERFULLCONTENT = 2
+                            var success = print is null
+                                ? (bool)global::Windows.Win32.PInvoke.PrintWindow(hwnd, hdcMem, (global::Windows.Win32.Storage.Xps.PRINT_WINDOW_FLAGS)2)
+                                : print(hwnd, hdcMem);
+                            if (strict && !success)
+                            {
+                                throw PopupCaptureFailure("PrintWindow");
+                            }
+                        }
+                        finally
+                        {
+                            global::Windows.Win32.PInvoke.SelectObject(hdcMem, hOld);
+                        }
+                        var pixels = ExtractPixels(hdcWindow, hBitmap, width, height);
+                        if (!strict)
+                        {
+                            return pixels;
+                        }
+                        if (!PopupBitmapHasSeedPixels(pixels, marker, firstPass))
+                        {
+                            for (var i = 3; i < pixels.Length; i += 4)
+                            {
+                                pixels[i] = 255;
+                            }
+                            return pixels;
+                        }
+                        firstPass = pixels;
+                    }
+                    throw new InvalidOperationException($"PrintWindow did not paint all pixels of owned popup HWND {(nint)hwnd}.");
                 }
                 finally
                 {

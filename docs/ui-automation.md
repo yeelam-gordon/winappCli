@@ -522,6 +522,9 @@ in both screenshots and recordings. No extra flag is needed. These controls can 
 their own native window even when they look embedded in the app. Reopening a menu during
 recording captures it again.
 
+Some popup windows use a window-rendering fallback when Windows rejects them for graphics
+capture. This does not read the screen or move focus, but those popup pixels are opaque.
+
 Secondary-window content is clipped to the captured window's bounds; an element selector
 crops it further. Screenshots still include separately discovered owned windows as labeled
 panels, so a flyout can also appear in its own panel. Recording keeps the selected window's

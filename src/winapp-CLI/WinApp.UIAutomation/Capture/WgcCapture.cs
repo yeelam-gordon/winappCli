@@ -47,7 +47,7 @@ internal static partial class WgcCapture
     /// </remarks>
     public static async Task<(byte[] Pixels, int Width, int Height)> CaptureAsync(HWND hwnd, ILogger logger, CancellationToken ct)
     {
-        using var grabber = StartGrabber(hwnd, logger);
+        using var grabber = s_startGrabber(hwnd, logger, 0);
         if (!await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false))
         {
             throw new TimeoutException("WGC did not produce a root and owned-popup frame.");
@@ -122,14 +122,15 @@ internal static partial class WgcCapture
             var interop = ComInterfaceMarshaller<IGraphicsCaptureItemInterop>.ConvertToManaged((void*)interopPtr)!;
             interopPtr = IntPtr.Zero;
 
-            interop.CreateForWindow(hwnd, in GraphicsCaptureItemGuid, out itemPtr).ThrowIfFailed("GraphicsCaptureItem.CreateForWindow");
+            CheckCreateForWindowResult(hwnd, interop.CreateForWindow(hwnd, in GraphicsCaptureItemGuid, out itemPtr));
 
             // FromAbi takes ownership of itemPtr.
             var item = MarshalInspectable<GraphicsCaptureItem>.FromAbi(itemPtr);
             itemPtr = IntPtr.Zero;
             return item;
         }
-        finally
+
+            finally
         {
             if (itemPtr != IntPtr.Zero)
             {
@@ -142,6 +143,18 @@ internal static partial class WgcCapture
             }
         }
     }
+
+    internal static void CheckCreateForWindowResult(HWND hwnd, int result)
+    {
+        if (result == unchecked((int)0x80070057))
+        {
+            throw new UnsupportedCaptureWindowException(hwnd);
+        }
+        result.ThrowIfFailed("GraphicsCaptureItem.CreateForWindow");
+    }
+
+    internal sealed class UnsupportedCaptureWindowException(HWND hwnd)
+        : COMException($"GraphicsCaptureItem.CreateForWindow rejected HWND {(nint)hwnd}.", unchecked((int)0x80070057));
 
     /// <remarks>
     /// Coverage ceiling (issue #630): GPU-to-CPU readback depends on live WGC/D3D frame resources.
