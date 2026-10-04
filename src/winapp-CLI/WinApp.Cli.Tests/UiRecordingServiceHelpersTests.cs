@@ -17,11 +17,11 @@ public class UiRecordingServiceHelpersTests
     {
         using IFrameGrabber wgc = new DefaultBackendGrabber();
         Assert.AreEqual("wgc", wgc.CaptureMode);
-        using var fallback = new MenuAndTooltipCaptureFallback(default, expectedPid: 1);
+        using var fallback = new OwnedSecondaryWindowCaptureFallback(default, expectedPid: 1);
         Assert.AreEqual("printwindow", fallback.CaptureMode);
-        using var composedWgc = new WindowCaptureIncludingMenusAndTooltips(wgc, () => default,
+        using var composedWgc = new WindowCaptureIncludingOwnedSecondaryWindows(wgc, () => default,
             () => [], _ => fallback);
-        using var composedFallback = new WindowCaptureIncludingMenusAndTooltips(fallback, () => default,
+        using var composedFallback = new WindowCaptureIncludingOwnedSecondaryWindows(fallback, () => default,
             () => [], _ => wgc);
         Assert.AreEqual("wgc", composedWgc.CaptureMode);
         Assert.AreEqual("printwindow", composedFallback.CaptureMode);

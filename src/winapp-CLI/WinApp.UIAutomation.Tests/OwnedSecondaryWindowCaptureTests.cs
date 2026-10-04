@@ -12,7 +12,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 
 [TestClass]
 [DoNotParallelize]
-public class MenuAndTooltipCaptureTests
+public class OwnedSecondaryWindowCaptureTests
 {
     [TestMethod]
     [DataRow(false)]
@@ -22,9 +22,9 @@ public class MenuAndTooltipCaptureTests
         long now = 100;
         var root = new Grabber();
         var child = new Grabber { HasFrame = false };
-        var popups = new List<WindowCaptureIncludingMenusAndTooltips.Popup>();
+        var popups = new List<WindowCaptureIncludingOwnedSecondaryWindows.Popup>();
         var logger = new CaptureLogger();
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 1, 1),
             () => popups.ToList(), _ => child, () => now, logger: logger);
         var healthy = composite.TryGetLatest()!.Value;
         popups.Add(new(42, new(0, 0, 1, 1)));
@@ -42,7 +42,7 @@ public class MenuAndTooltipCaptureTests
         else
         {
             now = 2100;
-            var error = Assert.ThrowsExactly<MenuOrTooltipCaptureException>(() => composite.TryGetLatest());
+            var error = Assert.ThrowsExactly<OwnedSecondaryWindowCaptureException>(() => composite.TryGetLatest());
             Assert.IsInstanceOfType<TimeoutException>(error.InnerException);
             StringAssert.Contains(error.Message, "42");
             Assert.IsTrue(logger.Messages.Any(m => m.Level == LogLevel.Error && m.Text.Contains("42")));
@@ -66,7 +66,7 @@ public class MenuAndTooltipCaptureTests
         var starts = 0;
         var logger = new CaptureLogger();
         var root = new Grabber();
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 1, 1),
             () =>
             {
                 if (!duringStart && ++discoveries > 1)
@@ -94,9 +94,9 @@ public class MenuAndTooltipCaptureTests
     {
         var failure = new COMException("Non-classified WGC startup failure", hresult);
         var logger = new CaptureLogger();
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(new Grabber(), () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(new Grabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))], _ => throw failure, logger: logger);
-        Assert.AreSame(failure, Assert.ThrowsExactly<MenuOrTooltipCaptureException>(() => composite.TryGetLatest()).InnerException);
+        Assert.AreSame(failure, Assert.ThrowsExactly<OwnedSecondaryWindowCaptureException>(() => composite.TryGetLatest()).InnerException);
         Assert.IsTrue(logger.Messages.Any(m => m.Level == LogLevel.Error));
     }
 
@@ -135,7 +135,7 @@ public class MenuAndTooltipCaptureTests
             var visible = true;
             var starts = 0;
             var logger = new CaptureLogger();
-            var bounds = WindowCaptureIncludingMenusAndTooltips.GetBounds(new HWND(handle));
+            var bounds = WindowCaptureIncludingOwnedSecondaryWindows.GetBounds(new HWND(handle));
             var width = bounds.Right - bounds.Left;
             var height = bounds.Bottom - bounds.Top;
             var root = new Grabber { Width = width, Height = height, Pixels = new byte[width * height * 4] };
@@ -144,7 +144,7 @@ public class MenuAndTooltipCaptureTests
                 root.Pixels[i + 2] = 255;
                 root.Pixels[i + 3] = 255;
             }
-            using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => bounds,
+            using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => bounds,
                 () => visible ? [new(handle, bounds)] : [],
                 _ =>
                 {
@@ -218,7 +218,7 @@ public class MenuAndTooltipCaptureTests
     [TestMethod]
     public void PrintWindow_InvalidWindowFailsExplicitly()
     {
-        Assert.ThrowsExactly<Win32Exception>(() => UiAutomationService.RenderMenuOrTooltipWindowForCapture(new HWND(-1), 2, 2));
+        Assert.ThrowsExactly<Win32Exception>(() => UiAutomationService.RenderOwnedSecondaryWindowForCapture(new HWND(-1), 2, 2));
     }
 
     [TestMethod]
@@ -232,7 +232,7 @@ public class MenuAndTooltipCaptureTests
         WithOwnedPopup((_, window, _) =>
         {
             var attempts = 0;
-            byte[] Capture() => UiAutomationService.RenderMenuOrTooltipWindowForCapture(window, 16, 16, (_, dc) =>
+            byte[] Capture() => UiAutomationService.RenderOwnedSecondaryWindowForCapture(window, 16, 16, (_, dc) =>
             {
                 attempts++;
                 for (var y = 0; y < (full ? 16 : 1); y++)
@@ -281,7 +281,7 @@ public class MenuAndTooltipCaptureTests
             try
             {
                 var failure = Assert.ThrowsExactly<InvalidOperationException>(() =>
-                    MenuAndTooltipCaptureFallback.EnsureCaptureAllowed(child));
+                    OwnedSecondaryWindowCaptureFallback.EnsureCaptureAllowed(child));
                 StringAssert.Contains(failure.Message, "protected from capture");
             }
             finally
@@ -301,7 +301,7 @@ public class MenuAndTooltipCaptureTests
             using var finished = new ManualResetEventSlim();
             long now = 0;
             var calls = 0;
-            using var grabber = new MenuAndTooltipCaptureFallback(child, () =>
+            using var grabber = new OwnedSecondaryWindowCaptureFallback(child, () =>
             {
                 var value = Interlocked.Increment(ref calls);
                 if (value == 2)
@@ -358,7 +358,7 @@ public class MenuAndTooltipCaptureTests
             using var finished = new ManualResetEventSlim();
             long now = 0;
             var calls = 0;
-            using var grabber = new MenuAndTooltipCaptureFallback(child, () =>
+            using var grabber = new OwnedSecondaryWindowCaptureFallback(child, () =>
             {
                 Interlocked.Increment(ref calls);
                 started.Set();
@@ -412,7 +412,7 @@ public class MenuAndTooltipCaptureTests
                 popup.Refresh();
                 handle = popup.Handle;
             });
-            using var grabber = new MenuAndTooltipCaptureFallback(new HWND(handle));
+            using var grabber = new OwnedSecondaryWindowCaptureFallback(new HWND(handle));
             Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             var frame = grabber.TryGetLatest()!.Value;
             var renderDeadline = Environment.TickCount64 + 2000;
@@ -425,7 +425,7 @@ public class MenuAndTooltipCaptureTests
             Assert.AreNotEqual((nint)0, previous);
             try
             {
-                var bounds = WindowCaptureIncludingMenusAndTooltips.GetBounds(new HWND(handle));
+                var bounds = WindowCaptureIncludingOwnedSecondaryWindows.GetBounds(new HWND(handle));
                 Assert.AreEqual(bounds.Right - bounds.Left, frame.Width);
                 Assert.AreEqual(bounds.Bottom - bounds.Top, frame.Height);
                 var clientOrigin = new System.Drawing.Point();
@@ -465,7 +465,7 @@ public class MenuAndTooltipCaptureTests
     {
         var visible = true;
         var failure = new Win32Exception(1400);
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(new Grabber(), () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(new Grabber(), () => new(0, 0, 1, 1),
             () => visible ? [new(42, new(0, 0, 1, 1))] : [],
             _ => new Grabber
             {
@@ -482,7 +482,7 @@ public class MenuAndTooltipCaptureTests
         }
         else
         {
-            Assert.AreSame(failure, Assert.ThrowsExactly<MenuOrTooltipCaptureException>(() => composite.TryGetLatest()).InnerException);
+            Assert.AreSame(failure, Assert.ThrowsExactly<OwnedSecondaryWindowCaptureException>(() => composite.TryGetLatest()).InnerException);
         }
     }
 
@@ -514,7 +514,7 @@ public class MenuAndTooltipCaptureTests
                 handle = popup.Handle;
             });
             var attempts = 0;
-            byte[] Capture() => UiAutomationService.RenderMenuOrTooltipWindowForCapture(new HWND(handle), 16, 16,
+            byte[] Capture() => UiAutomationService.RenderOwnedSecondaryWindowForCapture(new HWND(handle), 16, 16,
                 (_, _) => { attempts++; return reportsSuccess; });
             if (reportsSuccess)
             {
@@ -559,8 +559,8 @@ public class MenuAndTooltipCaptureTests
             var logger = new CaptureLogger();
             var root = new Grabber();
             RealOwnedWindowFinder.s_findNextTopLevelWindow = after => after.IsNull ? childHandle : HWND.Null;
-            using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
-                () => WindowCaptureIncludingMenusAndTooltips.Discover(rootHandle, pid, logger, _ => new(0, 0, 10, 10)),
+            using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 1, 1),
+                () => WindowCaptureIncludingOwnedSecondaryWindows.Discover(rootHandle, pid, logger, _ => new(0, 0, 10, 10)),
                 hwnd =>
                 {
                     fixture.OnUiThread(() => popup!.Dispose());
@@ -587,14 +587,14 @@ public class MenuAndTooltipCaptureTests
         var valid = true;
         var closeOnDiscovery = false;
         var logger = new CaptureLogger();
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 1, 1),
             () =>
             {
                 if (closeOnDiscovery)
                 {
                     valid = false;
                     root.IsClosed = nativeEvent;
-                    return WindowCaptureIncludingMenusAndTooltips.Discover(HWND.Null, 0, logger);
+                    return WindowCaptureIncludingOwnedSecondaryWindows.Discover(HWND.Null, 0, logger);
                 }
                 return [new(42, new(0, 0, 1, 1))];
             }, _ => child, isRootValid: () => valid, logger: logger);
@@ -616,7 +616,7 @@ public class MenuAndTooltipCaptureTests
     {
         var valid = true;
         var root = new Grabber();
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 1, 1),
             () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
         var first = composite.TryGetLatest()!.Value;
         valid = false;
@@ -632,7 +632,7 @@ public class MenuAndTooltipCaptureTests
         var root = new Grabber();
         var valid = true;
         var failBounds = false;
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () =>
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () =>
             {
                 if (failBounds)
                 {
@@ -656,7 +656,7 @@ public class MenuAndTooltipCaptureTests
     {
         var root = new Grabber();
         var failure = new InvalidOperationException("Unexpected discovery defect");
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 1, 1),
             () =>
             {
                 root.IsClosed = close;
@@ -670,7 +670,7 @@ public class MenuAndTooltipCaptureTests
     {
         var root = new Grabber();
         var failure = new COMException("Unrelated discovery failure");
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 1, 1),
             () =>
             {
                 root.IsClosed = true;
@@ -686,8 +686,8 @@ public class MenuAndTooltipCaptureTests
     {
         WithOwnedPopup((root, popup, pid) =>
         {
-            var results = new Func<List<WindowCaptureIncludingMenusAndTooltips.Popup>>(() =>
-                WindowCaptureIncludingMenusAndTooltips.Discover(root, pid, NullLogger.Instance,
+            var results = new Func<List<WindowCaptureIncludingOwnedSecondaryWindows.Popup>>(() =>
+                WindowCaptureIncludingOwnedSecondaryWindows.Discover(root, pid, NullLogger.Instance,
                     hwnd => hwnd == (emptyRoot ? root : popup) ? new(0, 0, 0, 0) : new(0, 0, 10, 10)));
             if (emptyRoot)
             {
@@ -709,8 +709,8 @@ public class MenuAndTooltipCaptureTests
         {
             var logger = new CaptureLogger();
             var failure = new Win32Exception(1400);
-            var results = new Func<List<WindowCaptureIncludingMenusAndTooltips.Popup>>(() =>
-                WindowCaptureIncludingMenusAndTooltips.Discover(root, pid, logger, hwnd =>
+            var results = new Func<List<WindowCaptureIncludingOwnedSecondaryWindows.Popup>>(() =>
+                WindowCaptureIncludingOwnedSecondaryWindows.Discover(root, pid, logger, hwnd =>
                 {
                     if (hwnd == popup)
                     {
@@ -729,7 +729,7 @@ public class MenuAndTooltipCaptureTests
             }
             else
             {
-                Assert.AreSame(failure, Assert.ThrowsExactly<MenuOrTooltipCaptureException>(() => results()).InnerException);
+                Assert.AreSame(failure, Assert.ThrowsExactly<OwnedSecondaryWindowCaptureException>(() => results()).InnerException);
             }
         });
     }
@@ -737,13 +737,13 @@ public class MenuAndTooltipCaptureTests
     [TestMethod]
     public async Task FirstFrame_OverallDeadlineDistinguishesPendingPopupFromMissingRootFrame()
     {
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(new Grabber(), () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(new Grabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))], _ => new Grabber { HasFrame = false }, () => 100);
-        var failure = await Assert.ThrowsExactlyAsync<MenuOrTooltipCaptureException>(() =>
+        var failure = await Assert.ThrowsExactlyAsync<OwnedSecondaryWindowCaptureException>(() =>
             composite.WaitForFirstFrameAsync(TimeSpan.Zero, CancellationToken.None));
         Assert.IsInstanceOfType<TimeoutException>(failure.InnerException);
 
-        using var missingRoot = new WindowCaptureIncludingMenusAndTooltips(new Grabber { HasFrame = false },
+        using var missingRoot = new WindowCaptureIncludingOwnedSecondaryWindows(new Grabber { HasFrame = false },
             () => new(0, 0, 1, 1), () => [], _ => throw new AssertFailedException());
         Assert.IsFalse(await missingRoot.WaitForFirstFrameAsync(TimeSpan.Zero, CancellationToken.None));
     }
@@ -780,7 +780,7 @@ public class MenuAndTooltipCaptureTests
                 handle = popup.Handle;
             });
             var starts = 0;
-            WgcCapture.s_startGrabber = (window, logger, fps) => WindowCaptureIncludingMenusAndTooltips.Start(window, logger, fps,
+            WgcCapture.s_startGrabber = (window, logger, fps) => WindowCaptureIncludingOwnedSecondaryWindows.Start(window, logger, fps,
                 (candidate, _, rate) =>
                 {
                     Assert.AreEqual(handle, (nint)candidate);
@@ -798,7 +798,7 @@ public class MenuAndTooltipCaptureTests
                 grabber = backend.StartFrameGrabber(handle, 15);
                 Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             }
-            var bounds = WindowCaptureIncludingMenusAndTooltips.GetBounds(new HWND(handle));
+            var bounds = WindowCaptureIncludingOwnedSecondaryWindows.GetBounds(new HWND(handle));
             var deadline = Environment.TickCount64 + 2000;
             byte[] pixels;
             int width;
@@ -896,12 +896,12 @@ public class MenuAndTooltipCaptureTests
             if (kind == 2)
             {
                 Assert.AreSame(failure, Assert.ThrowsExactly<COMException>(() =>
-                    WindowCaptureIncludingMenusAndTooltips.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
+                    WindowCaptureIncludingOwnedSecondaryWindows.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
             }
             else
             {
                 Assert.AreSame(failure, Assert.ThrowsExactly<WgcCapture.UnsupportedCaptureWindowException>(() =>
-                    WindowCaptureIncludingMenusAndTooltips.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
+                    WindowCaptureIncludingOwnedSecondaryWindows.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
             }
         }
         finally
@@ -917,9 +917,9 @@ public class MenuAndTooltipCaptureTests
         {
             var calls = 0;
             var valid = true;
-            using var root = new MenuAndTooltipCaptureFallback(child,
+            using var root = new OwnedSecondaryWindowCaptureFallback(child,
                 () => (new byte[] { (byte)Interlocked.Increment(ref calls), 0, 0, 255 }, 1, 1));
-            using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+            using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 1, 1),
                 () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
             var deadline = Environment.TickCount64 + 2000;
             var healthy = composite.TryGetLatest();
@@ -953,7 +953,7 @@ public class MenuAndTooltipCaptureTests
             using var finished = new ManualResetEventSlim();
             var calls = 0;
             var getPid = RealOwnedWindowFinder.s_getWindowProcessId;
-            using var root = new MenuAndTooltipCaptureFallback(child, () =>
+            using var root = new OwnedSecondaryWindowCaptureFallback(child, () =>
             {
                 var value = Interlocked.Increment(ref calls);
                 if (value == 2)
@@ -1005,7 +1005,7 @@ public class MenuAndTooltipCaptureTests
         var reads = 0;
         var valid = true;
         var root = new Grabber { OnSample = () => reads++ };
-        using var composite = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 1, 1),
             () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
         var healthy = composite.TryGetLatest()!.Value;
         Assert.AreEqual(1, reads);

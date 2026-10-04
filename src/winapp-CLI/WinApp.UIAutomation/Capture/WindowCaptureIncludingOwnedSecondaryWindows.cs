@@ -12,11 +12,12 @@ using Windows.Win32.Foundation;
 namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 
 /// <summary>
-/// Includes existing dropdown menus, flyouts, and tooltips in a window's captured image.
-/// Uses Windows graphics capture first and <see cref="MenuAndTooltipCaptureFallback"/> when
+/// Captures a window together with its visible, intersecting, same-process owned secondary windows,
+/// such as dropdown menus, flyouts, tooltips, and floating tool windows.
+/// Uses Windows graphics capture first and <see cref="OwnedSecondaryWindowCaptureFallback"/> when
 /// Windows rejects an owned UI window. Does not create or display UI.
 /// </summary>
-internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGrabber
+internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFrameGrabber
 {
     internal readonly record struct Popup(nint Handle, PointerRect Bounds);
     private readonly record struct PopupInput(Popup Popup, IFrameGrabber Grabber, long Version, int Width, int Height);
@@ -39,7 +40,7 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
     private PopupInput[] _popupInputs = [];
     private (byte[] Pixels, int Width, int Height, long Version)? _latest;
 
-    internal WindowCaptureIncludingMenusAndTooltips(IFrameGrabber root, Func<PointerRect> rootBounds,
+    internal WindowCaptureIncludingOwnedSecondaryWindows(IFrameGrabber root, Func<PointerRect> rootBounds,
         Func<List<Popup>> discover, Func<nint, IFrameGrabber> start,
         Func<long>? clock = null, Func<bool>? isRootValid = null, ILogger? logger = null, int? expectedPid = null)
     {
@@ -53,7 +54,7 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
         _expectedPid = expectedPid;
     }
 
-    internal static WindowCaptureIncludingMenusAndTooltips Start(HWND hwnd, ILogger logger, int fps,
+    internal static WindowCaptureIncludingOwnedSecondaryWindows Start(HWND hwnd, ILogger logger, int fps,
         Func<HWND, ILogger, int, IFrameGrabber>? startWindow = null)
     {
         startWindow ??= (window, log, rate) => WgcCapture.StartSingleWindowGrabber(window, log, rate);
@@ -88,10 +89,10 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
             ((uint)GetWindowLong((nint)hwnd, -20) & 0x00000080) != 0;
     }
 
-    private static MenuAndTooltipCaptureFallback StartPrintWindowFallback(HWND hwnd, ILogger logger, Exception cause, int? expectedPid = null)
+    private static OwnedSecondaryWindowCaptureFallback StartPrintWindowFallback(HWND hwnd, ILogger logger, Exception cause, int? expectedPid = null)
     {
-        logger.LogWarning(cause, "Windows graphics capture rejected menu or tooltip window {Hwnd}; using window-only rendering (PrintWindow).", (nint)hwnd);
-        return new MenuAndTooltipCaptureFallback(hwnd, logger: logger, expectedPid: expectedPid);
+        logger.LogWarning(cause, "Windows graphics capture rejected owned secondary window {Hwnd}; using window-only rendering (PrintWindow).", (nint)hwnd);
+        return new OwnedSecondaryWindowCaptureFallback(hwnd, logger: logger, expectedPid: expectedPid);
     }
 
     private (byte[] Pixels, int Width, int Height, long Version)? ReadRootFrame()
@@ -100,9 +101,9 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
         {
             return _root.TryGetLatest();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && _root is MenuAndTooltipCaptureFallback popup)
+        catch (Exception ex) when (ex is not OperationCanceledException && _root is OwnedSecondaryWindowCaptureFallback popup)
         {
-            throw new MenuOrTooltipCaptureException(popup.WindowHandle, ex);
+            throw new OwnedSecondaryWindowCaptureException(popup.WindowHandle, ex);
         }
     }
 
@@ -127,7 +128,7 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
             catch (Exception ex) when (
                 (ex is RootClosedException or Win32Exception) && IsClosed)
             {
-                _logger.LogDebug(ex, "Captured root closed during menu and tooltip discovery; draining the final frame.");
+                _logger.LogDebug(ex, "Captured root closed during owned secondary-window discovery; draining the final frame.");
                 return DrainClosedRoot();
             }
         }
@@ -137,11 +138,11 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
     {
         if (!_closed)
         {
-            _logger.LogDebug("Captured root is no longer valid; releasing menu and tooltip capture sessions.");
+            _logger.LogDebug("Captured root is no longer valid; releasing owned secondary-window capture sessions.");
         }
         _closed = true;
         DisposeChildren();
-        if (_root is MenuAndTooltipCaptureFallback)
+        if (_root is OwnedSecondaryWindowCaptureFallback)
         {
             return _latest;
         }
@@ -169,8 +170,8 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
         }
         if (popups.Count > 16)
         {
-            throw new MenuOrTooltipCaptureException(popups[0].Handle,
-                new InvalidOperationException("More than 16 intersecting owned menu or tooltip windows are visible."));
+            throw new OwnedSecondaryWindowCaptureException(popups[0].Handle,
+                new InvalidOperationException("More than 16 intersecting owned secondary windows are visible."));
         }
         for (var i = popups.Count - 1; i >= 0; i--)
         {
@@ -179,7 +180,7 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
             {
                 if (!_discover().Any(p => p.Handle == popup.Handle))
                 {
-                    _logger.LogDebug("Menu or tooltip window {Hwnd} disappeared before capture startup.", popup.Handle);
+                    _logger.LogDebug("Owned secondary window {Hwnd} disappeared before capture startup.", popup.Handle);
                     popups.RemoveAt(i);
                     continue;
                 }
@@ -198,10 +199,10 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
                             _firstFrameDeadlines.Add(popup.Handle, _clock() + 2000);
                             continue;
                         }
-                        _logger.LogError(ex, "Windows graphics capture startup failed for still-visible menu or tooltip window {Hwnd}.", popup.Handle);
-                        throw new MenuOrTooltipCaptureException(popup.Handle, ex);
+                        _logger.LogError(ex, "Windows graphics capture startup failed for still-visible owned secondary window {Hwnd}.", popup.Handle);
+                        throw new OwnedSecondaryWindowCaptureException(popup.Handle, ex);
                     }
-                    _logger.LogDebug(ex, "Menu or tooltip window {Hwnd} disappeared during capture startup.", popup.Handle);
+                    _logger.LogDebug(ex, "Owned secondary window {Hwnd} disappeared during capture startup.", popup.Handle);
                     popups.RemoveAt(i);
                 }
             }
@@ -228,20 +229,20 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
             {
                 if (!_discover().Any(p => p.Handle == popups[i].Handle))
                 {
-                    _logger.LogDebug(ex, "Menu or tooltip window {Hwnd} disappeared during capture.", popups[i].Handle);
+                    _logger.LogDebug(ex, "Owned secondary window {Hwnd} disappeared during capture.", popups[i].Handle);
                     return null;
                 }
-                _logger.LogError(ex, "Capture failed for still-visible menu or tooltip window {Hwnd}.", popups[i].Handle);
-                throw new MenuOrTooltipCaptureException(popups[i].Handle, ex);
+                _logger.LogError(ex, "Capture failed for still-visible owned secondary window {Hwnd}.", popups[i].Handle);
+                throw new OwnedSecondaryWindowCaptureException(popups[i].Handle, ex);
             }
             if (child is null)
             {
                 if (!_firstFrameDeadlines.TryGetValue(popups[i].Handle, out var deadline) ||
                     _clock() >= deadline)
                 {
-                    _logger.LogError("Menu or tooltip window {Hwnd} did not produce a capture frame within 2 seconds.", popups[i].Handle);
-                    throw new MenuOrTooltipCaptureException(popups[i].Handle,
-                        new TimeoutException($"Menu or tooltip HWND {popups[i].Handle} did not produce a capture frame within 2 seconds."));
+                    _logger.LogError("Owned secondary window {Hwnd} did not produce a capture frame within 2 seconds.", popups[i].Handle);
+                    throw new OwnedSecondaryWindowCaptureException(popups[i].Handle,
+                        new TimeoutException($"Owned secondary window HWND {popups[i].Handle} did not produce a capture frame within 2 seconds."));
                 }
                 return null;
             }
@@ -267,7 +268,7 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
         {
             var popup = popups[i];
             var child = childFrames[i];
-            IncludeMenuOrTooltipInWindowImage(pixels, result.Width, result.Height,
+            IncludeOwnedSecondaryWindowInWindowImage(pixels, result.Width, result.Height,
                 child.Pixels, child.Width, child.Height,
                 popup.Bounds.Left - bounds.Left, popup.Bounds.Top - bounds.Top);
         }
@@ -309,19 +310,19 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
         }
         lock (_lock)
         {
-            if (!IsClosed && _root is MenuAndTooltipCaptureFallback popupRoot && ReadRootFrame() is null)
+            if (!IsClosed && _root is OwnedSecondaryWindowCaptureFallback popupRoot && ReadRootFrame() is null)
             {
-                throw new MenuOrTooltipCaptureException(popupRoot.WindowHandle,
-                    new TimeoutException("The targeted menu or tooltip did not produce a frame before the capture deadline."));
+                throw new OwnedSecondaryWindowCaptureException(popupRoot.WindowHandle,
+                    new TimeoutException("The targeted owned secondary window did not produce a frame before the capture deadline."));
             }
             if (!IsClosed && ReadRootFrame() is not null)
             {
                 var popups = _discover();
                 if (popups.Count != 0)
                 {
-                    var error = new TimeoutException("The owned menu or tooltip did not produce a stable combined image before the capture deadline.");
-                    _logger.LogError(error, "Menu or tooltip window {Hwnd} prevented the first combined image.", popups[0].Handle);
-                    throw new MenuOrTooltipCaptureException(popups[0].Handle, error);
+                    var error = new TimeoutException("The owned secondary window did not produce a stable combined image before the capture deadline.");
+                    _logger.LogError(error, "Owned secondary window {Hwnd} prevented the first combined image.", popups[0].Handle);
+                    throw new OwnedSecondaryWindowCaptureException(popups[0].Handle, error);
                 }
             }
         }
@@ -389,11 +390,11 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
                 if (!IsWindow((nint)window) ||
                     !RealOwnedWindowFinder.s_isWindowVisible(window) || !IsOwnedBy(window, root, pid))
                 {
-                    logger.LogDebug(ex, "Menu or tooltip window {Hwnd} disappeared during its bounds query.", (nint)window);
+                    logger.LogDebug(ex, "Owned secondary window {Hwnd} disappeared during its bounds query.", (nint)window);
                     continue;
                 }
-                logger.LogError(ex, "Cannot query bounds for still-visible menu or tooltip window {Hwnd}.", (nint)window);
-                throw new MenuOrTooltipCaptureException((nint)window, ex);
+                logger.LogError(ex, "Cannot query bounds for still-visible owned secondary window {Hwnd}.", (nint)window);
+                throw new OwnedSecondaryWindowCaptureException((nint)window, ex);
             }
             if (bounds.Right > bounds.Left && bounds.Bottom > bounds.Top &&
                 bounds.Left < rootBounds.Right && bounds.Right > rootBounds.Left &&
@@ -427,7 +428,7 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
     }
 
     // Preserve premultiplied BGRA transparency while clipping the UI image to the captured window.
-    internal static void IncludeMenuOrTooltipInWindowImage(byte[] root, int width, int height, byte[] popup,
+    internal static void IncludeOwnedSecondaryWindowInWindowImage(byte[] root, int width, int height, byte[] popup,
         int popupWidth, int popupHeight, int left, int top)
     {
         if (root.Length != checked(width * height * 4) ||
@@ -491,6 +492,6 @@ internal sealed partial class WindowCaptureIncludingMenusAndTooltips : IFrameGra
     }
 }
 
-internal sealed class MenuOrTooltipCaptureException(nint hwnd, Exception cause)
-    : InvalidOperationException($"Capture failed for menu or tooltip HWND {hwnd}: {cause.Message}", cause);
+internal sealed class OwnedSecondaryWindowCaptureException(nint hwnd, Exception cause)
+    : InvalidOperationException($"Capture failed for owned secondary window HWND {hwnd}: {cause.Message}", cause);
 #endif

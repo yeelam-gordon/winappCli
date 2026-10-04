@@ -107,11 +107,11 @@ public partial class RealRecordingTests
         using var fx = new UiaTestFixture();
         var pixels = Enumerable.Repeat((byte)0x44, 64 * 64 * 4).ToArray();
         IFrameGrabber root = fallbackRoot
-            ? new MenuAndTooltipCaptureFallback(new HWND(fx.Hwnd), () => (pixels, 64, 64), expectedPid: fx.ProcessId)
+            ? new OwnedSecondaryWindowCaptureFallback(new HWND(fx.Hwnd), () => (pixels, 64, 64), expectedPid: fx.ProcessId)
             : new FakeFrameGrabber(pixels, 64, 64);
-        using var grabber = new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 64, 64),
+        using var grabber = new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 64, 64),
             () => [new(fx.Hwnd, new(0, 0, 64, 64))],
-            _ => new MenuAndTooltipCaptureFallback(new HWND(fx.Hwnd), () => (pixels, 64, 64), expectedPid: fx.ProcessId));
+            _ => new OwnedSecondaryWindowCaptureFallback(new HWND(fx.Hwnd), () => (pixels, 64, 64), expectedPid: fx.ProcessId));
         var capture = new FakeWindowCapture { Supported = true, StartGrabberCallback = (_, _) => grabber };
         var recording = NewRecordingService(NewAutomation(), capture);
         Mp4SinkWriterEncoder.s_createNoClobber = (path, width, height, _, _) => new FakeVideoEncoder(path, width, height);
@@ -157,9 +157,9 @@ public partial class RealRecordingTests
             {
                 started.Add(hwnd);
                 IFrameGrabber root = (hwnd == popup.Hwnd) == fallbackPopup
-                    ? new MenuAndTooltipCaptureFallback(new HWND(hwnd), () => (pixels, 64, 64), expectedPid: fx.ProcessId)
+                    ? new OwnedSecondaryWindowCaptureFallback(new HWND(hwnd), () => (pixels, 64, 64), expectedPid: fx.ProcessId)
                     : new FakeFrameGrabber(pixels, 64, 64);
-                return new WindowCaptureIncludingMenusAndTooltips(root, () => new(0, 0, 64, 64),
+                return new WindowCaptureIncludingOwnedSecondaryWindows(root, () => new(0, 0, 64, 64),
                     () => [], _ => throw new AssertFailedException("No child capture expected."));
             },
         };

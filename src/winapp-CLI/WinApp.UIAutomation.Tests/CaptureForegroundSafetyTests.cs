@@ -32,7 +32,7 @@ public class CaptureForegroundSafetyTests
         var service = NewAutomationService();
         var discoveries = 0;
         WgcCapture.s_isSupported = () => true;
-        WgcCapture.s_startGrabber = (_, logger, _) => new WindowCaptureIncludingMenusAndTooltips(
+        WgcCapture.s_startGrabber = (_, logger, _) => new WindowCaptureIncludingOwnedSecondaryWindows(
             new ScreenshotGrabber(), () => new(0, 0, 1, 1),
             () => ++discoveries <= 2 ? [] : [new(42, new(0, 0, 1, 1))],
             _ => new ScreenshotGrabber { HasFrame = false }, logger: logger);
@@ -51,7 +51,7 @@ public class CaptureForegroundSafetyTests
         UiAutomationService.s_foregroundWindowForBlankRetry = _ => Assert.Fail("Menu failure must not foreground the root.");
         UiAutomationService.s_sleepForBlankRetry = _ => Assert.Fail("Menu failure must not trigger blank retry.");
 
-        var failure = await Assert.ThrowsExactlyAsync<MenuOrTooltipCaptureException>(() =>
+        var failure = await Assert.ThrowsExactlyAsync<OwnedSecondaryWindowCaptureException>(() =>
             service.ScreenshotAsync(TargetFor(fixture), null, false, false, CancellationToken.None));
 
         Assert.IsInstanceOfType<TimeoutException>(failure.InnerException);
@@ -76,7 +76,7 @@ public class CaptureForegroundSafetyTests
         };
         long clocks = 0;
         WgcCapture.s_isSupported = () => true;
-        WgcCapture.s_startGrabber = (_, logger, _) => new WindowCaptureIncludingMenusAndTooltips(
+        WgcCapture.s_startGrabber = (_, logger, _) => new WindowCaptureIncludingOwnedSecondaryWindows(
             new ScreenshotGrabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))],
             _ => boundary == 0 ? throw cause : new ScreenshotGrabber
@@ -94,7 +94,7 @@ public class CaptureForegroundSafetyTests
         UiAutomationService.s_foregroundWindowForBlankRetry = _ => foregrounds++;
         UiAutomationService.s_sleepForBlankRetry = _ => Assert.Fail("A failed child must not trigger blank retry.");
 
-        var failure = await Assert.ThrowsExactlyAsync<MenuOrTooltipCaptureException>(() =>
+        var failure = await Assert.ThrowsExactlyAsync<OwnedSecondaryWindowCaptureException>(() =>
             service.ScreenshotAsync(TargetFor(fixture), null, false, false, CancellationToken.None));
         if (boundary == 3)
         {

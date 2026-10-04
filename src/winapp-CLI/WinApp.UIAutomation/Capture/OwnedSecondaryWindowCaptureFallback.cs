@@ -11,10 +11,11 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 
 /// <summary>
-/// Alternative capture backend for menus, flyouts, and tooltips rejected by Windows graphics capture.
+/// Alternative capture backend for owned secondary windows rejected by Windows graphics capture,
+/// including dropdown menus, flyouts, tooltips, and floating tool windows.
 /// Renders the existing UI window through PrintWindow without reading the screen or moving focus.
 /// </summary>
-internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
+internal sealed partial class OwnedSecondaryWindowCaptureFallback(HWND hwnd,
     Func<(byte[] Pixels, int Width, int Height)>? capture = null,
     Func<long>? clock = null, ILogger? logger = null, int? expectedPid = null) : IFrameGrabber
 {
@@ -35,7 +36,7 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         get
         {
             if (!_closed && (_expectedPid == 0 ||
-                !WindowCaptureIncludingMenusAndTooltips.RootIsValid(hwnd, _expectedPid) ||
+                !WindowCaptureIncludingOwnedSecondaryWindows.RootIsValid(hwnd, _expectedPid) ||
                 !RealOwnedWindowFinder.s_isWindowVisible(hwnd)))
             {
                 _closed = true;
@@ -61,7 +62,7 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         {
             if (_clock() - _started >= 2000)
             {
-                throw new TimeoutException($"Window rendering did not complete for menu or tooltip HWND {(nint)hwnd} within 2 seconds.");
+                throw new TimeoutException($"Window rendering did not complete for owned secondary window HWND {(nint)hwnd} within 2 seconds.");
             }
             return _latest;
         }
@@ -92,7 +93,7 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
             return frame;
         });
         _ = pending.ContinueWith(task =>
-            _logger.LogError(task.Exception, "Window-only capture failed for menu or tooltip window {Hwnd}.", (nint)hwnd),
+            _logger.LogError(task.Exception, "Window-only capture failed for owned secondary window {Hwnd}.", (nint)hwnd),
             CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         return pending;
@@ -106,7 +107,7 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         if (previous == 0)
         {
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(),
-                "Cannot establish physical menu or tooltip capture coordinates.");
+                "Cannot establish physical owned secondary window capture coordinates.");
         }
         try
         {
@@ -124,19 +125,19 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         if (!PInvoke.GetWindowRect(hwnd, out var rect))
         {
             throw new System.ComponentModel.Win32Exception(
-                System.Runtime.InteropServices.Marshal.GetLastPInvokeError(), "Cannot query menu or tooltip capture bounds.");
+                System.Runtime.InteropServices.Marshal.GetLastPInvokeError(), "Cannot query owned secondary window capture bounds.");
         }
         var width = checked(rect.right - rect.left);
         var height = checked(rect.bottom - rect.top);
         var context = GetWindowDpiAwarenessContext(hwnd);
         if (context == 0)
         {
-            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot query menu or tooltip DPI awareness.");
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot query owned secondary window DPI awareness.");
         }
         var previous = SetThreadDpiAwarenessContext(context);
         if (previous == 0)
         {
-            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot establish menu or tooltip rendering coordinates.");
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot establish owned secondary window rendering coordinates.");
         }
         byte[] source;
         int sourceWidth;
@@ -145,12 +146,12 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         {
             if (!PInvoke.GetWindowRect(hwnd, out var logical))
             {
-                throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot query menu or tooltip rendering bounds.");
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot query owned secondary window rendering bounds.");
             }
             sourceWidth = checked(logical.right - logical.left);
             sourceHeight = checked(logical.bottom - logical.top);
             EnsureCurrentTarget();
-            source = UiAutomationService.RenderMenuOrTooltipWindowForCapture(hwnd, sourceWidth, sourceHeight);
+            source = UiAutomationService.RenderOwnedSecondaryWindowForCapture(hwnd, sourceWidth, sourceHeight);
         }
         finally
         {
@@ -172,14 +173,14 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         }
         EnsureCurrentTarget();
         EnsureCaptureAllowed(hwnd);
-        var bounds = WindowCaptureIncludingMenusAndTooltips.GetBounds(hwnd);
+        var bounds = WindowCaptureIncludingOwnedSecondaryWindows.GetBounds(hwnd);
         var left = bounds.Left - rect.left;
         var top = bounds.Top - rect.top;
         var croppedWidth = bounds.Right - bounds.Left;
         var croppedHeight = bounds.Bottom - bounds.Top;
         if (left < 0 || top < 0 || left + croppedWidth > width || top + croppedHeight > height)
         {
-            throw new InvalidOperationException("Menu or tooltip bounds changed during PrintWindow capture.");
+            throw new InvalidOperationException("Owned secondary window bounds changed during PrintWindow capture.");
         }
         var cropped = new byte[checked(croppedWidth * croppedHeight * 4)];
         for (var row = 0; row < croppedHeight; row++)
@@ -212,7 +213,7 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
     {
         if (IsClosed)
         {
-            throw new InvalidOperationException(            $"Menu or tooltip HWND {(nint)hwnd} is no longer the visible window of expected PID {_expectedPid}.");
+            throw new InvalidOperationException(            $"Owned secondary window HWND {(nint)hwnd} is no longer the visible window of expected PID {_expectedPid}.");
         }
     }
 
@@ -227,11 +228,11 @@ internal sealed partial class MenuAndTooltipCaptureFallback(HWND hwnd,
         if (!GetWindowDisplayAffinity(window, out var affinity))
         {
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(),
-                $"Cannot establish display-affinity protection for menu or tooltip HWND {(nint)window}.");
+                $"Cannot establish display-affinity protection for owned secondary window HWND {(nint)window}.");
         }
         if (affinity != 0)
         {
-            throw new InvalidOperationException($"Menu or tooltip HWND {(nint)window} is protected from capture (display affinity 0x{affinity:X}).");
+            throw new InvalidOperationException($"Owned secondary window HWND {(nint)window} is protected from capture (display affinity 0x{affinity:X}).");
         }
     }
 
