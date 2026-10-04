@@ -10,12 +10,12 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 
 internal sealed partial class UiAutomationService
 {
-    internal static byte[] RenderOwnedSecondaryWindowForCapture(HWND hwnd, int width, int height,
+    internal static byte[] RenderSecondaryWindowForCapture(HWND hwnd, int width, int height,
         Func<HWND, HDC, bool>? print = null)
     {
         if (width <= 0 || height <= 0)
         {
-            throw new InvalidOperationException("The owned secondary window has empty capture bounds.");
+            throw new InvalidOperationException("The secondary window has empty capture bounds.");
         }
         return CaptureFromWindow(hwnd, width, height, strict: true, print);
     }
@@ -58,7 +58,7 @@ internal sealed partial class UiAutomationService
     }
 
     private static Win32Exception PopupCaptureFailure(string operation)
-        => new(Marshal.GetLastPInvokeError(), $"{operation} failed during owned secondary window-only capture.");
+        => new(Marshal.GetLastPInvokeError(), $"{operation} failed during secondary window-only capture.");
 
     [LibraryImport("gdi32.dll", SetLastError = true)]
     private static unsafe partial int SetDIBits(HDC dc, HBITMAP bitmap, uint start, uint lines,

@@ -92,7 +92,7 @@ public class FrameGrabberReadinessTests
     {
         var discoveries = 0;
         byte[] pixels = [0, 255, 0, 255];
-        using IFrameGrabber grabber = new WindowCaptureIncludingOwnedSecondaryWindows(
+        using IFrameGrabber grabber = new SecondaryWindowsCapture(
             new LegacyGrabber((_, _) => Task.FromResult(true), () => (pixels, 1, 1, 1)),
             () => new(0, 0, 1, 1),
             () => ++discoveries <= 2 ? [] : [new(42, new(0, 0, 1, 1))],

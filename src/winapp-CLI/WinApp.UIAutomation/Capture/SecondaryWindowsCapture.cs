@@ -12,12 +12,13 @@ using Windows.Win32.Foundation;
 namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 
 /// <summary>
-/// Captures a window together with its visible, intersecting, same-process owned secondary windows,
-/// such as dropdown menus, flyouts, tooltips, and floating tool windows.
-/// Uses Windows graphics capture first and <see cref="OwnedSecondaryWindowCaptureFallback"/> when
-/// Windows rejects an owned UI window. Does not create or display UI.
+/// Includes separately rendered UI, such as menus, flyouts, tooltips, and floating tool windows,
+/// in the selected window's captured image. Only visible, intersecting popup or tool windows
+/// in the same process whose Win32 owner chain leads to the selected window are included.
+/// Uses Windows graphics capture first and <see cref="SecondaryWindowsCaptureFallback"/> when
+/// Windows rejects a secondary window. Does not create or display UI.
 /// </summary>
-internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFrameGrabber
+internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
 {
     internal readonly record struct Popup(nint Handle, PointerRect Bounds);
     private readonly record struct PopupInput(Popup Popup, IFrameGrabber Grabber, long Version, int Width, int Height);
@@ -40,7 +41,7 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
     private PopupInput[] _popupInputs = [];
     private (byte[] Pixels, int Width, int Height, long Version)? _latest;
 
-    internal WindowCaptureIncludingOwnedSecondaryWindows(IFrameGrabber root, Func<PointerRect> rootBounds,
+    internal SecondaryWindowsCapture(IFrameGrabber root, Func<PointerRect> rootBounds,
         Func<List<Popup>> discover, Func<nint, IFrameGrabber> start,
         Func<long>? clock = null, Func<bool>? isRootValid = null, ILogger? logger = null, int? expectedPid = null)
     {
@@ -54,7 +55,7 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
         _expectedPid = expectedPid;
     }
 
-    internal static WindowCaptureIncludingOwnedSecondaryWindows Start(HWND hwnd, ILogger logger, int fps,
+    internal static SecondaryWindowsCapture Start(HWND hwnd, ILogger logger, int fps,
         Func<HWND, ILogger, int, IFrameGrabber>? startWindow = null)
     {
         startWindow ??= (window, log, rate) => WgcCapture.StartSingleWindowGrabber(window, log, rate);
@@ -89,10 +90,10 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
             ((uint)GetWindowLong((nint)hwnd, -20) & 0x00000080) != 0;
     }
 
-    private static OwnedSecondaryWindowCaptureFallback StartPrintWindowFallback(HWND hwnd, ILogger logger, Exception cause, int? expectedPid = null)
+    private static SecondaryWindowsCaptureFallback StartPrintWindowFallback(HWND hwnd, ILogger logger, Exception cause, int? expectedPid = null)
     {
-        logger.LogWarning(cause, "Windows graphics capture rejected owned secondary window {Hwnd}; using window-only rendering (PrintWindow).", (nint)hwnd);
-        return new OwnedSecondaryWindowCaptureFallback(hwnd, logger: logger, expectedPid: expectedPid);
+        logger.LogWarning(cause, "Windows graphics capture rejected secondary window {Hwnd}; using window-only rendering (PrintWindow).", (nint)hwnd);
+        return new SecondaryWindowsCaptureFallback(hwnd, logger: logger, expectedPid: expectedPid);
     }
 
     private (byte[] Pixels, int Width, int Height, long Version)? ReadRootFrame()
@@ -101,9 +102,9 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
         {
             return _root.TryGetLatest();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && _root is OwnedSecondaryWindowCaptureFallback popup)
+        catch (Exception ex) when (ex is not OperationCanceledException && _root is SecondaryWindowsCaptureFallback popup)
         {
-            throw new OwnedSecondaryWindowCaptureException(popup.WindowHandle, ex);
+            throw new SecondaryWindowsCaptureException(popup.WindowHandle, ex);
         }
     }
 
@@ -128,7 +129,7 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
             catch (Exception ex) when (
                 (ex is RootClosedException or Win32Exception) && IsClosed)
             {
-                _logger.LogDebug(ex, "Captured root closed during owned secondary-window discovery; draining the final frame.");
+                _logger.LogDebug(ex, "Captured root closed during secondary-window discovery; draining the final frame.");
                 return DrainClosedRoot();
             }
         }
@@ -138,11 +139,11 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
     {
         if (!_closed)
         {
-            _logger.LogDebug("Captured root is no longer valid; releasing owned secondary-window capture sessions.");
+            _logger.LogDebug("Captured root is no longer valid; releasing secondary-window capture sessions.");
         }
         _closed = true;
         DisposeChildren();
-        if (_root is OwnedSecondaryWindowCaptureFallback)
+        if (_root is SecondaryWindowsCaptureFallback)
         {
             return _latest;
         }
@@ -170,8 +171,8 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
         }
         if (popups.Count > 16)
         {
-            throw new OwnedSecondaryWindowCaptureException(popups[0].Handle,
-                new InvalidOperationException("More than 16 intersecting owned secondary windows are visible."));
+            throw new SecondaryWindowsCaptureException(popups[0].Handle,
+                new InvalidOperationException("More than 16 intersecting secondary windows are visible."));
         }
         for (var i = popups.Count - 1; i >= 0; i--)
         {
@@ -180,7 +181,7 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
             {
                 if (!_discover().Any(p => p.Handle == popup.Handle))
                 {
-                    _logger.LogDebug("Owned secondary window {Hwnd} disappeared before capture startup.", popup.Handle);
+                    _logger.LogDebug("Secondary window {Hwnd} disappeared before capture startup.", popup.Handle);
                     popups.RemoveAt(i);
                     continue;
                 }
@@ -199,10 +200,10 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
                             _firstFrameDeadlines.Add(popup.Handle, _clock() + 2000);
                             continue;
                         }
-                        _logger.LogError(ex, "Windows graphics capture startup failed for still-visible owned secondary window {Hwnd}.", popup.Handle);
-                        throw new OwnedSecondaryWindowCaptureException(popup.Handle, ex);
+                        _logger.LogError(ex, "Windows graphics capture startup failed for still-visible secondary window {Hwnd}.", popup.Handle);
+                        throw new SecondaryWindowsCaptureException(popup.Handle, ex);
                     }
-                    _logger.LogDebug(ex, "Owned secondary window {Hwnd} disappeared during capture startup.", popup.Handle);
+                    _logger.LogDebug(ex, "Secondary window {Hwnd} disappeared during capture startup.", popup.Handle);
                     popups.RemoveAt(i);
                 }
             }
@@ -229,20 +230,20 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
             {
                 if (!_discover().Any(p => p.Handle == popups[i].Handle))
                 {
-                    _logger.LogDebug(ex, "Owned secondary window {Hwnd} disappeared during capture.", popups[i].Handle);
+                    _logger.LogDebug(ex, "Secondary window {Hwnd} disappeared during capture.", popups[i].Handle);
                     return null;
                 }
-                _logger.LogError(ex, "Capture failed for still-visible owned secondary window {Hwnd}.", popups[i].Handle);
-                throw new OwnedSecondaryWindowCaptureException(popups[i].Handle, ex);
+                _logger.LogError(ex, "Capture failed for still-visible secondary window {Hwnd}.", popups[i].Handle);
+                throw new SecondaryWindowsCaptureException(popups[i].Handle, ex);
             }
             if (child is null)
             {
                 if (!_firstFrameDeadlines.TryGetValue(popups[i].Handle, out var deadline) ||
                     _clock() >= deadline)
                 {
-                    _logger.LogError("Owned secondary window {Hwnd} did not produce a capture frame within 2 seconds.", popups[i].Handle);
-                    throw new OwnedSecondaryWindowCaptureException(popups[i].Handle,
-                        new TimeoutException($"Owned secondary window HWND {popups[i].Handle} did not produce a capture frame within 2 seconds."));
+                    _logger.LogError("Secondary window {Hwnd} did not produce a capture frame within 2 seconds.", popups[i].Handle);
+                    throw new SecondaryWindowsCaptureException(popups[i].Handle,
+                        new TimeoutException($"Secondary window HWND {popups[i].Handle} did not produce a capture frame within 2 seconds."));
                 }
                 return null;
             }
@@ -268,7 +269,7 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
         {
             var popup = popups[i];
             var child = childFrames[i];
-            IncludeOwnedSecondaryWindowInWindowImage(pixels, result.Width, result.Height,
+            IncludeSecondaryWindowInWindowImage(pixels, result.Width, result.Height,
                 child.Pixels, child.Width, child.Height,
                 popup.Bounds.Left - bounds.Left, popup.Bounds.Top - bounds.Top);
         }
@@ -310,19 +311,19 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
         }
         lock (_lock)
         {
-            if (!IsClosed && _root is OwnedSecondaryWindowCaptureFallback popupRoot && ReadRootFrame() is null)
+            if (!IsClosed && _root is SecondaryWindowsCaptureFallback popupRoot && ReadRootFrame() is null)
             {
-                throw new OwnedSecondaryWindowCaptureException(popupRoot.WindowHandle,
-                    new TimeoutException("The targeted owned secondary window did not produce a frame before the capture deadline."));
+                throw new SecondaryWindowsCaptureException(popupRoot.WindowHandle,
+                    new TimeoutException("The targeted secondary window did not produce a frame before the capture deadline."));
             }
             if (!IsClosed && ReadRootFrame() is not null)
             {
                 var popups = _discover();
                 if (popups.Count != 0)
                 {
-                    var error = new TimeoutException("The owned secondary window did not produce a stable combined image before the capture deadline.");
-                    _logger.LogError(error, "Owned secondary window {Hwnd} prevented the first combined image.", popups[0].Handle);
-                    throw new OwnedSecondaryWindowCaptureException(popups[0].Handle, error);
+                    var error = new TimeoutException("The secondary window did not produce a stable combined image before the capture deadline.");
+                    _logger.LogError(error, "Secondary window {Hwnd} prevented the first combined image.", popups[0].Handle);
+                    throw new SecondaryWindowsCaptureException(popups[0].Handle, error);
                 }
             }
         }
@@ -390,11 +391,11 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
                 if (!IsWindow((nint)window) ||
                     !RealOwnedWindowFinder.s_isWindowVisible(window) || !IsOwnedBy(window, root, pid))
                 {
-                    logger.LogDebug(ex, "Owned secondary window {Hwnd} disappeared during its bounds query.", (nint)window);
+                    logger.LogDebug(ex, "Secondary window {Hwnd} disappeared during its bounds query.", (nint)window);
                     continue;
                 }
-                logger.LogError(ex, "Cannot query bounds for still-visible owned secondary window {Hwnd}.", (nint)window);
-                throw new OwnedSecondaryWindowCaptureException((nint)window, ex);
+                logger.LogError(ex, "Cannot query bounds for still-visible secondary window {Hwnd}.", (nint)window);
+                throw new SecondaryWindowsCaptureException((nint)window, ex);
             }
             if (bounds.Right > bounds.Left && bounds.Bottom > bounds.Top &&
                 bounds.Left < rootBounds.Right && bounds.Right > rootBounds.Left &&
@@ -428,7 +429,7 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
     }
 
     // Preserve premultiplied BGRA transparency while clipping the UI image to the captured window.
-    internal static void IncludeOwnedSecondaryWindowInWindowImage(byte[] root, int width, int height, byte[] popup,
+    internal static void IncludeSecondaryWindowInWindowImage(byte[] root, int width, int height, byte[] popup,
         int popupWidth, int popupHeight, int left, int top)
     {
         if (root.Length != checked(width * height * 4) ||
@@ -492,6 +493,6 @@ internal sealed partial class WindowCaptureIncludingOwnedSecondaryWindows : IFra
     }
 }
 
-internal sealed class OwnedSecondaryWindowCaptureException(nint hwnd, Exception cause)
-    : InvalidOperationException($"Capture failed for owned secondary window HWND {hwnd}: {cause.Message}", cause);
+internal sealed class SecondaryWindowsCaptureException(nint hwnd, Exception cause)
+    : InvalidOperationException($"Capture failed for secondary window HWND {hwnd}: {cause.Message}", cause);
 #endif

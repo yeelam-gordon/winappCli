@@ -130,7 +130,7 @@ internal sealed partial class UiAutomationService
             {
                 throw;
             }
-            catch (OwnedSecondaryWindowCaptureException)
+            catch (SecondaryWindowsCaptureException)
             {
                 throw;
             }
