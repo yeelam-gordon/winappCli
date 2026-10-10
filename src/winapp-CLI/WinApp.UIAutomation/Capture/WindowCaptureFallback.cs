@@ -11,10 +11,10 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 
 /// <summary>
-/// Captures a secondary window when Windows graphics capture rejects it.
+/// Provides window-only rendering for eligible windows rejected by Windows graphics capture.
 /// Renders the existing UI window through PrintWindow without reading the screen or moving focus.
 /// </summary>
-internal sealed partial class SecondaryWindowsCaptureFallback(HWND hwnd,
+internal sealed partial class WindowCaptureFallback(HWND hwnd,
     Func<(byte[] Pixels, int Width, int Height)>? capture = null,
     Func<long>? clock = null, ILogger? logger = null, int? expectedPid = null) : IFrameGrabber
 {
@@ -35,7 +35,7 @@ internal sealed partial class SecondaryWindowsCaptureFallback(HWND hwnd,
         get
         {
             if (!_closed && (_expectedPid == 0 ||
-                !SecondaryWindowsCapture.RootIsValid(hwnd, _expectedPid) ||
+                !WindowCaptureSession.RootIsValid(hwnd, _expectedPid) ||
                 !RealOwnedWindowFinder.s_isWindowVisible(hwnd)))
             {
                 _closed = true;
@@ -172,7 +172,7 @@ internal sealed partial class SecondaryWindowsCaptureFallback(HWND hwnd,
         }
         EnsureCurrentTarget();
         EnsureCaptureAllowed(hwnd);
-        var bounds = SecondaryWindowsCapture.GetBounds(hwnd);
+        var bounds = WindowCaptureSession.GetBounds(hwnd);
         var left = bounds.Left - rect.left;
         var top = bounds.Top - rect.top;
         var croppedWidth = bounds.Right - bounds.Left;

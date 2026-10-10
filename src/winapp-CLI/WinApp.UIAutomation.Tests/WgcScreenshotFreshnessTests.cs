@@ -25,7 +25,7 @@ public class WgcScreenshotFreshnessTests
         byte[] menuPixels = [0, 255, 0, 255];
         var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
         var child = new Grabber(() => arrives && ++childReads >= 3 ? (menuPixels, 1, 1, 1L) : null);
-        var combined = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+        var combined = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
         WgcCapture.s_startGrabber = (_, _, _) => combined;
         var timer = Stopwatch.StartNew();
@@ -55,7 +55,7 @@ public class WgcScreenshotFreshnessTests
         var discoveries = 0;
         var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
         var child = new Grabber(() => null);
-        var combined = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+        var combined = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
         WgcCapture.s_startGrabber = (_, _, _) => combined;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));

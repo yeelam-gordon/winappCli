@@ -12,7 +12,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 
 [TestClass]
 [DoNotParallelize]
-public class SecondaryWindowsCaptureLifecycleTests
+public class WindowCaptureSessionLifecycleTests
 {
     [TestMethod]
     [DataRow(false)]
@@ -22,9 +22,9 @@ public class SecondaryWindowsCaptureLifecycleTests
         long now = 100;
         var root = new Grabber();
         var child = new Grabber { HasFrame = false };
-        var popups = new List<SecondaryWindowsCapture.Popup>();
+        var popups = new List<WindowCaptureSession.Popup>();
         var logger = new CaptureLogger();
-        using var composite = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () => popups.ToList(), _ => child, () => now, logger: logger);
         var healthy = composite.TryGetLatest()!.Value;
         popups.Add(new(42, new(0, 0, 1, 1)));
@@ -66,7 +66,7 @@ public class SecondaryWindowsCaptureLifecycleTests
         var starts = 0;
         var logger = new CaptureLogger();
         var root = new Grabber();
-        using var composite = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () =>
             {
                 if (!duringStart && ++discoveries > 1)
@@ -94,7 +94,7 @@ public class SecondaryWindowsCaptureLifecycleTests
     {
         var failure = new COMException("Non-classified WGC startup failure", hresult);
         var logger = new CaptureLogger();
-        using var composite = new SecondaryWindowsCapture(new Grabber(), () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(new Grabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))], _ => throw failure, logger: logger);
         Assert.AreSame(failure, Assert.ThrowsExactly<SecondaryWindowsCaptureException>(() => composite.TryGetLatest()).InnerException);
         Assert.IsTrue(logger.Messages.Any(m => m.Level == LogLevel.Error));
@@ -135,7 +135,7 @@ public class SecondaryWindowsCaptureLifecycleTests
             var visible = true;
             var starts = 0;
             var logger = new CaptureLogger();
-            var bounds = SecondaryWindowsCapture.GetBounds(new HWND(handle));
+            var bounds = WindowCaptureSession.GetBounds(new HWND(handle));
             var width = bounds.Right - bounds.Left;
             var height = bounds.Bottom - bounds.Top;
             var root = new Grabber { Width = width, Height = height, Pixels = new byte[width * height * 4] };
@@ -144,7 +144,7 @@ public class SecondaryWindowsCaptureLifecycleTests
                 root.Pixels[i + 2] = 255;
                 root.Pixels[i + 3] = 255;
             }
-            using var composite = new SecondaryWindowsCapture(root, () => bounds,
+            using var composite = new WindowCaptureSession(root, () => bounds,
                 () => visible ? [new(handle, bounds)] : [],
                 _ =>
                 {
@@ -281,7 +281,7 @@ public class SecondaryWindowsCaptureLifecycleTests
             try
             {
                 var failure = Assert.ThrowsExactly<InvalidOperationException>(() =>
-                    SecondaryWindowsCaptureFallback.EnsureCaptureAllowed(child));
+                    WindowCaptureFallback.EnsureCaptureAllowed(child));
                 StringAssert.Contains(failure.Message, "protected from capture");
             }
             finally
@@ -301,7 +301,7 @@ public class SecondaryWindowsCaptureLifecycleTests
             using var finished = new ManualResetEventSlim();
             long now = 0;
             var calls = 0;
-            using var grabber = new SecondaryWindowsCaptureFallback(child, () =>
+            using var grabber = new WindowCaptureFallback(child, () =>
             {
                 var value = Interlocked.Increment(ref calls);
                 if (value == 2)
@@ -358,7 +358,7 @@ public class SecondaryWindowsCaptureLifecycleTests
             using var finished = new ManualResetEventSlim();
             long now = 0;
             var calls = 0;
-            using var grabber = new SecondaryWindowsCaptureFallback(child, () =>
+            using var grabber = new WindowCaptureFallback(child, () =>
             {
                 Interlocked.Increment(ref calls);
                 started.Set();
@@ -412,7 +412,7 @@ public class SecondaryWindowsCaptureLifecycleTests
                 popup.Refresh();
                 handle = popup.Handle;
             });
-            using var grabber = new SecondaryWindowsCaptureFallback(new HWND(handle));
+            using var grabber = new WindowCaptureFallback(new HWND(handle));
             Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             var frame = grabber.TryGetLatest()!.Value;
             var renderDeadline = Environment.TickCount64 + 2000;
@@ -425,7 +425,7 @@ public class SecondaryWindowsCaptureLifecycleTests
             Assert.AreNotEqual((nint)0, previous);
             try
             {
-                var bounds = SecondaryWindowsCapture.GetBounds(new HWND(handle));
+                var bounds = WindowCaptureSession.GetBounds(new HWND(handle));
                 Assert.AreEqual(bounds.Right - bounds.Left, frame.Width);
                 Assert.AreEqual(bounds.Bottom - bounds.Top, frame.Height);
                 var clientOrigin = new System.Drawing.Point();
@@ -465,7 +465,7 @@ public class SecondaryWindowsCaptureLifecycleTests
     {
         var visible = true;
         var failure = new Win32Exception(1400);
-        using var composite = new SecondaryWindowsCapture(new Grabber(), () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(new Grabber(), () => new(0, 0, 1, 1),
             () => visible ? [new(42, new(0, 0, 1, 1))] : [],
             _ => new Grabber
             {
@@ -559,8 +559,8 @@ public class SecondaryWindowsCaptureLifecycleTests
             var logger = new CaptureLogger();
             var root = new Grabber();
             RealOwnedWindowFinder.s_findNextTopLevelWindow = after => after.IsNull ? childHandle : HWND.Null;
-            using var composite = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
-                () => SecondaryWindowsCapture.Discover(rootHandle, pid, logger, _ => new(0, 0, 10, 10)),
+            using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
+                () => WindowCaptureSession.Discover(rootHandle, pid, logger, _ => new(0, 0, 10, 10)),
                 hwnd =>
                 {
                     fixture.OnUiThread(() => popup!.Dispose());
@@ -587,14 +587,14 @@ public class SecondaryWindowsCaptureLifecycleTests
         var valid = true;
         var closeOnDiscovery = false;
         var logger = new CaptureLogger();
-        using var composite = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () =>
             {
                 if (closeOnDiscovery)
                 {
                     valid = false;
                     root.IsClosed = nativeEvent;
-                    return SecondaryWindowsCapture.Discover(HWND.Null, 0, logger);
+                    return WindowCaptureSession.Discover(HWND.Null, 0, logger);
                 }
                 return [new(42, new(0, 0, 1, 1))];
             }, _ => child, isRootValid: () => valid, logger: logger);
@@ -616,7 +616,7 @@ public class SecondaryWindowsCaptureLifecycleTests
     {
         var valid = true;
         var root = new Grabber();
-        using var composite = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
         var first = composite.TryGetLatest()!.Value;
         valid = false;
@@ -632,7 +632,7 @@ public class SecondaryWindowsCaptureLifecycleTests
         var root = new Grabber();
         var valid = true;
         var failBounds = false;
-        using var composite = new SecondaryWindowsCapture(root, () =>
+        using var composite = new WindowCaptureSession(root, () =>
             {
                 if (failBounds)
                 {
@@ -656,7 +656,7 @@ public class SecondaryWindowsCaptureLifecycleTests
     {
         var root = new Grabber();
         var failure = new InvalidOperationException("Unexpected discovery defect");
-        using var composite = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () =>
             {
                 root.IsClosed = close;
@@ -670,7 +670,7 @@ public class SecondaryWindowsCaptureLifecycleTests
     {
         var root = new Grabber();
         var failure = new COMException("Unrelated discovery failure");
-        using var composite = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () =>
             {
                 root.IsClosed = true;
@@ -686,8 +686,8 @@ public class SecondaryWindowsCaptureLifecycleTests
     {
         WithOwnedPopup((root, popup, pid) =>
         {
-            var results = new Func<List<SecondaryWindowsCapture.Popup>>(() =>
-                SecondaryWindowsCapture.Discover(root, pid, NullLogger.Instance,
+            var results = new Func<List<WindowCaptureSession.Popup>>(() =>
+                WindowCaptureSession.Discover(root, pid, NullLogger.Instance,
                     hwnd => hwnd == (emptyRoot ? root : popup) ? new(0, 0, 0, 0) : new(0, 0, 10, 10)));
             if (emptyRoot)
             {
@@ -709,8 +709,8 @@ public class SecondaryWindowsCaptureLifecycleTests
         {
             var logger = new CaptureLogger();
             var failure = new Win32Exception(1400);
-            var results = new Func<List<SecondaryWindowsCapture.Popup>>(() =>
-                SecondaryWindowsCapture.Discover(root, pid, logger, hwnd =>
+            var results = new Func<List<WindowCaptureSession.Popup>>(() =>
+                WindowCaptureSession.Discover(root, pid, logger, hwnd =>
                 {
                     if (hwnd == popup)
                     {
@@ -737,13 +737,13 @@ public class SecondaryWindowsCaptureLifecycleTests
     [TestMethod]
     public async Task FirstFrame_OverallDeadlineDistinguishesPendingPopupFromMissingRootFrame()
     {
-        using var composite = new SecondaryWindowsCapture(new Grabber(), () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(new Grabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))], _ => new Grabber { HasFrame = false }, () => 100);
         var failure = await Assert.ThrowsExactlyAsync<SecondaryWindowsCaptureException>(() =>
             composite.WaitForFirstFrameAsync(TimeSpan.Zero, CancellationToken.None));
         Assert.IsInstanceOfType<TimeoutException>(failure.InnerException);
 
-        using var missingRoot = new SecondaryWindowsCapture(new Grabber { HasFrame = false },
+        using var missingRoot = new WindowCaptureSession(new Grabber { HasFrame = false },
             () => new(0, 0, 1, 1), () => [], _ => throw new AssertFailedException());
         Assert.IsFalse(await missingRoot.WaitForFirstFrameAsync(TimeSpan.Zero, CancellationToken.None));
     }
@@ -780,7 +780,7 @@ public class SecondaryWindowsCaptureLifecycleTests
                 handle = popup.Handle;
             });
             var starts = 0;
-            WgcCapture.s_startGrabber = (window, logger, fps) => SecondaryWindowsCapture.Start(window, logger, fps,
+            WgcCapture.s_startGrabber = (window, logger, fps) => WindowCaptureSession.Start(window, logger, fps,
                 (candidate, _, rate) =>
                 {
                     Assert.AreEqual(handle, (nint)candidate);
@@ -798,7 +798,7 @@ public class SecondaryWindowsCaptureLifecycleTests
                 grabber = backend.StartFrameGrabber(handle, 15);
                 Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
             }
-            var bounds = SecondaryWindowsCapture.GetBounds(new HWND(handle));
+            var bounds = WindowCaptureSession.GetBounds(new HWND(handle));
             var deadline = Environment.TickCount64 + 2000;
             byte[] pixels;
             int width;
@@ -896,12 +896,12 @@ public class SecondaryWindowsCaptureLifecycleTests
             if (kind == 2)
             {
                 Assert.AreSame(failure, Assert.ThrowsExactly<COMException>(() =>
-                    SecondaryWindowsCapture.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
+                    WindowCaptureSession.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
             }
             else
             {
                 Assert.AreSame(failure, Assert.ThrowsExactly<WgcCapture.UnsupportedCaptureWindowException>(() =>
-                    SecondaryWindowsCapture.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
+                    WindowCaptureSession.Start(window, NullLogger.Instance, 0, (_, _, _) => throw failure)));
             }
         }
         finally
@@ -917,9 +917,9 @@ public class SecondaryWindowsCaptureLifecycleTests
         {
             var calls = 0;
             var valid = true;
-            using var root = new SecondaryWindowsCaptureFallback(child,
+            using var root = new WindowCaptureFallback(child,
                 () => (new byte[] { (byte)Interlocked.Increment(ref calls), 0, 0, 255 }, 1, 1));
-            using var composite = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+            using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
                 () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
             var deadline = Environment.TickCount64 + 2000;
             var healthy = composite.TryGetLatest();
@@ -953,7 +953,7 @@ public class SecondaryWindowsCaptureLifecycleTests
             using var finished = new ManualResetEventSlim();
             var calls = 0;
             var getPid = RealOwnedWindowFinder.s_getWindowProcessId;
-            using var root = new SecondaryWindowsCaptureFallback(child, () =>
+            using var root = new WindowCaptureFallback(child, () =>
             {
                 var value = Interlocked.Increment(ref calls);
                 if (value == 2)
@@ -1005,7 +1005,7 @@ public class SecondaryWindowsCaptureLifecycleTests
         var reads = 0;
         var valid = true;
         var root = new Grabber { OnSample = () => reads++ };
-        using var composite = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+        using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
         var healthy = composite.TryGetLatest()!.Value;
         Assert.AreEqual(1, reads);

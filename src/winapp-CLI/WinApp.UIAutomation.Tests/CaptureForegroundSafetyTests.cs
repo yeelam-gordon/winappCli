@@ -32,7 +32,7 @@ public class CaptureForegroundSafetyTests
         var service = NewAutomationService();
         var discoveries = 0;
         WgcCapture.s_isSupported = () => true;
-        WgcCapture.s_startGrabber = (_, logger, _) => new SecondaryWindowsCapture(
+        WgcCapture.s_startGrabber = (_, logger, _) => new WindowCaptureSession(
             new ScreenshotGrabber(), () => new(0, 0, 1, 1),
             () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))],
             _ => new ScreenshotGrabber { HasFrame = false }, logger: logger);
@@ -76,7 +76,7 @@ public class CaptureForegroundSafetyTests
         };
         long clocks = 0;
         WgcCapture.s_isSupported = () => true;
-        WgcCapture.s_startGrabber = (_, logger, _) => new SecondaryWindowsCapture(
+        WgcCapture.s_startGrabber = (_, logger, _) => new WindowCaptureSession(
             new ScreenshotGrabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))],
             _ => boundary == 0 ? throw cause : new ScreenshotGrabber

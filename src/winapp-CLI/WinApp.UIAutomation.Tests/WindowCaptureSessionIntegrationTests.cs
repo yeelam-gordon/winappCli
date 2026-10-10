@@ -9,7 +9,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 
 [TestClass]
 [DoNotParallelize]
-public class SecondaryWindowsCaptureIntegrationTests
+public class WindowCaptureSessionIntegrationTests
 {
     [TestMethod]
     [DataRow(false, 0)]
