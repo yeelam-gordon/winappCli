@@ -218,7 +218,7 @@ public class WindowCaptureSessionLifecycleTests
     [TestMethod]
     public void PrintWindow_InvalidWindowFailsExplicitly()
     {
-        Assert.ThrowsExactly<Win32Exception>(() => UiAutomationService.RenderSecondaryWindowForCapture(new HWND(-1), 2, 2));
+        Assert.ThrowsExactly<Win32Exception>(() => WindowBitmapCapture.CaptureValidatedPixels(new HWND(-1), 2, 2));
     }
 
     [TestMethod]
@@ -232,7 +232,7 @@ public class WindowCaptureSessionLifecycleTests
         WithOwnedPopup((_, window, _) =>
         {
             var attempts = 0;
-            byte[] Capture() => UiAutomationService.RenderSecondaryWindowForCapture(window, 16, 16, (_, dc) =>
+            byte[] Capture() => WindowBitmapCapture.CaptureValidatedPixels(window, 16, 16, (_, dc) =>
             {
                 attempts++;
                 for (var y = 0; y < (full ? 16 : 1); y++)
@@ -514,7 +514,7 @@ public class WindowCaptureSessionLifecycleTests
                 handle = popup.Handle;
             });
             var attempts = 0;
-            byte[] Capture() => UiAutomationService.RenderSecondaryWindowForCapture(new HWND(handle), 16, 16,
+            byte[] Capture() => WindowBitmapCapture.CaptureValidatedPixels(new HWND(handle), 16, 16,
                 (_, _) => { attempts++; return reportsSuccess; });
             if (reportsSuccess)
             {

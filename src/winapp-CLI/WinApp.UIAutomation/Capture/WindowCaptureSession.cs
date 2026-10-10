@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 // Licensed under the MIT License.
 
-#if WINDOWS10_0_19041_0_OR_GREATER
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
@@ -481,4 +480,3 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
 
 internal sealed class SecondaryWindowsCaptureException(nint hwnd, Exception cause)
     : InvalidOperationException($"Capture failed for secondary window HWND {hwnd}: {cause.Message}", cause);
-#endif

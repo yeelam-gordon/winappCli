@@ -1,7 +1,6 @@
 // Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 // Licensed under the MIT License.
 
-#if WINDOWS10_0_19041_0_OR_GREATER
 using Windows.Win32;
 using Windows.Win32.Foundation;
 using System.Runtime.InteropServices;
@@ -150,7 +149,7 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
             sourceWidth = checked(logical.right - logical.left);
             sourceHeight = checked(logical.bottom - logical.top);
             EnsureCurrentTarget();
-            source = UiAutomationService.RenderSecondaryWindowForCapture(hwnd, sourceWidth, sourceHeight);
+            source = WindowBitmapCapture.CaptureValidatedPixels(hwnd, sourceWidth, sourceHeight);
         }
         finally
         {
@@ -239,4 +238,3 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool GetWindowDisplayAffinity(HWND window, out uint affinity);
 }
-#endif
