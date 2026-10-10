@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.TestSupport;
 using Windows.Win32.Foundation;
+using static Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests.CaptureTestWindows;
 
 namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 
@@ -22,7 +23,7 @@ public class WindowCaptureSessionLifecycleTests
         long now = 100;
         var root = new Grabber();
         var child = new Grabber { HasFrame = false };
-        var popups = new List<WindowCaptureSession.Popup>();
+        var popups = new List<WindowCaptureSession.SecondaryWindow>();
         var logger = new CaptureLogger();
         using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () => popups.ToList(), _ => child, () => now, logger: logger);
@@ -42,7 +43,7 @@ public class WindowCaptureSessionLifecycleTests
         else
         {
             now = 2100;
-            var error = Assert.ThrowsExactly<SecondaryWindowsCaptureException>(() => composite.TryGetLatest());
+            var error = Assert.ThrowsExactly<WindowCaptureException>(() => composite.TryGetLatest());
             Assert.IsInstanceOfType<TimeoutException>(error.InnerException);
             StringAssert.Contains(error.Message, "42");
             Assert.IsTrue(logger.Messages.Any(m => m.Level == LogLevel.Error && m.Text.Contains("42")));
@@ -96,7 +97,7 @@ public class WindowCaptureSessionLifecycleTests
         var logger = new CaptureLogger();
         using var composite = new WindowCaptureSession(new Grabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))], _ => throw failure, logger: logger);
-        Assert.AreSame(failure, Assert.ThrowsExactly<SecondaryWindowsCaptureException>(() => composite.TryGetLatest()).InnerException);
+        Assert.AreSame(failure, Assert.ThrowsExactly<WindowCaptureException>(() => composite.TryGetLatest()).InnerException);
         Assert.IsTrue(logger.Messages.Any(m => m.Level == LogLevel.Error));
     }
 
@@ -216,249 +217,6 @@ public class WindowCaptureSessionLifecycleTests
     }
 
     [TestMethod]
-    public void PrintWindow_InvalidWindowFailsExplicitly()
-    {
-        Assert.ThrowsExactly<Win32Exception>(() => WindowBitmapCapture.CaptureValidatedPixels(new HWND(-1), 2, 2));
-    }
-
-    [TestMethod]
-    [DataRow(false, 0)]
-    [DataRow(true, 0)]
-    [DataRow(true, 0x5A)]
-    [DataRow(true, 0xA5)]
-    [DataRow(true, -1)]
-    public void PrintWindow_RejectsPartialPaintingButAcceptsBlackAndGenuineSeedColors(bool full, int shade)
-    {
-        WithOwnedPopup((_, window, _) =>
-        {
-            var attempts = 0;
-            byte[] Capture() => WindowBitmapCapture.CaptureValidatedPixels(window, 16, 16, (_, dc) =>
-            {
-                attempts++;
-                for (var y = 0; y < (full ? 16 : 1); y++)
-                {
-                    for (var x = 0; x < (full ? 16 : 1); x++)
-                    {
-                        var value = shade < 0 ? ((x + y) % 2 == 0 ? 0x5Au : 0xA5u) : (uint)shade;
-                        Assert.AreNotEqual(uint.MaxValue, SetPixel(dc, x, y, value * 0x010101u));
-                    }
-                }
-                return true;
-            });
-            if (!full)
-            {
-                var failure = Assert.ThrowsExactly<InvalidOperationException>(() => Capture());
-                StringAssert.Contains(failure.Message, "did not paint all pixels");
-                Assert.AreEqual(2, attempts);
-                return;
-            }
-            var pixels = Capture();
-            Assert.AreEqual(16 * 16 * 4, pixels.Length);
-            for (var y = 0; y < 16; y++)
-            {
-                for (var x = 0; x < 16; x++)
-                {
-                    var value = shade < 0 ? ((x + y) % 2 == 0 ? (byte)0x5A : (byte)0xA5) : (byte)shade;
-                    var index = (y * 16 + x) * 4;
-                    CollectionAssert.AreEqual(new byte[] { value, value, value, 255 }, pixels[index..(index + 4)]);
-                }
-            }
-            Assert.AreEqual(shade is 0x5A or -1 ? 2 : 1, attempts);
-        });
-    }
-
-    [DllImport("gdi32.dll")]
-    private static extern uint SetPixel(global::Windows.Win32.Graphics.Gdi.HDC dc, int x, int y, uint color);
-
-    [TestMethod]
-    [DataRow(1u)]
-    [DataRow(0x11u)]
-    public void PrintWindow_DisplayAffinityProtectionIsDenied(uint affinity)
-    {
-        WithOwnedPopup((_, child, _) =>
-        {
-            Assert.IsTrue(SetWindowDisplayAffinity(child, affinity), $"Cannot set test affinity: {Marshal.GetLastPInvokeError()}.");
-            try
-            {
-                var failure = Assert.ThrowsExactly<InvalidOperationException>(() =>
-                    WindowCaptureFallback.EnsureCaptureAllowed(child));
-                StringAssert.Contains(failure.Message, "protected from capture");
-            }
-            finally
-            {
-                Assert.IsTrue(SetWindowDisplayAffinity(child, 0));
-            }
-        });
-    }
-
-    [TestMethod]
-    public void PrintWindow_ConsumedFrameStartsNextRenderWithoutAnotherPoll()
-    {
-        WithOwnedPopup((_, child, _) =>
-        {
-            using var started = new ManualResetEventSlim();
-            using var release = new ManualResetEventSlim();
-            using var finished = new ManualResetEventSlim();
-            long now = 0;
-            var calls = 0;
-            using var grabber = new WindowCaptureFallback(child, () =>
-            {
-                var value = Interlocked.Increment(ref calls);
-                if (value == 2)
-                {
-                    started.Set();
-                    try
-                    {
-                        Assert.IsTrue(release.Wait(TimeSpan.FromSeconds(5)));
-                    }
-                    finally
-                    {
-                        finished.Set();
-                    }
-                }
-                return (new byte[] { (byte)value, 0, 0, 255 }, 1, 1);
-            }, () => now);
-            try
-            {
-                var deadline = Environment.TickCount64 + 2000;
-                var frame = grabber.TryGetLatest();
-                while (frame is null && Environment.TickCount64 < deadline)
-                {
-                    Thread.Sleep(5);
-                    frame = grabber.TryGetLatest();
-                }
-                Assert.IsNotNull(frame);
-                Assert.IsTrue(started.Wait(TimeSpan.FromSeconds(2)),
-                    "Publishing the first frame must start the replacement render without another sample.");
-                Assert.AreEqual(2, calls);
-                now = 1999;
-                Assert.AreEqual(frame.Value.Version, grabber.TryGetLatest()!.Value.Version);
-                Assert.AreEqual(2, calls, "Sampling must not start a second concurrent render.");
-                now = 2000;
-                Assert.ThrowsExactly<TimeoutException>(() => grabber.TryGetLatest());
-            }
-            finally
-            {
-                release.Set();
-                if (started.IsSet)
-                {
-                    Assert.IsTrue(finished.Wait(TimeSpan.FromSeconds(2)));
-                }
-            }
-        });
-    }
-
-    [TestMethod]
-    public void PrintWindow_SlowNativeCallDoesNotBlockSamplingAndTimesOut()
-    {
-        WithOwnedPopup((_, child, _) =>
-        {
-            using var started = new ManualResetEventSlim();
-            using var release = new ManualResetEventSlim();
-            using var finished = new ManualResetEventSlim();
-            long now = 0;
-            var calls = 0;
-            using var grabber = new WindowCaptureFallback(child, () =>
-            {
-                Interlocked.Increment(ref calls);
-                started.Set();
-                release.Wait();
-                finished.Set();
-                return (new byte[] { 0, 0, 0, 255 }, 1, 1);
-            }, () => now);
-            try
-            {
-                Assert.IsNull(grabber.TryGetLatest());
-                Assert.IsTrue(started.Wait(TimeSpan.FromSeconds(2)));
-                now = 1999;
-                Assert.IsNull(grabber.TryGetLatest());
-                now = 2000;
-                Assert.ThrowsExactly<TimeoutException>(() => grabber.TryGetLatest());
-                Assert.AreEqual(1, calls);
-            }
-            finally
-            {
-                release.Set();
-                Assert.IsTrue(finished.Wait(TimeSpan.FromSeconds(2)));
-            }
-        });
-    }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowDisplayAffinity(HWND window, uint affinity);
-
-    [TestMethod]
-    public async Task PrintWindow_FramedWindowUsesDwmDimensionsAndCorrectClientPixelPosition()
-    {
-        if (ForegroundGuard.NoInteractiveDesktop())
-        {
-            Assert.Inconclusive("Native PrintWindow requires an interactive desktop.");
-        }
-        using var fixture = new UiaTestFixture();
-        Form? popup = null;
-        try
-        {
-            nint handle = 0;
-            fixture.OnUiThread(() =>
-            {
-                popup = new Form
-                {
-                    BackColor = System.Drawing.Color.Lime,
-                    Size = new(160, 140),
-                    ShowInTaskbar = false
-                };
-                popup.Show(fixture.Form);
-                popup.Refresh();
-                handle = popup.Handle;
-            });
-            using var grabber = new WindowCaptureFallback(new HWND(handle));
-            Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), CancellationToken.None));
-            var frame = grabber.TryGetLatest()!.Value;
-            var renderDeadline = Environment.TickCount64 + 2000;
-            while (!HasGreenPixels(frame.Pixels) && Environment.TickCount64 < renderDeadline)
-            {
-                await Task.Delay(20);
-                frame = grabber.TryGetLatest()!.Value;
-            }
-            var previous = SetThreadDpiAwarenessContext(-4);
-            Assert.AreNotEqual((nint)0, previous);
-            try
-            {
-                var bounds = WindowCaptureSession.GetBounds(new HWND(handle));
-                Assert.AreEqual(bounds.Right - bounds.Left, frame.Width);
-                Assert.AreEqual(bounds.Bottom - bounds.Top, frame.Height);
-                var clientOrigin = new System.Drawing.Point();
-                Assert.IsTrue(ClientToScreen(new HWND(handle), ref clientOrigin));
-                var offset = ((clientOrigin.Y - bounds.Top + 10) * frame.Width +
-                    clientOrigin.X - bounds.Left + 10) * 4;
-                CollectionAssert.AreEqual(new byte[] { 0, 255, 0, 255 }, frame.Pixels[offset..(offset + 4)],
-                    $"bounds={bounds}, client={clientOrigin}, size={frame.Width}x{frame.Height}");
-            }
-            finally
-            {
-                SetThreadDpiAwarenessContext(previous);
-            }
-        }
-        finally
-        {
-            fixture.OnUiThread(() => popup?.Dispose());
-        }
-
-        static bool HasGreenPixels(byte[] pixels)
-        {
-            for (var i = 0; i < pixels.Length; i += 4)
-            {
-                if (pixels[i] == 0 && pixels[i + 1] == 255 && pixels[i + 2] == 0)
-                {
-                    return true;
-                }
-            }
-            return false;
-        }
-    }
-
-    [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
     public void Sampling_ChildFailureIsHarmlessOnlyIfChildDisappeared(bool disappears)
@@ -482,56 +240,7 @@ public class WindowCaptureSessionLifecycleTests
         }
         else
         {
-            Assert.AreSame(failure, Assert.ThrowsExactly<SecondaryWindowsCaptureException>(() => composite.TryGetLatest()).InnerException);
-        }
-    }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern nint SetThreadDpiAwarenessContext(nint context);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ClientToScreen(HWND window, ref System.Drawing.Point point);
-
-    [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public void PrintWindow_NativeFailureOrUnpaintedBitmapFailsExplicitly(bool reportsSuccess)
-    {
-        if (ForegroundGuard.NoInteractiveDesktop())
-        {
-            Assert.Inconclusive("Native PrintWindow requires an interactive desktop.");
-        }
-        using var fixture = new UiaTestFixture();
-        PopupWindow? popup = null;
-        try
-        {
-            nint handle = 0;
-            fixture.OnUiThread(() =>
-            {
-                popup = new PopupWindow { FormBorderStyle = FormBorderStyle.None };
-                popup.Show(fixture.Form);
-                handle = popup.Handle;
-            });
-            var attempts = 0;
-            byte[] Capture() => WindowBitmapCapture.CaptureValidatedPixels(new HWND(handle), 16, 16,
-                (_, _) => { attempts++; return reportsSuccess; });
-            if (reportsSuccess)
-            {
-                var failure = Assert.ThrowsExactly<InvalidOperationException>(() => Capture());
-                StringAssert.Contains(failure.Message, "did not paint");
-                Assert.AreEqual(2, attempts);
-            }
-            else
-            {
-                var failure = Assert.ThrowsExactly<Win32Exception>(() => Capture());
-                StringAssert.Contains(failure.Message, "PrintWindow");
-                Assert.AreEqual(1, attempts);
-            }
-        }
-        finally
-        {
-            fixture.OnUiThread(() => popup?.Dispose());
+            Assert.AreSame(failure, Assert.ThrowsExactly<WindowCaptureException>(() => composite.TryGetLatest()).InnerException);
         }
     }
 
@@ -597,7 +306,7 @@ public class WindowCaptureSessionLifecycleTests
                     return WindowCaptureSession.Discover(HWND.Null, 0, logger);
                 }
                 return [new(42, new(0, 0, 1, 1))];
-            }, _ => child, isRootValid: () => valid, logger: logger);
+            }, _ => child, isCaptureTargetValid: () => valid, logger: logger);
         composite.TryGetLatest();
         child.Version++;
         var healthy = composite.TryGetLatest()!.Value;
@@ -617,7 +326,7 @@ public class WindowCaptureSessionLifecycleTests
         var valid = true;
         var root = new Grabber();
         using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
-            () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
+            () => [], _ => throw new AssertFailedException(), isCaptureTargetValid: () => valid);
         var first = composite.TryGetLatest()!.Value;
         valid = false;
         Assert.IsTrue(composite.IsClosed);
@@ -640,7 +349,7 @@ public class WindowCaptureSessionLifecycleTests
                     throw new Win32Exception(1400);
                 }
                 return new(0, 0, 1, 1);
-            }, () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
+            }, () => [], _ => throw new AssertFailedException(), isCaptureTargetValid: () => valid);
         var first = composite.TryGetLatest()!.Value;
         failBounds = true;
         var final = composite.TryGetLatest()!.Value;
@@ -686,7 +395,7 @@ public class WindowCaptureSessionLifecycleTests
     {
         WithOwnedPopup((root, popup, pid) =>
         {
-            var results = new Func<List<WindowCaptureSession.Popup>>(() =>
+            var results = new Func<List<WindowCaptureSession.SecondaryWindow>>(() =>
                 WindowCaptureSession.Discover(root, pid, NullLogger.Instance,
                     hwnd => hwnd == (emptyRoot ? root : popup) ? new(0, 0, 0, 0) : new(0, 0, 10, 10)));
             if (emptyRoot)
@@ -709,7 +418,7 @@ public class WindowCaptureSessionLifecycleTests
         {
             var logger = new CaptureLogger();
             var failure = new Win32Exception(1400);
-            var results = new Func<List<WindowCaptureSession.Popup>>(() =>
+            var results = new Func<List<WindowCaptureSession.SecondaryWindow>>(() =>
                 WindowCaptureSession.Discover(root, pid, logger, hwnd =>
                 {
                     if (hwnd == popup)
@@ -729,7 +438,7 @@ public class WindowCaptureSessionLifecycleTests
             }
             else
             {
-                Assert.AreSame(failure, Assert.ThrowsExactly<SecondaryWindowsCaptureException>(() => results()).InnerException);
+                Assert.AreSame(failure, Assert.ThrowsExactly<WindowCaptureException>(() => results()).InnerException);
             }
         });
     }
@@ -739,7 +448,7 @@ public class WindowCaptureSessionLifecycleTests
     {
         using var composite = new WindowCaptureSession(new Grabber(), () => new(0, 0, 1, 1),
             () => [new(42, new(0, 0, 1, 1))], _ => new Grabber { HasFrame = false }, () => 100);
-        var failure = await Assert.ThrowsExactlyAsync<SecondaryWindowsCaptureException>(() =>
+        var failure = await Assert.ThrowsExactlyAsync<WindowCaptureException>(() =>
             composite.WaitForFirstFrameAsync(TimeSpan.Zero, CancellationToken.None));
         Assert.IsInstanceOfType<TimeoutException>(failure.InnerException);
 
@@ -920,7 +629,7 @@ public class WindowCaptureSessionLifecycleTests
             using var root = new WindowCaptureFallback(child,
                 () => (new byte[] { (byte)Interlocked.Increment(ref calls), 0, 0, 255 }, 1, 1));
             using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
-                () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
+                () => [], _ => throw new AssertFailedException(), isCaptureTargetValid: () => valid);
             var deadline = Environment.TickCount64 + 2000;
             var healthy = composite.TryGetLatest();
             while (healthy is null && Environment.TickCount64 < deadline)
@@ -944,69 +653,13 @@ public class WindowCaptureSessionLifecycleTests
     }
 
     [TestMethod]
-    public void PrintWindow_CompletedResultFromChangedPidIsDiscardedWithoutAdvancingCache()
-    {
-        WithOwnedPopup((_, child, pid) =>
-        {
-            using var started = new ManualResetEventSlim();
-            using var release = new ManualResetEventSlim();
-            using var finished = new ManualResetEventSlim();
-            var calls = 0;
-            var getPid = RealOwnedWindowFinder.s_getWindowProcessId;
-            using var root = new WindowCaptureFallback(child, () =>
-            {
-                var value = Interlocked.Increment(ref calls);
-                if (value == 2)
-                {
-                    started.Set();
-                    release.Wait();
-                    finished.Set();
-                }
-                return (new byte[] { (byte)value, 0, 0, 255 }, 1, 1);
-            });
-            try
-            {
-                var deadline = Environment.TickCount64 + 2000;
-                var healthy = root.TryGetLatest();
-                while (healthy is null && Environment.TickCount64 < deadline)
-                {
-                    Thread.Sleep(5);
-                    healthy = root.TryGetLatest();
-                }
-                Assert.IsNotNull(healthy);
-                root.TryGetLatest();
-                Assert.IsTrue(started.Wait(TimeSpan.FromSeconds(2)));
-                RealOwnedWindowFinder.s_getWindowProcessId = window => window == child ? pid + 1 : getPid(window);
-                release.Set();
-                Assert.IsTrue(finished.Wait(TimeSpan.FromSeconds(2)));
-                var final = root.TryGetLatest()!.Value;
-                Assert.IsTrue(root.IsClosed);
-                Assert.AreEqual(healthy.Value.Version, final.Version);
-                Assert.AreSame(healthy.Value.Pixels, final.Pixels);
-                Assert.AreEqual((byte)1, final.Pixels[0]);
-                root.TryGetLatest();
-                Assert.AreEqual(2, calls);
-            }
-            finally
-            {
-                release.Set();
-                if (started.IsSet)
-                {
-                    Assert.IsTrue(finished.Wait(TimeSpan.FromSeconds(2)));
-                }
-                RealOwnedWindowFinder.s_getWindowProcessId = getPid;
-            }
-        });
-    }
-
-    [TestMethod]
     public void RootClosure_WgcStyleFinalFrameStillDrainsAndAdvancesVersion()
     {
         var reads = 0;
         var valid = true;
         var root = new Grabber { OnSample = () => reads++ };
         using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
-            () => [], _ => throw new AssertFailedException(), isRootValid: () => valid);
+            () => [], _ => throw new AssertFailedException(), isCaptureTargetValid: () => valid);
         var healthy = composite.TryGetLatest()!.Value;
         Assert.AreEqual(1, reads);
         root.Version++;
@@ -1016,49 +669,6 @@ public class WindowCaptureSessionLifecycleTests
         Assert.AreEqual(2, reads);
         Assert.AreEqual(healthy.Version + 1, final.Version);
         Assert.AreEqual((byte)42, final.Pixels[0]);
-    }
-
-    private static void WithOwnedPopup(Action<HWND, HWND, int> test)
-    {
-        if (ForegroundGuard.NoInteractiveDesktop())
-        {
-            Assert.Inconclusive("Native owned-popup discovery requires an interactive desktop.");
-        }
-        using var fixture = new UiaTestFixture();
-        PopupWindow? popup = null;
-        try
-        {
-            nint handle = 0;
-            fixture.OnUiThread(() =>
-            {
-                popup = new PopupWindow();
-                popup.Show(fixture.Form);
-                handle = popup.Handle;
-            });
-            var root = new HWND(fixture.Hwnd);
-            var child = new HWND(handle);
-            RealOwnedWindowFinder.s_findNextTopLevelWindow = after => after.IsNull ? child : HWND.Null;
-            test(root, child, RealOwnedWindowFinder.s_getWindowProcessId(root));
-        }
-        finally
-        {
-            RealOwnedWindowFinder.ResetNativeSeams();
-            fixture.OnUiThread(() => popup?.Dispose());
-        }
-    }
-
-    private sealed class PopupWindow : Form
-    {
-        protected override CreateParams CreateParams
-        {
-            get
-            {
-                var parameters = base.CreateParams;
-                parameters.Style = unchecked((int)0x80000000);
-                parameters.ExStyle |= 0x08000080;
-                return parameters;
-            }
-        }
     }
 
     private sealed class Grabber : IFrameGrabber

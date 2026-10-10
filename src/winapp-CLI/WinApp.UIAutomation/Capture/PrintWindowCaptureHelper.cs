@@ -8,7 +8,7 @@ using Windows.Win32.Graphics.Gdi;
 
 namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 
-internal static partial class WindowBitmapCapture
+internal static partial class PrintWindowCaptureHelper
 {
     internal static byte[] CaptureValidatedPixels(HWND hwnd, int width, int height,
         Func<HWND, HDC, bool>? print = null)
@@ -34,21 +34,21 @@ internal static partial class WindowBitmapCapture
         var hdcWindow = global::Windows.Win32.PInvoke.GetDC(hwnd);
         if (strict && hdcWindow.IsNull)
         {
-            throw CreateRenderException("GetDC");
+            throw CreateCaptureException("GetDC");
         }
         try
         {
             var hdcMem = global::Windows.Win32.PInvoke.CreateCompatibleDC(hdcWindow);
             if (strict && hdcMem.IsNull)
             {
-                throw CreateRenderException("CreateCompatibleDC");
+                throw CreateCaptureException("CreateCompatibleDC");
             }
             try
             {
                 var hBitmap = global::Windows.Win32.PInvoke.CreateCompatibleBitmap(hdcWindow, width, height);
                 if (strict && hBitmap.IsNull)
                 {
-                    throw CreateRenderException("CreateCompatibleBitmap");
+                    throw CreateCaptureException("CreateCompatibleBitmap");
                 }
                 try
                 {
@@ -63,7 +63,7 @@ internal static partial class WindowBitmapCapture
                         var hOld = global::Windows.Win32.PInvoke.SelectObject(hdcMem, *(global::Windows.Win32.Graphics.Gdi.HGDIOBJ*)&hBitmap);
                         if (strict && (hOld.IsNull || (nint)hOld.Value == -1))
                         {
-                            throw CreateRenderException("SelectObject");
+                            throw CreateCaptureException("SelectObject");
                         }
                         try
                         {
@@ -73,7 +73,7 @@ internal static partial class WindowBitmapCapture
                                 : print(hwnd, hdcMem);
                             if (strict && !success)
                             {
-                                throw CreateRenderException("PrintWindow");
+                                throw CreateCaptureException("PrintWindow");
                             }
                         }
                         finally
@@ -165,7 +165,7 @@ internal static partial class WindowBitmapCapture
         {
             if (SetDIBits(dc, bitmap, 0, (uint)height, data, &info, 0) != height)
             {
-                throw CreateRenderException("SetDIBits");
+                throw CreateCaptureException("SetDIBits");
             }
         }
     }
@@ -184,7 +184,7 @@ internal static partial class WindowBitmapCapture
         return false;
     }
 
-    private static Win32Exception CreateRenderException(string operation)
+    private static Win32Exception CreateCaptureException(string operation)
         => new(Marshal.GetLastPInvokeError(), $"{operation} failed during window-only bitmap capture.");
 
     [LibraryImport("gdi32.dll", SetLastError = true)]

@@ -39,7 +39,7 @@ public class WgcScreenshotFreshnessTests
         }
         else
         {
-            var error = await Assert.ThrowsExactlyAsync<SecondaryWindowsCaptureException>(() =>
+            var error = await Assert.ThrowsExactlyAsync<WindowCaptureException>(() =>
                 WgcCapture.CaptureAsync(new HWND(1), NullLogger.Instance, CancellationToken.None));
             Assert.IsInstanceOfType<TimeoutException>(error.InnerException);
             StringAssert.Contains(error.Message, "42");

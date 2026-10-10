@@ -34,7 +34,7 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
         get
         {
             if (!_closed && (_expectedPid == 0 ||
-                !WindowCaptureSession.RootIsValid(hwnd, _expectedPid) ||
+                !WindowCaptureSession.IsWindowFromExpectedProcess(hwnd, _expectedPid) ||
                 !RealOwnedWindowFinder.s_isWindowVisible(hwnd)))
             {
                 _closed = true;
@@ -60,7 +60,7 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
         {
             if (_clock() - _started >= 2000)
             {
-                throw new TimeoutException($"Window rendering did not complete for secondary window HWND {(nint)hwnd} within 2 seconds.");
+                throw new TimeoutException($"PrintWindow capture did not complete for window HWND {(nint)hwnd} within 2 seconds.");
             }
             return _latest;
         }
@@ -91,7 +91,7 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
             return frame;
         });
         _ = pending.ContinueWith(task =>
-            _logger.LogError(task.Exception, "Window-only capture failed for secondary window {Hwnd}.", (nint)hwnd),
+            _logger.LogError(task.Exception, "Window-only capture failed for window {Hwnd}.", (nint)hwnd),
             CancellationToken.None, TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously,
             TaskScheduler.Default);
         return pending;
@@ -105,7 +105,7 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
         if (previous == 0)
         {
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(),
-                "Cannot establish physical secondary window capture coordinates.");
+                "Cannot establish physical window capture coordinates.");
         }
         try
         {
@@ -123,19 +123,19 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
         if (!PInvoke.GetWindowRect(hwnd, out var rect))
         {
             throw new System.ComponentModel.Win32Exception(
-                System.Runtime.InteropServices.Marshal.GetLastPInvokeError(), "Cannot query secondary window capture bounds.");
+                System.Runtime.InteropServices.Marshal.GetLastPInvokeError(), "Cannot query window capture bounds.");
         }
         var width = checked(rect.right - rect.left);
         var height = checked(rect.bottom - rect.top);
         var context = GetWindowDpiAwarenessContext(hwnd);
         if (context == 0)
         {
-            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot query secondary window DPI awareness.");
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot query window DPI awareness.");
         }
         var previous = SetThreadDpiAwarenessContext(context);
         if (previous == 0)
         {
-            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot establish secondary window rendering coordinates.");
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot establish window rendering coordinates.");
         }
         byte[] source;
         int sourceWidth;
@@ -144,12 +144,12 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
         {
             if (!PInvoke.GetWindowRect(hwnd, out var logical))
             {
-                throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot query secondary window rendering bounds.");
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(), "Cannot query window rendering bounds.");
             }
             sourceWidth = checked(logical.right - logical.left);
             sourceHeight = checked(logical.bottom - logical.top);
             EnsureCurrentTarget();
-            source = WindowBitmapCapture.CaptureValidatedPixels(hwnd, sourceWidth, sourceHeight);
+            source = PrintWindowCaptureHelper.CaptureValidatedPixels(hwnd, sourceWidth, sourceHeight);
         }
         finally
         {
@@ -178,7 +178,7 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
         var croppedHeight = bounds.Bottom - bounds.Top;
         if (left < 0 || top < 0 || left + croppedWidth > width || top + croppedHeight > height)
         {
-            throw new InvalidOperationException("Secondary window bounds changed during PrintWindow capture.");
+            throw new InvalidOperationException("Window bounds changed during PrintWindow capture.");
         }
         var cropped = new byte[checked(croppedWidth * croppedHeight * 4)];
         for (var row = 0; row < croppedHeight; row++)
@@ -211,7 +211,7 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
     {
         if (IsClosed)
         {
-            throw new InvalidOperationException(            $"Secondary window HWND {(nint)hwnd} is no longer the visible window of expected PID {_expectedPid}.");
+            throw new InvalidOperationException(            $"Window HWND {(nint)hwnd} is no longer the visible window of expected PID {_expectedPid}.");
         }
     }
 
@@ -226,11 +226,11 @@ internal sealed partial class WindowCaptureFallback(HWND hwnd,
         if (!GetWindowDisplayAffinity(window, out var affinity))
         {
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastPInvokeError(),
-                $"Cannot establish display-affinity protection for secondary window HWND {(nint)window}.");
+                $"Cannot establish display-affinity protection for window HWND {(nint)window}.");
         }
         if (affinity != 0)
         {
-            throw new InvalidOperationException($"Secondary window HWND {(nint)window} is protected from capture (display affinity 0x{affinity:X}).");
+            throw new InvalidOperationException($"Window HWND {(nint)window} is protected from capture (display affinity 0x{affinity:X}).");
         }
     }
 

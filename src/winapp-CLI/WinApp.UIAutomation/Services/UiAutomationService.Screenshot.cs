@@ -11,7 +11,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 /// </summary>
 internal sealed partial class UiAutomationService
 {
-    internal static Func<global::Windows.Win32.Foundation.HWND, int, int, byte[]> s_captureFromWindow = WindowBitmapCapture.CapturePixels;
+    internal static Func<global::Windows.Win32.Foundation.HWND, int, int, byte[]> s_captureFromWindow = PrintWindowCaptureHelper.CapturePixels;
     internal static Func<int, int, int, int, int, int, byte[]> s_captureFromScreenScaled = CaptureFromScreenScaled;
     internal static Action<global::Windows.Win32.Foundation.HWND> s_foregroundWindowForBlankRetry = ForegroundWindowForBlankRetry;
     internal static Action<int> s_sleepForBlankRetry = Thread.Sleep;
@@ -130,7 +130,7 @@ internal sealed partial class UiAutomationService
             {
                 throw;
             }
-            catch (SecondaryWindowsCaptureException)
+            catch (WindowCaptureException)
             {
                 throw;
             }
@@ -221,7 +221,7 @@ internal sealed partial class UiAutomationService
 
                     global::Windows.Win32.PInvoke.SelectObject(hdcMem, hOld);
 
-                    return WindowBitmapCapture.ReadBitmapPixels(hdcScreen, hBitmap, width, height);
+                    return PrintWindowCaptureHelper.ReadBitmapPixels(hdcScreen, hBitmap, width, height);
                 }
                 finally
                 {
@@ -324,7 +324,7 @@ internal sealed partial class UiAutomationService
                         global::Windows.Win32.PInvoke.SelectObject(hdcMem, hOld);
                     }
 
-                    return WindowBitmapCapture.ReadBitmapPixels(hdcScreen, hBitmap, targetWidth, targetHeight);
+                    return PrintWindowCaptureHelper.ReadBitmapPixels(hdcScreen, hBitmap, targetWidth, targetHeight);
                 }
                 finally
                 {

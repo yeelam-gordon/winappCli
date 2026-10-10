@@ -33,6 +33,28 @@ public class WindowCaptureSessionTests
     }
 
     [TestMethod]
+    public void TryGetLatest_SecondaryWindowScreenPositionMapsToTargetImagePixel()
+    {
+        byte[] rootPixels = Enumerable.Range(0, 12).SelectMany(_ => new byte[] { 0, 0, 255, 255 }).ToArray();
+        var root = new FakeGrabber(rootPixels, 4, 3);
+        var child = new FakeGrabber([0, 255, 0, 255]);
+        using var composite = new WindowCaptureSession(root, () => new(100, 200, 104, 203),
+            () => [new(2, new(102, 201, 103, 202))], _ => child);
+
+        var before = (byte[])rootPixels.Clone();
+        var frame = composite.TryGetLatest()!.Value;
+        Assert.AreEqual(4, frame.Width);
+        Assert.AreEqual(3, frame.Height);
+        var expected = (byte[])before.Clone();
+        new byte[] { 0, 255, 0, 255 }.CopyTo(expected, (1 * 4 + 2) * 4);
+        CollectionAssert.AreEqual(expected, frame.Pixels,
+            "Only pixel (2, 1) may change; its neighbors must retain the main-window pixels.");
+        CollectionAssert.AreEqual(new byte[] { 0, 0, 255, 255 }, frame.Pixels[20..24]);
+        CollectionAssert.AreEqual(new byte[] { 0, 255, 0, 255 }, frame.Pixels[24..28]);
+        CollectionAssert.AreEqual(before, root.Pixels);
+    }
+
+    [TestMethod]
     public void Ownership_ExcludesUnrelatedForeignAndCyclicOwners()
     {
         try
@@ -58,7 +80,7 @@ public class WindowCaptureSessionTests
     {
         var root = new FakeGrabber([0, 0, 255, 255]);
         var windows = Enumerable.Range(2, 17)
-            .Select(handle => new WindowCaptureSession.Popup(handle, new(0, 0, 1, 1))).ToList();
+            .Select(handle => new WindowCaptureSession.SecondaryWindow(handle, new(0, 0, 1, 1))).ToList();
         var captures = new List<FakeGrabber>();
         using var combined = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () => windows.ToList(), _ =>
@@ -84,7 +106,7 @@ public class WindowCaptureSessionTests
     {
         var root = new FakeGrabber([0, 0, 255, 255]);
         var started = new List<FakeGrabber>();
-        var popups = new List<WindowCaptureSession.Popup>();
+        var popups = new List<WindowCaptureSession.SecondaryWindow>();
         using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
             () => popups.ToList(), _ =>
             {
@@ -158,7 +180,7 @@ public class WindowCaptureSessionTests
         var root = new FakeGrabber([0, 0, 255, 255]);
         var child = new FakeGrabber([0, 255, 0, 255]);
         var bounds = new PointerRect(0, 0, 1, 1);
-        var popups = new List<WindowCaptureSession.Popup> { new(2, bounds) };
+        var popups = new List<WindowCaptureSession.SecondaryWindow> { new(2, bounds) };
         using var composite = new WindowCaptureSession(root, () => bounds,
             () => popups.ToList(), _ => child);
         var version = composite.TryGetLatest()!.Value.Version;
@@ -215,13 +237,13 @@ public class WindowCaptureSessionTests
         Assert.AreEqual(final.Version, composite.TryGetLatest()!.Value.Version);
     }
 
-    private sealed class FakeGrabber(byte[] pixels) : IFrameGrabber
+    private sealed class FakeGrabber(byte[] pixels, int width = 1, int height = 1) : IFrameGrabber
     {
         internal byte[] Pixels => pixels;
         internal bool Disposed { get; private set; }
         internal long Version { get; set; } = 1;
         public bool IsClosed { get; set; }
-        public (byte[] Pixels, int Width, int Height, long Version)? TryGetLatest() => (pixels, 1, 1, Version);
+        public (byte[] Pixels, int Width, int Height, long Version)? TryGetLatest() => (pixels, width, height, Version);
         public Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct) => Task.FromResult(true);
         public void Dispose() => Disposed = true;
     }

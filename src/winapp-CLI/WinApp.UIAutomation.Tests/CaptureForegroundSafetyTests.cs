@@ -51,7 +51,7 @@ public class CaptureForegroundSafetyTests
         UiAutomationService.s_foregroundWindowForBlankRetry = _ => Assert.Fail("Menu failure must not foreground the root.");
         UiAutomationService.s_sleepForBlankRetry = _ => Assert.Fail("Menu failure must not trigger blank retry.");
 
-        var failure = await Assert.ThrowsExactlyAsync<SecondaryWindowsCaptureException>(() =>
+        var failure = await Assert.ThrowsExactlyAsync<WindowCaptureException>(() =>
             service.ScreenshotAsync(TargetFor(fixture), null, false, false, CancellationToken.None));
 
         Assert.IsInstanceOfType<TimeoutException>(failure.InnerException);
@@ -94,7 +94,7 @@ public class CaptureForegroundSafetyTests
         UiAutomationService.s_foregroundWindowForBlankRetry = _ => foregrounds++;
         UiAutomationService.s_sleepForBlankRetry = _ => Assert.Fail("A failed child must not trigger blank retry.");
 
-        var failure = await Assert.ThrowsExactlyAsync<SecondaryWindowsCaptureException>(() =>
+        var failure = await Assert.ThrowsExactlyAsync<WindowCaptureException>(() =>
             service.ScreenshotAsync(TargetFor(fixture), null, false, false, CancellationToken.None));
         if (boundary == 3)
         {
