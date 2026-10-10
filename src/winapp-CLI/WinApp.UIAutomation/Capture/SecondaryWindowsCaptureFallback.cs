@@ -28,7 +28,7 @@ internal sealed partial class SecondaryWindowsCaptureFallback(HWND hwnd,
     private readonly int _expectedPid = expectedPid ?? RealOwnedWindowFinder.s_getWindowProcessId(hwnd);
     private volatile bool _closed;
 
-    public string CaptureMode => "printwindow";
+    public string RootCaptureBackend => "printwindow";
 
     public bool IsClosed
     {

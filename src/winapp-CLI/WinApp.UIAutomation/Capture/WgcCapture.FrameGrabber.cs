@@ -59,7 +59,7 @@ internal static partial class WgcCapture
                 numberOfBuffers: 2,
                 item.Size);
             uiTarget = pool.CreateCaptureSession(item);
-            ConfigureSession(uiTarget);
+            uiTarget.IsCursorCaptureEnabled = false;
 
             return new FrameGrabber(device, context, pool, uiTarget, item, logger, fps);
         }
@@ -89,7 +89,6 @@ internal static partial class WgcCapture
         private readonly GraphicsCaptureItem _item;
         private readonly ILogger _logger;
         private readonly Lock _callbackLock = new();
-        private readonly Lock _lock = new();
         private byte[]? _latestPixels;
         private int _latestWidth;
         private int _latestHeight;
@@ -244,13 +243,10 @@ internal static partial class WgcCapture
             {
                 _lastSampleMs = Environment.TickCount64;
                 var (pixels, width, height) = CopyFrame(_device, _context, frame);
-                lock (_lock)
-                {
-                    _latestPixels = pixels;
-                    _latestWidth = width;
-                    _latestHeight = height;
-                    _version++;
-                }
+                _latestPixels = pixels;
+                _latestWidth = width;
+                _latestHeight = height;
+                _version++;
             }
             catch (Exception ex)
             {
@@ -281,14 +277,11 @@ internal static partial class WgcCapture
                 {
                     CopyPendingFrame();
                 }
-                lock (_lock)
+                if (_latestPixels is null)
                 {
-                    if (_latestPixels is null)
-                    {
-                        return null;
-                    }
-                    return (_latestPixels, _latestWidth, _latestHeight, _version);
+                    return null;
                 }
+                return (_latestPixels, _latestWidth, _latestHeight, _version);
             }
         }
 

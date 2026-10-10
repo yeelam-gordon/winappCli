@@ -15,7 +15,7 @@ public interface IFrameGrabber : IDisposable
     /// Including menus or tooltips rendered by another backend does not change this value.
     /// Defaults to <c>wgc</c> for existing graphics-capture implementations.
     /// </summary>
-    string CaptureMode => "wgc";
+    string RootCaptureBackend => "wgc";
 
     /// <summary>
     /// <see langword="true"/> once the capture session has ended — typically because the captured
@@ -37,11 +37,11 @@ public interface IFrameGrabber : IDisposable
     Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct);
 
     /// <summary>
-    /// Waits for and returns an available BGRA frame, or <see langword="null"/> if
-    /// <paramref name="timeout"/> elapses. The returned frame remains usable even if a
-    /// subsequent <see cref="TryGetLatest"/> call has no frame available.
+    /// Gets an available BGRA frame, waiting within <paramref name="timeout"/> when necessary.
+    /// May return a cached frame; does not require a new arrival. Returns <see langword="null"/>
+    /// on timeout. The returned frame remains usable independently of subsequent reads.
     /// </summary>
-    async Task<(byte[] Pixels, int Width, int Height, long Version)?> WaitForFrameAsync(
+    async Task<(byte[] Pixels, int Width, int Height, long Version)?> GetFrameAsync(
         TimeSpan timeout, CancellationToken ct)
     {
         var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;

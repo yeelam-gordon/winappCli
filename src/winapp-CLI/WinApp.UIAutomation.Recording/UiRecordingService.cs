@@ -178,7 +178,7 @@ internal sealed partial class UiRecordingService(
                 try
                 {
                     grabber = _windowCapture.StartFrameGrabber(rootHwnd, options.Fps);
-                    var first = await grabber.WaitForFrameAsync(TimeSpan.FromSeconds(3), ct).ConfigureAwait(false)
+                    var first = await grabber.GetFrameAsync(TimeSpan.FromSeconds(3), ct).ConfigureAwait(false)
                         ?? throw new InvalidOperationException("Timed out waiting for the first captured frame.");
                     srcWidth = first.Width;
                     srcHeight = first.Height;
@@ -271,7 +271,7 @@ internal sealed partial class UiRecordingService(
                         try
                         {
                             grabber = _windowCapture.StartFrameGrabber(captureTargetHwnd, options.Fps);
-                            var retargetFirst = await grabber.WaitForFrameAsync(TimeSpan.FromSeconds(3), ct).ConfigureAwait(false)
+                            var retargetFirst = await grabber.GetFrameAsync(TimeSpan.FromSeconds(3), ct).ConfigureAwait(false)
                                 ?? throw new InvalidOperationException("Timed out waiting for the first captured frame.");
                             srcWidth = retargetFirst.Width;
                             srcHeight = retargetFirst.Height;
@@ -319,7 +319,7 @@ internal sealed partial class UiRecordingService(
                 cropH = Math.Clamp((int)selectorElement.Height, 1, srcHeight - cropY);
             }
 
-            var mode = useScreen ? "screen" : grabber?.CaptureMode ?? "printwindow";
+            var mode = useScreen ? "screen" : grabber?.RootCaptureBackend ?? "printwindow";
             var (encoderW, encoderH, displayW, displayH) = ComputeTargetSize(cropW, cropH, options.MaxEdge);
             var coordinates = desktopBounds is { } sourceBounds
                 ? DescribeCoordinates(sourceBounds, encoderW, encoderH, displayW, displayH)

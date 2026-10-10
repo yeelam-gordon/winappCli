@@ -26,7 +26,7 @@ public class CaptureForegroundSafetyTests
     }
 
     [TestMethod]
-    public async Task ScreenshotAsync_MenuOpeningAfterFirstWaitNeverFallsBackToRootOnlyCapture()
+    public async Task ScreenshotAsync_MenuOpeningDuringFrameAcquisitionNeverFallsBackToRootOnlyCapture()
     {
         using var fixture = new UiaTestFixture();
         var service = NewAutomationService();
@@ -34,7 +34,7 @@ public class CaptureForegroundSafetyTests
         WgcCapture.s_isSupported = () => true;
         WgcCapture.s_startGrabber = (_, logger, _) => new SecondaryWindowsCapture(
             new ScreenshotGrabber(), () => new(0, 0, 1, 1),
-            () => ++discoveries <= 2 ? [] : [new(42, new(0, 0, 1, 1))],
+            () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))],
             _ => new ScreenshotGrabber { HasFrame = false }, logger: logger);
         var rootCaptures = 0;
         UiAutomationService.s_captureFromWindow = (_, width, height) =>

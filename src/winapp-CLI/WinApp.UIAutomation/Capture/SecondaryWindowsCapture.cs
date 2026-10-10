@@ -22,6 +22,7 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
 {
     internal readonly record struct Popup(nint Handle, PointerRect Bounds);
     private readonly record struct PopupInput(Popup Popup, IFrameGrabber Grabber, long Version, int Width, int Height);
+    private readonly record struct SecondaryWindowSession(IFrameGrabber Capture, long? FirstFrameDeadline);
     private readonly IFrameGrabber _root;
     private readonly Func<PointerRect> _rootBounds;
     private readonly Func<List<Popup>> _discover;
@@ -30,16 +31,15 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
     private readonly Func<bool> _isRootValid;
     private readonly ILogger _logger;
     private readonly int? _expectedPid;
-    private readonly Dictionary<nint, IFrameGrabber> _children = [];
-    private readonly Dictionary<nint, long> _firstFrameDeadlines = [];
+    private readonly Dictionary<nint, SecondaryWindowSession> _secondaryWindowSessions = [];
     private readonly Lock _lock = new();
     private bool _disposed;
     private bool _closed;
-    private long _version;
-    private long _rootVersion;
-    private PointerRect _bounds;
-    private PopupInput[] _popupInputs = [];
-    private (byte[] Pixels, int Width, int Height, long Version)? _latest;
+    private long _combinedFrameVersion;
+    private long _lastComposedRootVersion;
+    private PointerRect _lastComposedRootBounds;
+    private PopupInput[] _lastComposedSecondaryInputs = [];
+    private (byte[] Pixels, int Width, int Height, long Version)? _latestCombinedFrame;
 
     internal SecondaryWindowsCapture(IFrameGrabber root, Func<PointerRect> rootBounds,
         Func<List<Popup>> discover, Func<nint, IFrameGrabber> start,
@@ -108,7 +108,7 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
         }
     }
 
-    public string CaptureMode => _root.CaptureMode;
+    public string RootCaptureBackend => _root.RootCaptureBackend;
 
     public bool IsClosed => _closed || _root.IsClosed || !_isRootValid();
 
@@ -145,39 +145,33 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
         DisposeChildren();
         if (_root is SecondaryWindowsCaptureFallback)
         {
-            return _latest;
+            return _latestCombinedFrame;
         }
         var finalRoot = ReadRootFrame();
-        if (finalRoot is not null && (_latest is null || finalRoot.Value.Version != _rootVersion))
+        if (finalRoot is not null && (_latestCombinedFrame is null || finalRoot.Value.Version != _lastComposedRootVersion))
         {
-            _rootVersion = finalRoot.Value.Version;
-            _latest = (finalRoot.Value.Pixels, finalRoot.Value.Width, finalRoot.Value.Height, ++_version);
+            _lastComposedRootVersion = finalRoot.Value.Version;
+            _latestCombinedFrame = (finalRoot.Value.Pixels, finalRoot.Value.Width, finalRoot.Value.Height, ++_combinedFrameVersion);
         }
-        return _latest;
+        return _latestCombinedFrame;
     }
 
     private (byte[] Pixels, int Width, int Height, long Version)? Sample()
     {
         var popups = _discover();
         var handles = popups.Select(p => p.Handle).ToHashSet();
-        foreach (var handle in _children.Keys.ToArray())
+        foreach (var handle in _secondaryWindowSessions.Keys.ToArray())
         {
-            if (!handles.Contains(handle) || _children[handle].IsClosed)
+            if (!handles.Contains(handle) || _secondaryWindowSessions[handle].Capture.IsClosed)
             {
-                _children[handle].Dispose();
-                _children.Remove(handle);
-                _firstFrameDeadlines.Remove(handle);
+                _secondaryWindowSessions[handle].Capture.Dispose();
+                _secondaryWindowSessions.Remove(handle);
             }
-        }
-        if (popups.Count > 16)
-        {
-            throw new SecondaryWindowsCaptureException(popups[0].Handle,
-                new InvalidOperationException("More than 16 intersecting secondary windows are visible."));
         }
         for (var i = popups.Count - 1; i >= 0; i--)
         {
             var popup = popups[i];
-            if (!_children.ContainsKey(popup.Handle))
+            if (!_secondaryWindowSessions.ContainsKey(popup.Handle))
             {
                 if (!_discover().Any(p => p.Handle == popup.Handle))
                 {
@@ -187,8 +181,7 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
                 }
                 try
                 {
-                    _children.Add(popup.Handle, _start(popup.Handle));
-                    _firstFrameDeadlines.Add(popup.Handle, _clock() + 2000);
+                    _secondaryWindowSessions.Add(popup.Handle, new(_start(popup.Handle), _clock() + 2000));
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
@@ -196,8 +189,8 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
                     {
                         if (ex is WgcCapture.UnsupportedCaptureWindowException)
                         {
-                            _children.Add(popup.Handle, StartPrintWindowFallback(new HWND(popup.Handle), _logger, ex, _expectedPid));
-                            _firstFrameDeadlines.Add(popup.Handle, _clock() + 2000);
+                            _secondaryWindowSessions.Add(popup.Handle, new(
+                                StartPrintWindowFallback(new HWND(popup.Handle), _logger, ex, _expectedPid), _clock() + 2000));
                             continue;
                         }
                         _logger.LogError(ex, "Windows graphics capture startup failed for still-visible secondary window {Hwnd}.", popup.Handle);
@@ -220,7 +213,8 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
         var childFrames = new (byte[] Pixels, int Width, int Height, long Version)[popups.Count];
         for (var i = 0; i < popups.Count; i++)
         {
-            var grabber = _children[popups[i].Handle];
+            var session = _secondaryWindowSessions[popups[i].Handle];
+            var grabber = session.Capture;
             (byte[] Pixels, int Width, int Height, long Version)? child;
             try
             {
@@ -238,7 +232,7 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
             }
             if (child is null)
             {
-                if (!_firstFrameDeadlines.TryGetValue(popups[i].Handle, out var deadline) ||
+                if (session.FirstFrameDeadline is not { } deadline ||
                     _clock() >= deadline)
                 {
                     _logger.LogError("Secondary window {Hwnd} did not produce a capture frame within 2 seconds.", popups[i].Handle);
@@ -247,7 +241,10 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
                 }
                 return null;
             }
-            _firstFrameDeadlines.Remove(popups[i].Handle);
+            if (session.FirstFrameDeadline is not null)
+            {
+                _secondaryWindowSessions[popups[i].Handle] = session with { FirstFrameDeadline = null };
+            }
             childFrames[i] = child.Value;
             inputs[i] = new(popups[i], grabber, child.Value.Version, child.Value.Width, child.Value.Height);
         }
@@ -256,11 +253,11 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
         {
             return null;
         }
-        if (_latest is not null && result.Version == _rootVersion &&
-            result.Width == _latest.Value.Width && result.Height == _latest.Value.Height &&
-            bounds == _bounds && inputs.SequenceEqual(_popupInputs))
+        if (_latestCombinedFrame is not null && result.Version == _lastComposedRootVersion &&
+            result.Width == _latestCombinedFrame.Value.Width && result.Height == _latestCombinedFrame.Value.Height &&
+            bounds == _lastComposedRootBounds && inputs.SequenceEqual(_lastComposedSecondaryInputs))
         {
-            return _latest;
+            return _latestCombinedFrame;
         }
 
         var pixels = popups.Count == 0 ? result.Pixels : (byte[])result.Pixels.Clone();
@@ -273,17 +270,17 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
                 child.Pixels, child.Width, child.Height,
                 popup.Bounds.Left - bounds.Left, popup.Bounds.Top - bounds.Top);
         }
-        _rootVersion = result.Version;
-        _bounds = bounds;
-        _popupInputs = inputs;
-        _latest = (pixels, result.Width, result.Height, ++_version);
-        return _latest;
+        _lastComposedRootVersion = result.Version;
+        _lastComposedRootBounds = bounds;
+        _lastComposedSecondaryInputs = inputs;
+        _latestCombinedFrame = (pixels, result.Width, result.Height, ++_combinedFrameVersion);
+        return _latestCombinedFrame;
     }
 
     public async Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct)
-        => await WaitForFrameAsync(timeout, ct).ConfigureAwait(false) is not null;
+        => await GetFrameAsync(timeout, ct).ConfigureAwait(false) is not null;
 
-    public async Task<(byte[] Pixels, int Width, int Height, long Version)?> WaitForFrameAsync(
+    public async Task<(byte[] Pixels, int Width, int Height, long Version)?> GetFrameAsync(
         TimeSpan timeout, CancellationToken ct)
     {
         var deadline = Environment.TickCount64 + (long)timeout.TotalMilliseconds;
@@ -460,13 +457,12 @@ internal sealed partial class SecondaryWindowsCapture : IFrameGrabber
 
     private void DisposeChildren()
     {
-        foreach (var child in _children.Values)
+        foreach (var child in _secondaryWindowSessions.Values)
         {
-            child.Dispose();
+            child.Capture.Dispose();
         }
 
-        _children.Clear();
-        _firstFrameDeadlines.Clear();
+        _secondaryWindowSessions.Clear();
     }
 
     private sealed class RootClosedException() : InvalidOperationException("The captured root window is no longer valid.");

@@ -18,7 +18,7 @@ public class WgcScreenshotFreshnessTests
     [TestMethod]
     [DataRow(false)]
     [DataRow(true)]
-    public async Task Capture_MenuOpeningAfterFirstWaitReturnsCombinedImageOrTypedFailure(bool arrives)
+    public async Task Capture_MenuOpeningDuringFrameAcquisitionReturnsCombinedImageOrTypedFailure(bool arrives)
     {
         var discoveries = 0;
         var childReads = 0;
@@ -26,7 +26,7 @@ public class WgcScreenshotFreshnessTests
         var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
         var child = new Grabber(() => arrives && ++childReads >= 3 ? (menuPixels, 1, 1, 1L) : null);
         var combined = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
-            () => ++discoveries <= 2 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
+            () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
         WgcCapture.s_startGrabber = (_, _, _) => combined;
         var timer = Stopwatch.StartNew();
 
@@ -50,13 +50,13 @@ public class WgcScreenshotFreshnessTests
     }
 
     [TestMethod]
-    public async Task Capture_CancellationAfterMenuInvalidatesFirstWaitDisposesBothGrabbers()
+    public async Task Capture_CancellationWhileMenuFrameIsPendingDisposesBothGrabbers()
     {
         var discoveries = 0;
         var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
         var child = new Grabber(() => null);
         var combined = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
-            () => ++discoveries <= 2 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
+            () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
         WgcCapture.s_startGrabber = (_, _, _) => combined;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
@@ -65,6 +65,22 @@ public class WgcScreenshotFreshnessTests
 
         Assert.IsTrue(root.Disposed);
         Assert.IsTrue(child.Disposed);
+    }
+
+    [TestMethod]
+    public async Task Capture_AvailableFrameDoesNotPerformSeparateReadinessWait()
+    {
+        byte[] pixels = [0, 255, 0, 255];
+        var grabber = new Grabber(() => (pixels, 1, 1, 1L))
+        {
+            FailOnReadinessWait = true
+        };
+        WgcCapture.s_startGrabber = (_, _, _) => grabber;
+
+        var result = await WgcCapture.CaptureAsync(new HWND(1), NullLogger.Instance, CancellationToken.None);
+
+        Assert.AreSame(pixels, result.Pixels);
+        Assert.AreEqual(1, grabber.Reads);
     }
 
     [TestMethod]
@@ -141,13 +157,17 @@ public class WgcScreenshotFreshnessTests
     {
         internal int Reads { get; private set; }
         internal bool Disposed { get; private set; }
+        internal bool FailOnReadinessWait { get; init; }
         public bool IsClosed => false;
         public (byte[] Pixels, int Width, int Height, long Version)? TryGetLatest()
         {
             Reads++;
             return read();
         }
-        public Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct) => Task.FromResult(true);
+        public Task<bool> WaitForFirstFrameAsync(TimeSpan timeout, CancellationToken ct)
+            => FailOnReadinessWait
+                ? throw new AssertFailedException("Frame acquisition must not begin with a separate readiness wait.")
+                : Task.FromResult(true);
         public void Dispose() => Disposed = true;
     }
 }

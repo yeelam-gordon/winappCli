@@ -49,10 +49,6 @@ internal static partial class WgcCapture
     {
         using var grabber = s_startGrabber(hwnd, logger, 0);
         var deadline = Environment.TickCount64 + 2000;
-        if (!await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(2), ct).ConfigureAwait(false))
-        {
-            throw new TimeoutException("WGC did not produce a root and owned-popup frame.");
-        }
         (byte[] Pixels, int Width, int Height, long Version)? frame = null;
         var framesSeen = 0;
         while (true)
@@ -61,7 +57,7 @@ internal static partial class WgcCapture
             var next = grabber.TryGetLatest();
             if (next is null)
             {
-                next = await grabber.WaitForFrameAsync(
+                next = await grabber.GetFrameAsync(
                     TimeSpan.FromMilliseconds(Math.Max(0, deadline - Environment.TickCount64)), ct).ConfigureAwait(false);
             }
             if (next is { } fresh && (frame is null || fresh.Version > frame.Value.Version))
@@ -292,11 +288,6 @@ internal static partial class WgcCapture
                 ComInterfaceMarshaller<IDirect3DDxgiInterfaceAccess>.Free((void*)accessPtr);
             }
         }
-    }
-
-    private static void ConfigureSession(GraphicsCaptureSession session)
-    {
-        session.IsCursorCaptureEnabled = false;
     }
 
     internal static bool IsBlankCapture(byte[] pixels) => CapturedFrame.IsBlank(pixels);

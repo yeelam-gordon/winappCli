@@ -9,7 +9,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 public class FrameGrabberReadinessTests
 {
     [TestMethod]
-    public async Task WaitForFrame_LegacyReadinessThenMissingFrame_PollsUntilReady()
+    public async Task GetFrame_LegacyReadinessThenMissingFrame_PollsUntilReady()
     {
         var reads = 0;
         byte[] pixels = [0, 255, 0, 255];
@@ -17,7 +17,7 @@ public class FrameGrabberReadinessTests
             (_, _) => Task.FromResult(true),
             () => ++reads < 3 ? null : (pixels, 1, 1, 7));
 
-        var frame = await grabber.WaitForFrameAsync(TimeSpan.FromSeconds(1), CancellationToken.None);
+        var frame = await grabber.GetFrameAsync(TimeSpan.FromSeconds(1), CancellationToken.None);
 
         Assert.IsNotNull(frame);
         Assert.AreSame(pixels, frame.Value.Pixels);
@@ -26,26 +26,26 @@ public class FrameGrabberReadinessTests
     }
 
     [TestMethod]
-    public async Task WaitForFrame_LegacyFailure_DoesNotReadPixels()
+    public async Task GetFrame_LegacyFailure_DoesNotReadPixels()
     {
         using IFrameGrabber grabber = new LegacyGrabber(
             (_, _) => Task.FromResult(false),
             () => throw new AssertFailedException("A failed legacy wait must remain a failure."));
-        Assert.IsNull(await grabber.WaitForFrameAsync(TimeSpan.FromSeconds(1), CancellationToken.None));
+        Assert.IsNull(await grabber.GetFrameAsync(TimeSpan.FromSeconds(1), CancellationToken.None));
     }
 
     [TestMethod]
-    public async Task WaitForFrame_LegacyError_IsPreserved()
+    public async Task GetFrame_LegacyError_IsPreserved()
     {
         var failure = new InvalidOperationException("capture startup failed");
         using IFrameGrabber grabber = new LegacyGrabber(
             (_, _) => Task.FromException<bool>(failure), () => null);
         Assert.AreSame(failure, await Assert.ThrowsExactlyAsync<InvalidOperationException>(() =>
-            grabber.WaitForFrameAsync(TimeSpan.FromSeconds(1), CancellationToken.None)));
+            grabber.GetFrameAsync(TimeSpan.FromSeconds(1), CancellationToken.None)));
     }
 
     [TestMethod]
-    public async Task WaitForFrame_LegacyWaitUsesDeadline_NoNewPollingBudget()
+    public async Task GetFrame_LegacyWaitUsesDeadline_NoNewPollingBudget()
     {
         var reads = 0;
         using IFrameGrabber grabber = new LegacyGrabber(
@@ -57,24 +57,24 @@ public class FrameGrabberReadinessTests
             () => { reads++; return null; });
         var timer = Stopwatch.StartNew();
 
-        Assert.IsNull(await grabber.WaitForFrameAsync(TimeSpan.FromMilliseconds(60), CancellationToken.None));
+        Assert.IsNull(await grabber.GetFrameAsync(TimeSpan.FromMilliseconds(60), CancellationToken.None));
 
         Assert.AreEqual(1, reads, "The legacy wait already consumed the polling deadline.");
         Assert.IsLessThan(1000L, timer.ElapsedMilliseconds);
     }
 
     [TestMethod]
-    public async Task WaitForFrame_NotReady_StopsAtDeadline()
+    public async Task GetFrame_NotReady_StopsAtDeadline()
     {
         using IFrameGrabber grabber = new LegacyGrabber((_, _) => Task.FromResult(true), () => null);
         var timer = Stopwatch.StartNew();
-        Assert.IsNull(await grabber.WaitForFrameAsync(TimeSpan.FromMilliseconds(60), CancellationToken.None));
+        Assert.IsNull(await grabber.GetFrameAsync(TimeSpan.FromMilliseconds(60), CancellationToken.None));
         Assert.IsGreaterThanOrEqualTo(50L, timer.ElapsedMilliseconds);
         Assert.IsLessThan(1000L, timer.ElapsedMilliseconds);
     }
 
     [TestMethod]
-    public async Task WaitForFrame_CancellationDuringPolling_IsPreserved()
+    public async Task GetFrame_CancellationDuringPolling_IsPreserved()
     {
         using var cancellation = new CancellationTokenSource();
         using IFrameGrabber grabber = new LegacyGrabber((_, _) => Task.FromResult(true), () =>
@@ -83,12 +83,12 @@ public class FrameGrabberReadinessTests
             return null;
         });
         var error = await Assert.ThrowsExactlyAsync<TaskCanceledException>(() =>
-            grabber.WaitForFrameAsync(TimeSpan.FromSeconds(1), cancellation.Token));
+            grabber.GetFrameAsync(TimeSpan.FromSeconds(1), cancellation.Token));
         Assert.AreEqual(cancellation.Token, error.CancellationToken);
     }
 
     [TestMethod]
-    public async Task WaitForFrame_CombinedFrameRemainsUsableWhenNewMenuInvalidatesNextRead()
+    public async Task GetFrame_CombinedFrameRemainsUsableWhenNewMenuInvalidatesNextRead()
     {
         var discoveries = 0;
         byte[] pixels = [0, 255, 0, 255];
@@ -98,7 +98,7 @@ public class FrameGrabberReadinessTests
             () => ++discoveries <= 2 ? [] : [new(42, new(0, 0, 1, 1))],
             _ => new LegacyGrabber((_, _) => Task.FromResult(true), () => null));
 
-        var frame = await grabber.WaitForFrameAsync(TimeSpan.FromSeconds(1), CancellationToken.None);
+        var frame = await grabber.GetFrameAsync(TimeSpan.FromSeconds(1), CancellationToken.None);
 
         Assert.IsNotNull(frame);
         Assert.IsNull(grabber.TryGetLatest());

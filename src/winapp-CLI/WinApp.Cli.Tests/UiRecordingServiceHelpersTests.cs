@@ -16,15 +16,15 @@ public class UiRecordingServiceHelpersTests
     public void FrameGrabber_Backend_DefaultsToWgcAndForwardsOnlyTheRoot()
     {
         using IFrameGrabber wgc = new DefaultBackendGrabber();
-        Assert.AreEqual("wgc", wgc.CaptureMode);
+        Assert.AreEqual("wgc", wgc.RootCaptureBackend);
         using var fallback = new SecondaryWindowsCaptureFallback(default, expectedPid: 1);
-        Assert.AreEqual("printwindow", fallback.CaptureMode);
+        Assert.AreEqual("printwindow", fallback.RootCaptureBackend);
         using var composedWgc = new SecondaryWindowsCapture(wgc, () => default,
             () => [], _ => fallback);
         using var composedFallback = new SecondaryWindowsCapture(fallback, () => default,
             () => [], _ => wgc);
-        Assert.AreEqual("wgc", composedWgc.CaptureMode);
-        Assert.AreEqual("printwindow", composedFallback.CaptureMode);
+        Assert.AreEqual("wgc", composedWgc.RootCaptureBackend);
+        Assert.AreEqual("printwindow", composedFallback.RootCaptureBackend);
     }
 
     [TestMethod]

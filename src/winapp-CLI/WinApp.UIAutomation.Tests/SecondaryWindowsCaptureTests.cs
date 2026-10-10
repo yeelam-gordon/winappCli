@@ -54,6 +54,32 @@ public class SecondaryWindowsCaptureTests
     }
 
     [TestMethod]
+    public void Sampling_CapturesAllSeventeenSecondaryWindowsAndReusesSessions()
+    {
+        var root = new FakeGrabber([0, 0, 255, 255]);
+        var windows = Enumerable.Range(2, 17)
+            .Select(handle => new SecondaryWindowsCapture.Popup(handle, new(0, 0, 1, 1))).ToList();
+        var captures = new List<FakeGrabber>();
+        using var combined = new SecondaryWindowsCapture(root, () => new(0, 0, 1, 1),
+            () => windows.ToList(), _ =>
+            {
+                var capture = new FakeGrabber([0, 255, 0, 255]);
+                captures.Add(capture);
+                return capture;
+            });
+
+        var first = combined.TryGetLatest()!.Value;
+        Assert.AreEqual(17, captures.Count);
+        CollectionAssert.AreEqual(new byte[] { 0, 255, 0, 255 }, first.Pixels);
+        Assert.AreSame(first.Pixels, combined.TryGetLatest()!.Value.Pixels);
+        Assert.AreEqual(17, captures.Count);
+
+        windows.Clear();
+        Assert.AreSame(root.Pixels, combined.TryGetLatest()!.Value.Pixels);
+        Assert.IsTrue(captures.All(capture => capture.Disposed));
+    }
+
+    [TestMethod]
     public void Sampling_AddsRemovesAndReopensPopupWithoutMutatingRoot()
     {
         var root = new FakeGrabber([0, 0, 255, 255]);
