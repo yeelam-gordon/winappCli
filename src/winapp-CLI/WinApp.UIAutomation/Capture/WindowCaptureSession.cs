@@ -64,7 +64,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
             () => IsEligibleSecondaryWindow(hwnd, pid), pid);
         return new(targetWindow,
             () => GetBounds(hwnd), () => Discover(hwnd, pid, logger),
-            child => startWindow(new HWND(child), logger, fps),
+            secondaryHandle => startWindow(new HWND(secondaryHandle), logger, fps),
             isCaptureTargetValid: () => IsWindowFromExpectedProcess(hwnd, pid), logger: logger, expectedPid: pid);
     }
 
@@ -146,7 +146,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
             _logger.LogDebug("Selected capture window is no longer valid; releasing secondary-window capture sessions.");
         }
         _closed = true;
-        DisposeChildren();
+        DisposeSecondaryWindowSessions();
         if (_targetWindowCapture is WindowCaptureFallback)
         {
             return _latestCombinedFrame;
@@ -208,15 +208,15 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
         var bounds = _targetWindowBounds();
         var result = targetFrame.Value;
         var inputs = new SecondaryWindowFrameInput[secondaryWindows.Count];
-        var childFrames = new (byte[] Pixels, int Width, int Height, long Version)[secondaryWindows.Count];
+        var secondaryWindowFrames = new (byte[] Pixels, int Width, int Height, long Version)[secondaryWindows.Count];
         for (var i = 0; i < secondaryWindows.Count; i++)
         {
             var session = _secondaryWindowSessions[secondaryWindows[i].Handle];
             var grabber = session.Capture;
-            (byte[] Pixels, int Width, int Height, long Version)? child;
+            (byte[] Pixels, int Width, int Height, long Version)? secondaryFrame;
             try
             {
-                child = ReadWindowFrame(grabber, secondaryWindows[i].Handle);
+                secondaryFrame = ReadWindowFrame(grabber, secondaryWindows[i].Handle);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -228,7 +228,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
                 _logger.LogError(ex, "Capture failed for still-visible secondary window {Hwnd}.", secondaryWindows[i].Handle);
                 throw;
             }
-            if (child is null)
+            if (secondaryFrame is null)
             {
                 if (session.FirstFrameDeadline is not { } deadline ||
                     _clock() >= deadline)
@@ -243,8 +243,8 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
             {
                 _secondaryWindowSessions[secondaryWindows[i].Handle] = session with { FirstFrameDeadline = null };
             }
-            childFrames[i] = child.Value;
-            inputs[i] = new(secondaryWindows[i], grabber, child.Value.Version, child.Value.Width, child.Value.Height);
+            secondaryWindowFrames[i] = secondaryFrame.Value;
+            inputs[i] = new(secondaryWindows[i], grabber, secondaryFrame.Value.Version, secondaryFrame.Value.Width, secondaryFrame.Value.Height);
         }
         // Revalidate ownership, handles, bounds and order before publishing cached or new pixels.
         if (!secondaryWindows.SequenceEqual(_discover()))
@@ -263,9 +263,9 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
         for (var i = secondaryWindows.Count - 1; i >= 0; i--)
         {
             var secondaryWindow = secondaryWindows[i];
-            var child = childFrames[i];
+            var secondaryFrame = secondaryWindowFrames[i];
             IncludeSecondaryWindowInWindowImage(pixels, result.Width, result.Height,
-                child.Pixels, child.Width, child.Height,
+                secondaryFrame.Pixels, secondaryFrame.Width, secondaryFrame.Height,
                 secondaryWindow.Bounds.Left - bounds.Left, secondaryWindow.Bounds.Top - bounds.Top);
         }
         _lastComposedTargetWindowVersion = result.Version;
@@ -444,11 +444,11 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
         }
     }
 
-    private void DisposeChildren()
+    private void DisposeSecondaryWindowSessions()
     {
-        foreach (var child in _secondaryWindowSessions.Values)
+        foreach (var session in _secondaryWindowSessions.Values)
         {
-            child.Capture.Dispose();
+            session.Capture.Dispose();
         }
 
         _secondaryWindowSessions.Clear();
@@ -472,7 +472,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
                 return;
             }
             _disposed = true;
-            DisposeChildren();
+            DisposeSecondaryWindowSessions();
             _targetWindowCapture.Dispose();
         }
     }
