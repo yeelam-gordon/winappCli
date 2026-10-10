@@ -228,6 +228,14 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
                 _logger.LogError(ex, "Capture failed for still-visible secondary window {Hwnd}.", secondaryWindows[i].Handle);
                 throw;
             }
+            if (secondaryFrame is { } captured && CapturedFrame.IsBlank(captured.Pixels))
+            {
+                if (session.FirstFrameDeadline is null)
+                {
+                    return null;
+                }
+                secondaryFrame = null;
+            }
             if (secondaryFrame is null)
             {
                 if (session.FirstFrameDeadline is not { } deadline ||

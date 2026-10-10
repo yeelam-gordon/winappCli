@@ -50,6 +50,43 @@ public class WgcScreenshotFreshnessTests
     }
 
     [TestMethod]
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(true, true)]
+    public async Task Capture_BlankSecondaryFrameWaitsForPaintedPixelsOrTypedFailure(bool arrives, bool black)
+    {
+        long now = 100;
+        byte[] painted = black ? [0, 0, 0, 255] : [0, 255, 0, 255];
+        var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
+        var reads = 0;
+        var child = new Grabber(() =>
+        {
+            reads++;
+            now = reads == 1 ? 100 : reads == 2 ? 2099 : 2100;
+            return (arrives && reads >= 3 ? painted : new byte[4], 1, 1, (long)reads);
+        });
+        var combined = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
+            () => [new(42, new(0, 0, 1, 1))], _ => child, () => now);
+        WgcCapture.s_startGrabber = (_, _, _) => combined;
+
+        if (arrives)
+        {
+            var result = await WgcCapture.CaptureAsync(new HWND(1), NullLogger.Instance, CancellationToken.None);
+            CollectionAssert.AreEqual(painted, result.Pixels);
+        }
+        else
+        {
+            var error = await Assert.ThrowsExactlyAsync<WindowCaptureException>(() =>
+                WgcCapture.CaptureAsync(new HWND(1), NullLogger.Instance, CancellationToken.None));
+            Assert.IsInstanceOfType<TimeoutException>(error.InnerException);
+            StringAssert.Contains(error.Message, "42");
+        }
+        Assert.AreEqual(3, reads);
+        Assert.IsTrue(root.Disposed);
+        Assert.IsTrue(child.Disposed);
+    }
+
+    [TestMethod]
     public async Task Capture_CancellationWhileMenuFrameIsPendingDisposesBothGrabbers()
     {
         var discoveries = 0;

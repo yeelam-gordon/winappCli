@@ -16,13 +16,15 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 public class WindowCaptureSessionLifecycleTests
 {
     [TestMethod]
-    [DataRow(false)]
-    [DataRow(true)]
-    public void FirstFrame_DeadlineIsBoundedAndDelayedFrameCanSucceed(bool arrives)
+    [DataRow(false, false)]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    public void FirstFrame_DeadlineIsBoundedAndDelayedFrameCanSucceed(bool arrives, bool blank)
     {
         long now = 100;
         var root = new Grabber();
-        var child = new Grabber { HasFrame = false };
+        var child = new Grabber { HasFrame = blank, Pixels = blank ? new byte[4] : [0, 0, 255, 255] };
         var popups = new List<WindowCaptureSession.SecondaryWindow>();
         var logger = new CaptureLogger();
         using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
@@ -35,7 +37,9 @@ public class WindowCaptureSessionLifecycleTests
         if (arrives)
         {
             child.HasFrame = true;
+            child.Pixels = [0, 255, 0, 255];
             var frame = composite.TryGetLatest()!.Value;
+            CollectionAssert.AreEqual(child.Pixels, frame.Pixels);
             Assert.AreEqual(healthy.Version + 1, frame.Version);
             now = 10000;
             Assert.AreEqual(frame.Version, composite.TryGetLatest()!.Value.Version);
@@ -55,6 +59,25 @@ public class WindowCaptureSessionLifecycleTests
         composite.Dispose();
         Assert.IsTrue(root.Disposed);
         Assert.IsTrue(child.Disposed);
+    }
+
+    [TestMethod]
+    public void Sampling_TransientBlankChildPreservesHealthyImageUntilPaintedFrameReturns()
+    {
+        var root = new Grabber();
+        var child = new Grabber { Pixels = [0, 255, 0, 255] };
+        using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
+            () => [new(42, new(0, 0, 1, 1))], _ => child);
+        var healthy = composite.TryGetLatest()!.Value;
+        child.Pixels = new byte[4];
+        child.Version++;
+        Assert.IsNull(composite.TryGetLatest());
+        CollectionAssert.AreEqual(new byte[] { 0, 255, 0, 255 }, healthy.Pixels);
+        child.Pixels = [0, 0, 0, 255];
+        child.Version++;
+        var painted = composite.TryGetLatest()!.Value;
+        CollectionAssert.AreEqual(child.Pixels, painted.Pixels);
+        Assert.AreEqual(healthy.Version + 1, painted.Version);
     }
 
     [TestMethod]
@@ -673,7 +696,7 @@ public class WindowCaptureSessionLifecycleTests
 
     private sealed class Grabber : IFrameGrabber
     {
-        internal byte[] Pixels { get; init; } = [0, 0, 255, 255];
+        internal byte[] Pixels { get; set; } = [0, 0, 255, 255];
         internal int Width { get; init; } = 1;
         internal int Height { get; init; } = 1;
         internal bool HasFrame { get; set; } = true;
