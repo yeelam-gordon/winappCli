@@ -24,9 +24,9 @@ public class WgcScreenshotFreshnessTests
         var childReads = 0;
         byte[] menuPixels = [0, 255, 0, 255];
         var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
-        var child = new Grabber(() => arrives && ++childReads >= 3 ? (menuPixels, 1, 1, 1L) : null);
+        var secondaryCapture = new Grabber(() => arrives && ++childReads >= 3 ? (menuPixels, 1, 1, 1L) : null);
         var combined = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
-            () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
+            () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))], _ => secondaryCapture);
         WgcCapture.s_startGrabber = (_, _, _) => combined;
         var timer = Stopwatch.StartNew();
 
@@ -46,7 +46,7 @@ public class WgcScreenshotFreshnessTests
         }
         Assert.IsLessThan(3000L, timer.ElapsedMilliseconds);
         Assert.IsTrue(root.Disposed);
-        Assert.IsTrue(child.Disposed);
+        Assert.IsTrue(secondaryCapture.Disposed);
     }
 
     [TestMethod]
@@ -59,14 +59,14 @@ public class WgcScreenshotFreshnessTests
         byte[] painted = black ? [0, 0, 0, 255] : [0, 255, 0, 255];
         var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
         var reads = 0;
-        var child = new Grabber(() =>
+        var secondaryCapture = new Grabber(() =>
         {
             reads++;
             now = reads == 1 ? 100 : reads == 2 ? 2099 : 2100;
             return (arrives && reads >= 3 ? painted : new byte[4], 1, 1, (long)reads);
         });
         var combined = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
-            () => [new(42, new(0, 0, 1, 1))], _ => child, () => now);
+            () => [new(42, new(0, 0, 1, 1))], _ => secondaryCapture, () => now);
         WgcCapture.s_startGrabber = (_, _, _) => combined;
 
         if (arrives)
@@ -83,7 +83,7 @@ public class WgcScreenshotFreshnessTests
         }
         Assert.AreEqual(3, reads);
         Assert.IsTrue(root.Disposed);
-        Assert.IsTrue(child.Disposed);
+        Assert.IsTrue(secondaryCapture.Disposed);
     }
 
     [TestMethod]
@@ -91,9 +91,9 @@ public class WgcScreenshotFreshnessTests
     {
         var discoveries = 0;
         var root = new Grabber(() => (new byte[] { 0, 0, 255, 255 }, 1, 1, 1L));
-        var child = new Grabber(() => null);
+        var secondaryCapture = new Grabber(() => null);
         var combined = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
-            () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))], _ => child);
+            () => ++discoveries <= 1 ? [] : [new(42, new(0, 0, 1, 1))], _ => secondaryCapture);
         WgcCapture.s_startGrabber = (_, _, _) => combined;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(100));
 
@@ -101,7 +101,7 @@ public class WgcScreenshotFreshnessTests
             WgcCapture.CaptureAsync(new HWND(1), NullLogger.Instance, cancellation.Token));
 
         Assert.IsTrue(root.Disposed);
-        Assert.IsTrue(child.Disposed);
+        Assert.IsTrue(secondaryCapture.Disposed);
     }
 
     [TestMethod]

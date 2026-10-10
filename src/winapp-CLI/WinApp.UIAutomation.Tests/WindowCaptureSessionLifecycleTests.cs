@@ -24,11 +24,11 @@ public class WindowCaptureSessionLifecycleTests
     {
         long now = 100;
         var root = new Grabber();
-        var child = new Grabber { HasFrame = blank, Pixels = blank ? new byte[4] : [0, 0, 255, 255] };
+        var secondaryCapture = new Grabber { HasFrame = blank, Pixels = blank ? new byte[4] : [0, 0, 255, 255] };
         var popups = new List<WindowCaptureSession.SecondaryWindow>();
         var logger = new CaptureLogger();
         using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
-            () => popups.ToList(), _ => child, () => now, logger: logger);
+            () => popups.ToList(), _ => secondaryCapture, () => now, logger: logger);
         var healthy = composite.TryGetLatest()!.Value;
         popups.Add(new(42, new(0, 0, 1, 1)));
         Assert.IsNull(composite.TryGetLatest());
@@ -36,10 +36,10 @@ public class WindowCaptureSessionLifecycleTests
         Assert.IsNull(composite.TryGetLatest());
         if (arrives)
         {
-            child.HasFrame = true;
-            child.Pixels = [0, 255, 0, 255];
+            secondaryCapture.HasFrame = true;
+            secondaryCapture.Pixels = [0, 255, 0, 255];
             var frame = composite.TryGetLatest()!.Value;
-            CollectionAssert.AreEqual(child.Pixels, frame.Pixels);
+            CollectionAssert.AreEqual(secondaryCapture.Pixels, frame.Pixels);
             Assert.AreEqual(healthy.Version + 1, frame.Version);
             now = 10000;
             Assert.AreEqual(frame.Version, composite.TryGetLatest()!.Value.Version);
@@ -53,30 +53,30 @@ public class WindowCaptureSessionLifecycleTests
             Assert.IsTrue(logger.Messages.Any(m => m.Level == LogLevel.Error && m.Text.Contains("42")));
             popups.Clear();
             Assert.AreSame(root.Pixels, composite.TryGetLatest()!.Value.Pixels);
-            Assert.IsTrue(child.Disposed);
+            Assert.IsTrue(secondaryCapture.Disposed);
         }
 
         composite.Dispose();
         Assert.IsTrue(root.Disposed);
-        Assert.IsTrue(child.Disposed);
+        Assert.IsTrue(secondaryCapture.Disposed);
     }
 
     [TestMethod]
-    public void Sampling_TransientBlankChildPreservesHealthyImageUntilPaintedFrameReturns()
+    public void Sampling_TransientBlankSecondaryFramePreservesHealthyImageUntilPaintedFrameReturns()
     {
         var root = new Grabber();
-        var child = new Grabber { Pixels = [0, 255, 0, 255] };
+        var secondaryCapture = new Grabber { Pixels = [0, 255, 0, 255] };
         using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
-            () => [new(42, new(0, 0, 1, 1))], _ => child);
+            () => [new(42, new(0, 0, 1, 1))], _ => secondaryCapture);
         var healthy = composite.TryGetLatest()!.Value;
-        child.Pixels = new byte[4];
-        child.Version++;
+        secondaryCapture.Pixels = new byte[4];
+        secondaryCapture.Version++;
         Assert.IsNull(composite.TryGetLatest());
         CollectionAssert.AreEqual(new byte[] { 0, 255, 0, 255 }, healthy.Pixels);
-        child.Pixels = [0, 0, 0, 255];
-        child.Version++;
+        secondaryCapture.Pixels = [0, 0, 0, 255];
+        secondaryCapture.Version++;
         var painted = composite.TryGetLatest()!.Value;
-        CollectionAssert.AreEqual(child.Pixels, painted.Pixels);
+        CollectionAssert.AreEqual(secondaryCapture.Pixels, painted.Pixels);
         Assert.AreEqual(healthy.Version + 1, painted.Version);
     }
 
@@ -315,7 +315,7 @@ public class WindowCaptureSessionLifecycleTests
     public void RootClosure_DuringDiscoveryDrainsBeforeOrAfterWgcClosedEvent(bool nativeEvent)
     {
         var root = new Grabber();
-        var child = new Grabber();
+        var secondaryCapture = new Grabber();
         var valid = true;
         var closeOnDiscovery = false;
         var logger = new CaptureLogger();
@@ -329,14 +329,14 @@ public class WindowCaptureSessionLifecycleTests
                     return WindowCaptureSession.Discover(HWND.Null, 0, logger);
                 }
                 return [new(42, new(0, 0, 1, 1))];
-            }, _ => child, isCaptureTargetValid: () => valid, logger: logger);
+            }, _ => secondaryCapture, isCaptureTargetValid: () => valid, logger: logger);
         composite.TryGetLatest();
-        child.Version++;
+        secondaryCapture.Version++;
         var healthy = composite.TryGetLatest()!.Value;
         closeOnDiscovery = true;
         var final = composite.TryGetLatest()!.Value;
         Assert.IsTrue(composite.IsClosed);
-        Assert.IsTrue(child.Disposed);
+        Assert.IsTrue(secondaryCapture.Disposed);
         Assert.AreEqual(healthy.Version, final.Version);
         Assert.AreSame(healthy.Pixels, final.Pixels);
         Assert.AreEqual(final.Version, composite.TryGetLatest()!.Value.Version);
@@ -645,11 +645,11 @@ public class WindowCaptureSessionLifecycleTests
     [TestMethod]
     public void RootClosure_StrictGdiDrainsCachedFrameWithoutSchedulingAnotherCapture()
     {
-        WithOwnedPopup((_, child, _) =>
+        WithOwnedPopup((_, secondaryCapture, _) =>
         {
             var calls = 0;
             var valid = true;
-            using var root = new WindowCaptureFallback(child,
+            using var root = new WindowCaptureFallback(secondaryCapture,
                 () => (new byte[] { (byte)Interlocked.Increment(ref calls), 0, 0, 255 }, 1, 1));
             using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
                 () => [], _ => throw new AssertFailedException(), isCaptureTargetValid: () => valid);
