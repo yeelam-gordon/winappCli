@@ -30,7 +30,6 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
     private readonly Func<long> _clock;
     private readonly Func<bool> _isMainWindowValid;
     private readonly ILogger _logger;
-    private readonly int? _expectedPid;
     private readonly Dictionary<nint, SecondaryWindowSession> _secondaryWindowSessions = [];
     private readonly Lock _lock = new();
     private bool _disposed;
@@ -48,11 +47,13 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
         _mainWindowCapture = root;
         _mainWindowBounds = rootBounds;
         _discover = discover;
-        _start = start;
         _clock = clock ?? (() => Environment.TickCount64);
         _isMainWindowValid = isRootValid ?? (() => true);
         _logger = logger ?? NullLogger.Instance;
-        _expectedPid = expectedPid;
+        // Injected discovery, like native discovery, supplies already-classified eligible windows.
+        _start = handle => StartWindowCapture(new HWND(handle), _logger, 0,
+            (window, _, _) => start((nint)window),
+            () => _discover().Any(p => p.Handle == handle), expectedPid);
     }
 
     internal static WindowCaptureSession Start(HWND hwnd, ILogger logger, int fps,
@@ -60,19 +61,26 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
     {
         startWindow ??= (window, log, rate) => WgcCapture.StartSingleWindowGrabber(window, log, rate);
         var pid = RealOwnedWindowFinder.s_getWindowProcessId(hwnd);
-        IFrameGrabber root;
-        try
-        {
-            root = startWindow(hwnd, logger, fps);
-        }
-        catch (WgcCapture.UnsupportedCaptureWindowException ex) when (IsVisibleOwnedPopupTarget(hwnd, pid))
-        {
-            root = StartPrintWindowFallback(hwnd, logger, ex, pid);
-        }
+        var root = StartWindowCapture(hwnd, logger, fps, startWindow,
+            () => IsVisibleOwnedPopupTarget(hwnd, pid), pid);
         return new(root,
             () => GetBounds(hwnd), () => Discover(hwnd, pid, logger),
             child => startWindow(new HWND(child), logger, fps),
             isRootValid: () => RootIsValid(hwnd, pid), logger: logger, expectedPid: pid);
+    }
+
+    internal static IFrameGrabber StartWindowCapture(HWND hwnd, ILogger logger, int fps,
+        Func<HWND, ILogger, int, IFrameGrabber> startWindow, Func<bool> isFallbackEligible, int? expectedPid = null)
+    {
+        try
+        {
+            return startWindow(hwnd, logger, fps);
+        }
+        catch (WgcCapture.UnsupportedCaptureWindowException ex) when (isFallbackEligible())
+        {
+            logger.LogWarning(ex, "Windows graphics capture rejected window {Hwnd}; using window-only rendering (PrintWindow).", (nint)hwnd);
+            return new WindowCaptureFallback(hwnd, logger: logger, expectedPid: expectedPid);
+        }
     }
 
     private static bool IsVisibleOwnedPopupTarget(HWND hwnd, int pid)
@@ -90,21 +98,18 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
             ((uint)GetWindowLong((nint)hwnd, -20) & 0x00000080) != 0;
     }
 
-    private static WindowCaptureFallback StartPrintWindowFallback(HWND hwnd, ILogger logger, Exception cause, int? expectedPid = null)
-    {
-        logger.LogWarning(cause, "Windows graphics capture rejected secondary window {Hwnd}; using window-only rendering (PrintWindow).", (nint)hwnd);
-        return new WindowCaptureFallback(hwnd, logger: logger, expectedPid: expectedPid);
-    }
-
-    private (byte[] Pixels, int Width, int Height, long Version)? ReadMainWindowFrame()
+    private static (byte[] Pixels, int Width, int Height, long Version)? ReadWindowFrame(
+        IFrameGrabber capture, nint? secondaryHandle = null)
     {
         try
         {
-            return _mainWindowCapture.TryGetLatest();
+            return capture.TryGetLatest();
         }
-        catch (Exception ex) when (ex is not OperationCanceledException && _mainWindowCapture is WindowCaptureFallback popup)
+        catch (Exception ex) when (ex is not OperationCanceledException &&
+            (secondaryHandle.HasValue || capture is WindowCaptureFallback))
         {
-            throw new SecondaryWindowsCaptureException(popup.WindowHandle, ex);
+            throw new SecondaryWindowsCaptureException(
+                secondaryHandle ?? ((WindowCaptureFallback)capture).WindowHandle, ex);
         }
     }
 
@@ -147,7 +152,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
         {
             return _latestCombinedFrame;
         }
-        var finalRoot = ReadMainWindowFrame();
+        var finalRoot = ReadWindowFrame(_mainWindowCapture);
         if (finalRoot is not null && (_latestCombinedFrame is null || finalRoot.Value.Version != _lastComposedMainWindowVersion))
         {
             _lastComposedMainWindowVersion = finalRoot.Value.Version;
@@ -187,12 +192,6 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
                 {
                     if (_discover().Any(p => p.Handle == popup.Handle))
                     {
-                        if (ex is WgcCapture.UnsupportedCaptureWindowException)
-                        {
-                            _secondaryWindowSessions.Add(popup.Handle, new(
-                                StartPrintWindowFallback(new HWND(popup.Handle), _logger, ex, _expectedPid), _clock() + 2000));
-                            continue;
-                        }
                         _logger.LogError(ex, "Windows graphics capture startup failed for still-visible secondary window {Hwnd}.", popup.Handle);
                         throw new SecondaryWindowsCaptureException(popup.Handle, ex);
                     }
@@ -202,7 +201,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
             }
         }
 
-        var root = ReadMainWindowFrame();
+        var root = ReadWindowFrame(_mainWindowCapture);
         if (root is null)
         {
             return null;
@@ -218,7 +217,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
             (byte[] Pixels, int Width, int Height, long Version)? child;
             try
             {
-                child = grabber.TryGetLatest();
+                child = ReadWindowFrame(grabber, popups[i].Handle);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -228,7 +227,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
                     return null;
                 }
                 _logger.LogError(ex, "Capture failed for still-visible secondary window {Hwnd}.", popups[i].Handle);
-                throw new SecondaryWindowsCaptureException(popups[i].Handle, ex);
+                throw;
             }
             if (child is null)
             {
@@ -308,12 +307,12 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
         }
         lock (_lock)
         {
-            if (!IsClosed && _mainWindowCapture is WindowCaptureFallback popupRoot && ReadMainWindowFrame() is null)
+            if (!IsClosed && _mainWindowCapture is WindowCaptureFallback popupRoot && ReadWindowFrame(_mainWindowCapture) is null)
             {
                 throw new SecondaryWindowsCaptureException(popupRoot.WindowHandle,
                     new TimeoutException("The targeted secondary window did not produce a frame before the capture deadline."));
             }
-            if (!IsClosed && ReadMainWindowFrame() is not null)
+            if (!IsClosed && ReadWindowFrame(_mainWindowCapture) is not null)
             {
                 var popups = _discover();
                 if (popups.Count != 0)
@@ -365,16 +364,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
         var window = HWND.Null;
         while (!(window = RealOwnedWindowFinder.s_findNextTopLevelWindow(window)).IsNull)
         {
-            if (window == root || !IsWindow((nint)window) ||
-                !RealOwnedWindowFinder.s_isWindowVisible(window) || !IsOwnedBy(window, root, pid))
-            {
-                continue;
-            }
-            var style = (uint)GetWindowLong((nint)window, -16);
-            var extended = (uint)GetWindowLong((nint)window, -20);
-            const uint popupStyle = 0x80000000; // WS_POPUP
-            const uint toolStyle = 0x00000080; // WS_EX_TOOLWINDOW
-            if ((style & popupStyle) == 0 && (extended & toolStyle) == 0)
+            if (window == root || !IsVisibleOwnedPopupTarget(window, pid) || !IsOwnedBy(window, root, pid))
             {
                 continue;
             }
