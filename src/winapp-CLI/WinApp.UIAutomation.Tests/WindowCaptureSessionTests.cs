@@ -33,6 +33,25 @@ public class WindowCaptureSessionTests
     }
 
     [TestMethod]
+    public void Sampling_GlobalOpacityScalesPremultipliedPixelsAndInvalidatesCachedFrame()
+    {
+        var root = new FakeGrabber([0, 0, 255, 255]);
+        var child = new FakeGrabber([0, 128, 0, 128]);
+        byte opacity = 128;
+        using var composite = new WindowCaptureSession(root, () => new(0, 0, 1, 1),
+            () => [new(2, new(0, 0, 1, 1), opacity)], _ => child);
+        var first = composite.TryGetLatest()!.Value;
+        CollectionAssert.AreEqual(new byte[] { 0, 64, 191, 255 }, first.Pixels);
+        opacity = 255;
+        var changed = composite.TryGetLatest()!.Value;
+        CollectionAssert.AreEqual(new byte[] { 0, 128, 127, 255 }, changed.Pixels);
+        Assert.AreEqual(first.Version + 1, changed.Version, "Changing window opacity needs no new WGC frame.");
+        Assert.AreSame(changed.Pixels, composite.TryGetLatest()!.Value.Pixels);
+        CollectionAssert.AreEqual(new byte[] { 0, 128, 0, 128 }, child.Pixels);
+        CollectionAssert.AreEqual(new byte[] { 0, 0, 255, 255 }, root.Pixels);
+    }
+
+    [TestMethod]
     public void TryGetLatest_SecondaryWindowScreenPositionMapsToTargetImagePixel()
     {
         byte[] rootPixels = Enumerable.Range(0, 12).SelectMany(_ => new byte[] { 0, 0, 255, 255 }).ToArray();

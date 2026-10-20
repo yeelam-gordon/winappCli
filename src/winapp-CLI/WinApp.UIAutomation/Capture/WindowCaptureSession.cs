@@ -19,7 +19,7 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation;
 /// </summary>
 internal sealed partial class WindowCaptureSession : IFrameGrabber
 {
-    internal readonly record struct SecondaryWindow(nint Handle, PointerRect Bounds);
+    internal readonly record struct SecondaryWindow(nint Handle, PointerRect Bounds, byte Opacity = 255);
     private readonly record struct SecondaryWindowFrameInput(SecondaryWindow SecondaryWindow, IFrameGrabber Grabber, long Version, int Width, int Height);
     private readonly IFrameGrabber _targetWindowCapture;
     private readonly Func<PointerRect> _targetWindowBounds;
@@ -293,7 +293,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
             }
             IncludeSecondaryWindowInWindowImage(pixels, result.Width, result.Height,
                 secondaryFrame.Pixels, secondaryFrame.Width, secondaryFrame.Height,
-                secondaryWindow.Bounds.Left - bounds.Left, secondaryWindow.Bounds.Top - bounds.Top);
+                secondaryWindow.Bounds.Left - bounds.Left, secondaryWindow.Bounds.Top - bounds.Top, secondaryWindow.Opacity);
         }
         _lastComposedTargetWindowVersion = result.Version;
         _lastComposedTargetWindowBounds = bounds;
@@ -412,7 +412,16 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
                 bounds.Left < targetBounds.Right && bounds.Right > targetBounds.Left &&
                 bounds.Top < targetBounds.Bottom && bounds.Bottom > targetBounds.Top)
             {
-                result.Add(new((nint)window, bounds));
+                // WGC preserves per-pixel alpha but does not apply SetLayeredWindowAttributes opacity.
+                // UpdateLayeredWindow's SourceConstantAlpha cannot be queried here. Missing global attributes
+                // do not mean opaque pixels: preserve the captured per-pixel alpha.
+                var opacity = (byte)255;
+                if (((uint)GetWindowLong((nint)window, -20) & 0x00080000) != 0 &&
+                    GetLayeredWindowAttributes((nint)window, out _, out var alpha, out var flags) && (flags & 0x2) != 0)
+                {
+                    opacity = alpha;
+                }
+                result.Add(new((nint)window, bounds, opacity));
             }
         }
         return result;
@@ -441,7 +450,7 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
 
     // Preserve premultiplied BGRA transparency while clipping the UI image to the captured window.
     internal static void IncludeSecondaryWindowInWindowImage(byte[] targetPixels, int width, int height, byte[] secondaryWindow,
-        int secondaryWindowWidth, int secondaryWindowHeight, int left, int top)
+        int secondaryWindowWidth, int secondaryWindowHeight, int left, int top, byte opacity = 255)
     {
         if (targetPixels.Length != checked(width * height * 4) ||
             secondaryWindow.Length != checked(secondaryWindowWidth * secondaryWindowHeight * 4))
@@ -459,11 +468,12 @@ internal sealed partial class WindowCaptureSession : IFrameGrabber
             {
                 var destination = checked((int)((y * width + x) * 4));
                 var source = checked((int)(((y - top) * secondaryWindowWidth + x - left) * 4));
-                var inverseAlpha = 255 - secondaryWindow[source + 3];
+                var inverseAlpha = 255 - (secondaryWindow[source + 3] * opacity + 127) / 255;
                 for (var channel = 0; channel < 4; channel++)
                 {
                     targetPixels[destination + channel] = (byte)Math.Min(255,
-                        secondaryWindow[source + channel] + (targetPixels[destination + channel] * inverseAlpha + 127) / 255);
+                        (secondaryWindow[source + channel] * opacity + 127) / 255 +
+                        (targetPixels[destination + channel] * inverseAlpha + 127) / 255);
                 }
             }
         }

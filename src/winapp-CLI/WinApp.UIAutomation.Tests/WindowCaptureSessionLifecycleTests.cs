@@ -346,6 +346,18 @@ public class WindowCaptureSessionLifecycleTests
                 Assert.IsTrue(SetLayeredWindowAttributes(popup, 0, 0, 0x2 /* LWA_ALPHA */));
             }
             Assert.IsEmpty(WindowCaptureSession.Discover(root, pid, NullLogger.Instance, _ => new(0, 0, 10, 10)));
+            if (cloak)
+            {
+                var off = 0;
+                Assert.AreEqual(0, DwmSetWindowAttribute(popup, 13 /* DWMWA_CLOAK */, ref off, sizeof(int)));
+            }
+            else
+            {
+                Assert.IsTrue(SetLayeredWindowAttributes(popup, 0, 128, 0x2 /* LWA_ALPHA */));
+            }
+            var restored = WindowCaptureSession.Discover(root, pid, NullLogger.Instance, _ => new(0, 0, 10, 10));
+            Assert.HasCount(1, restored);
+            Assert.AreEqual(cloak ? (byte)255 : (byte)128, restored[0].Opacity);
         });
     }
 

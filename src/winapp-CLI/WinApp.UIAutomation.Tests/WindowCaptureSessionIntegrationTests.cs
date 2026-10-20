@@ -1,6 +1,7 @@
 // Copyright (c) Microsoft Corporation and Contributors. All rights reserved.
 // Licensed under the MIT License.
 
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.TestSupport;
 using Windows.Win32.Foundation;
@@ -11,6 +12,117 @@ namespace Microsoft.Windows.SDK.BuildTools.WinApp.UIAutomation.Tests;
 [DoNotParallelize]
 public class WindowCaptureSessionIntegrationTests
 {
+    public TestContext TestContext { get; set; } = null!;
+
+    [TestMethod]
+    [Timeout(30000)]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task Recording_PopupOpacityMatchesTheVisibleBlend(bool perPixel)
+    {
+        if (!WgcCapture.IsSupported() || ForegroundGuard.NoInteractiveDesktop())
+        {
+            Assert.Inconclusive("Popup opacity requires WGC and an unlocked interactive desktop.");
+        }
+
+        using var fx = new UiaTestFixture();
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        PopupWindow? popup = null;
+        nint popupHandle = 0;
+        try
+        {
+            fx.OnUiThread(() =>
+            {
+                foreach (Control control in fx.Form.Controls)
+                {
+                    control.Hide();
+                }
+                fx.Form.BackColor = System.Drawing.Color.Red;
+                fx.Form.TopMost = true;
+                var origin = fx.Form.PointToScreen(System.Drawing.Point.Empty);
+                popup = new PopupWindow
+                {
+                    Bounds = new System.Drawing.Rectangle(origin.X + 30, origin.Y + 50, 100, 90),
+                    Opacity = perPixel ? 1 : 128d / 255,
+                };
+                popup.Show(fx.Form);
+                popup.Refresh();
+                if (perPixel)
+                {
+                    popup.SetPerPixelOpacity();
+                }
+                popupHandle = popup.Handle;
+            });
+
+            WgcCapture.FrameGrabber raw;
+            try
+            {
+                raw = WgcCapture.StartSingleWindowGrabber(new HWND(popupHandle), NullLogger.Instance);
+            }
+            catch (WgcCapture.UnsupportedCaptureWindowException)
+            {
+                Assert.Inconclusive("This Windows build rejects direct popup WGC. PrintWindow cannot validate per-pixel transparency.");
+                throw;
+            }
+            using var rawCapture = raw;
+            Assert.IsTrue(await raw.WaitForFirstFrameAsync(TimeSpan.FromSeconds(3), timeout.Token));
+            var rawFrame = raw.TryGetLatest()!.Value;
+            var rawCenter = ((rawFrame.Height / 2) * rawFrame.Width + rawFrame.Width / 2) * 4;
+            TestContext.WriteLine($"Raw WGC popup BGRA: {string.Join(',', rawFrame.Pixels[rawCenter..(rawCenter + 4)])}");
+            CollectionAssert.AreEqual(perPixel ? new byte[] { 0, 128, 0, 128 } : [0, 255, 0, 255],
+                rawFrame.Pixels[rawCenter..(rawCenter + 4)], "Only per-pixel alpha is already present in WGC pixels.");
+            var hasAttributes = GetLayeredWindowAttributes(popupHandle, out _, out var alpha, out var flags);
+            TestContext.WriteLine($"Layered attributes: success={hasAttributes}, alpha={alpha}, flags={flags}");
+            Assert.AreEqual(!perPixel, hasAttributes, "UpdateLayeredWindow must exercise the no-global-alpha-attribute path.");
+
+            using var grabber = WgcCapture.StartGrabber(new HWND(fx.Hwnd), NullLogger.Instance, 30);
+            Assert.IsTrue(await grabber.WaitForFirstFrameAsync(TimeSpan.FromSeconds(3), timeout.Token));
+            await WaitForBlendAsync(128);
+            if (!perPixel)
+            {
+                foreach (var opacity in new byte[] { 64, 255, 0, 128 })
+                {
+                    fx.OnUiThread(() => popup!.Opacity = opacity / 255d);
+                    await WaitForBlendAsync(opacity);
+                }
+            }
+
+            async Task WaitForBlendAsync(byte opacity)
+            {
+                var deadline = Environment.TickCount64 + 3000;
+                var matchingPixels = 0;
+                do
+                {
+                    timeout.Token.ThrowIfCancellationRequested();
+                    var frame = grabber.TryGetLatest();
+                    matchingPixels = 0;
+                    if (frame is { } value)
+                    {
+                        for (var i = 0; i < value.Pixels.Length; i += 4)
+                        {
+                            if (value.Pixels[i] <= 2 && Math.Abs(value.Pixels[i + 1] - opacity) <= 2 &&
+                                Math.Abs(value.Pixels[i + 2] - (255 - opacity)) <= 2 && value.Pixels[i + 3] == 255)
+                            {
+                                matchingPixels++;
+                            }
+                        }
+                    }
+                    if (matchingPixels >= 1000)
+                    {
+                        return;
+                    }
+                    await Task.Delay(50, timeout.Token);
+                }
+                while (Environment.TickCount64 < deadline);
+                Assert.Fail($"Green popup over red with opacity {opacity} must blend to BGRA 0,{opacity},{255 - opacity},255; found {matchingPixels} matching pixels.");
+            }
+        }
+        finally
+        {
+            fx.OnUiThread(() => popup?.Dispose());
+        }
+    }
+
     [TestMethod]
     [DataRow(false, 0)]
     [DataRow(true, 0)]
@@ -140,6 +252,7 @@ public class WindowCaptureSessionIntegrationTests
     }
 
     [TestMethod]
+    [Timeout(60000)]
     public async Task Recording_PopupsOpeningAndClosingDoNotLeakCaptureResources()
     {
         if (!WgcCapture.IsSupported())
@@ -198,6 +311,7 @@ public class WindowCaptureSessionIntegrationTests
         GC.Collect();
         process.Refresh();
         var growth = process.HandleCount - before;
+        TestContext.WriteLine($"Capture handle growth: {growth} over {cycles} popup cycles (before={before}, after={process.HandleCount}).");
 
         // Before the fix each cycle leaked a D3D device (about 26 handles); allow for thread-pool noise.
         Assert.IsLessThan(cycles * 5, growth, $"Handle count grew by {growth} over {cycles} popup open/close cycles.");
@@ -205,6 +319,44 @@ public class WindowCaptureSessionIntegrationTests
 
     private sealed class PopupWindow : Form
     {
+        internal void SetPerPixelOpacity()
+        {
+            const int WS_EX_LAYERED = 0x00080000;
+            _ = SetWindowLongW(Handle, -20, GetWindowLongW(Handle, -20) | WS_EX_LAYERED);
+            using var bitmap = new System.Drawing.Bitmap(Width, Height, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+            using (var graphics = System.Drawing.Graphics.FromImage(bitmap))
+            {
+                graphics.Clear(System.Drawing.Color.FromArgb(128, 0, 255, 0));
+            }
+            var bitmapHandle = bitmap.GetHbitmap(System.Drawing.Color.FromArgb(0));
+            var dc = CreateCompatibleDC(0);
+            nint previous = 0;
+            try
+            {
+                Assert.AreNotEqual(nint.Zero, dc);
+                previous = SelectObject(dc, bitmapHandle);
+                Assert.AreNotEqual(nint.Zero, previous);
+                var destination = new NativePoint { X = Left, Y = Top };
+                var origin = new NativePoint();
+                var size = new NativePoint { X = Width, Y = Height };
+                var blend = new BlendFunction { SourceConstantAlpha = 255, AlphaFormat = 1 };
+                Assert.IsTrue(UpdateLayeredWindow(Handle, 0, ref destination, ref size, dc, ref origin, 0, ref blend, 2),
+                    $"UpdateLayeredWindow failed: {Marshal.GetLastPInvokeError()}");
+            }
+            finally
+            {
+                if (previous != 0)
+                {
+                    SelectObject(dc, previous);
+                }
+                DeleteObject(bitmapHandle);
+                if (dc != 0)
+                {
+                    DeleteDC(dc);
+                }
+            }
+        }
+
         public PopupWindow()
         {
             StartPosition = FormStartPosition.Manual;
@@ -228,4 +380,33 @@ public class WindowCaptureSessionIntegrationTests
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativePoint { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BlendFunction
+    {
+        public byte BlendOp;
+        public byte BlendFlags;
+        public byte SourceConstantAlpha;
+        public byte AlphaFormat;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern int GetWindowLongW(nint hwnd, int index);
+    [DllImport("user32.dll")]
+    private static extern int SetWindowLongW(nint hwnd, int index, int value);
+    [DllImport("user32.dll")]
+    private static extern bool GetLayeredWindowAttributes(nint hwnd, out uint key, out byte alpha, out uint flags);
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern bool UpdateLayeredWindow(nint hwnd, nint screenDc, ref NativePoint destination,
+        ref NativePoint size, nint sourceDc, ref NativePoint source, uint key, ref BlendFunction blend, uint flags);
+    [DllImport("gdi32.dll")]
+    private static extern nint CreateCompatibleDC(nint dc);
+    [DllImport("gdi32.dll")]
+    private static extern nint SelectObject(nint dc, nint value);
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteObject(nint value);
+    [DllImport("gdi32.dll")]
+    private static extern bool DeleteDC(nint dc);
 }

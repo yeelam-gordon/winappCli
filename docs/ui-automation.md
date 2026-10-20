@@ -646,11 +646,14 @@ look like part of the app. Recordings draw these popups over the selected window
 whenever they are open. No flag is needed.
 
 - Only visible popups that belong to the selected window and its process are included.
+- Popups captured with WGC retain per-pixel transparency. Some custom translucent popups can
+  still appear too opaque; use `--capture-screen -w <hwnd>` if their opacity differs from what
+  you see on screen, and keep the window uncovered.
 - The recording keeps the selected window's size, so the part of a flyout that extends past the
   window's edge is cut off. To record that popup in full, find its HWND with
   `winapp ui list-windows` and record it with `-w <hwnd>`.
 - If Windows refuses to capture a popup directly, winapp renders it with PrintWindow instead. It then
-  appears as a plain rectangle, without rounded corners or transparency.
+  appears as a plain rectangle, without rounded corners or per-pixel transparency.
 - If a popup can't be captured, the recording continues without it and the result's `warnings`
   says which popup is missing.
 - Overlays from another process aren't included. Use `--capture-screen -w <hwnd>` for those,
